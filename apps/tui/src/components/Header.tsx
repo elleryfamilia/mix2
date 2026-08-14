@@ -15,9 +15,10 @@ function shortenPath(cwd: string, maxLength: number): string {
 /**
  * App chrome, top bar (Design 1c, hyprland-flavored): a full-width bar in
  * the same background as the status bar, carrying the inverted ` cladex `
- * chip, agent identity as colored glyphs (● Claude lead · ○ Codex
- * teammate), and the right-aligned project path. Top and bottom bars frame
- * the conversation on any terminal background.
+ * chip, the team roster as colored glyphs (● Claude · ○ Codex — no role
+ * labels; who coordinates is internal), and the right-aligned project
+ * path. Top and bottom bars frame the conversation on any terminal
+ * background.
  */
 export function Header({
   session,

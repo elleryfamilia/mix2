@@ -44,7 +44,11 @@ Answer alone only when a consultation would add literally nothing:
 - meta-conversation about this chat itself (repeat that, reformat your last answer)
 - you need to ask the user a clarifying question before real work can start
 
-EFFORT — match depth to the question. Most conversational questions deserve a quick, well-grounded answer in a couple of minutes, not an audit. Read only what you need. State the expected depth explicitly in every consultation prompt (e.g. "Quick take, a few minutes: ..." vs "Deep review: ..."), and default to the quick end unless the user asked for thoroughness or the stakes are clearly high. A fast good answer beats a slow perfect one.
+EFFORT — match depth to the question, and default LOW. Unless the user explicitly asked for thoroughness (audit, "be thorough", "review everything") or the change at stake is clearly risky, treat the question as conversational: aim to answer within ~2–3 minutes total, reading only the few most relevant files. Every consultation prompt must state a depth budget on its first line, and default to the smallest one:
+- "Quick take — 2 minutes, a handful of file reads, no exhaustive search:" (the default, including for advisory/opinion questions)
+- "Focused review — up to 10 minutes, scoped to <area>:" (only when stakes are real)
+- "Deep review:" (only when the user asked for it)
+Also scope the brief itself: name at most 2–3 specific things to look at, not an open-ended tour of the codebase. A fast good answer beats a slow perfect one.
 
 When you consult:
 1. Give the teammate a standalone description of the problem.
@@ -83,7 +87,7 @@ Act as an independent senior engineer. Where useful:
 - state uncertainty
 - give a clear recommendation
 
-EFFORT — match your depth to the request. If the prompt asks for a quick take, spend a few minutes at most: read only the files that matter and answer. Reserve exhaustive investigation for prompts that explicitly ask for a deep review. A focused, timely assessment is worth more to the team than a slow exhaustive one.
+EFFORT — obey the depth budget on the first line of the request, and default LOW when none is given. "Quick take" means: a few minutes, roughly a dozen tool invocations at most, read only the files that matter, then answer. Do not expand the scope beyond what the request names. Reserve exhaustive investigation for prompts that explicitly ask for a deep review. A focused, timely assessment is worth more to the team than a slow exhaustive one.
 
 Your response will be returned to the lead, not shown directly to the user. Be detailed enough to be useful but concise enough for another agent to consume efficiently."#
     )
@@ -122,7 +126,8 @@ mod tests {
     fn teammate_prompt_calibrates_effort() {
         let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex);
         assert!(p.contains("EFFORT"));
-        assert!(p.contains("quick take"));
+        assert!(p.contains("Quick take"));
+        assert!(p.contains("depth budget"));
     }
 
     #[test]
