@@ -38,7 +38,6 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
   const [editor, setEditor] = useState<EditorState>(emptyEditor);
   const [size, setSize] = useState({ columns: stdout.columns || 100, rows: stdout.rows || 30 });
   const [spinnerIndex, setSpinnerIndex] = useState(0);
-  const [tick, setTick] = useState(0);
   const [scroll, setScroll] = useState<{ top: number; stick: boolean }>({ top: 0, stick: true });
   const turnCounter = useRef(0);
   const ctrlCArmed = useRef(false);
@@ -61,18 +60,16 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
 
   const busy = state.turn !== undefined;
 
-  // One shared animation clock: spinner at 10fps while busy, elapsed-time
-  // re-render at 1s granularity via the same interval.
+  // One shared animation clock: the 10fps spinner interval also refreshes
+  // elapsed-time displays (each render re-reads Date.now()), so no second
+  // timer is needed.
   useEffect(() => {
     if (!busy) return;
     const spin = setInterval(() => setSpinnerIndex((i) => (i + 1) % spinnerFrames.length), 100);
-    const seconds = setInterval(() => setTick((t) => t + 1), 1000);
     return () => {
       clearInterval(spin);
-      clearInterval(seconds);
     };
   }, [busy]);
-  void tick;
 
   const spinner = spinnerFrames[spinnerIndex] ?? '⠋';
   const width = size.columns;
@@ -82,8 +79,7 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
     return state.teamPanelOpen
       ? renderTeamPanel(state, width, ctx.now)
       : renderConversation(state, ctx);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, width, spinner, tick]);
+  }, [state, width, spinner]);
 
   const composerRows = composerHeight(editor, width);
   const chromeRows = 2 /* header */ + 1 /* status */ + 1 /* composer separator */;
@@ -95,11 +91,51 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
 
   const submit = () => {
     const text = editor.text.trim();
-    if (!text || busy || state.phase !== 'ready') return;
+    if (!text) return;
+    if (text.startsWith('/')) {
+      runSlashCommand(text);
+      return;
+    }
+    if (busy || state.phase !== 'ready') return;
     turnCounter.current += 1;
     client.submit(`t${turnCounter.current}`, text);
     setEditor(emptyEditor);
     setScroll({ top: 0, stick: true });
+  };
+
+  const runSlashCommand = (text: string) => {
+    const command = text.slice(1).split(/\s+/)[0]?.toLowerCase() ?? '';
+    setEditor(emptyEditor);
+    switch (command) {
+      case 'exit':
+      case 'quit':
+      case 'q':
+        quit();
+        return;
+      case 'help':
+        dispatch({
+          type: 'local-notice',
+          text:
+            'commands  /exit quit cladex · /clear clear the conversation · /team toggle the team panel · /help this list\n' +
+            'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t team panel · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
+        });
+        return;
+      case 'clear':
+        if (busy) {
+          dispatch({ type: 'local-notice', text: '/clear is unavailable while a turn is running' });
+        } else {
+          dispatch({ type: 'clear-conversation' });
+        }
+        return;
+      case 'team':
+        dispatch({ type: 'toggle-team-panel' });
+        return;
+      default:
+        dispatch({
+          type: 'local-notice',
+          text: `unknown command /${command} — try /help`,
+        });
+    }
   };
 
   const cancel = () => {
@@ -165,8 +201,26 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
     if (key.delete && key.meta) return void setEditor(deleteForward);
     if (key.leftArrow) return void setEditor(moveLeft);
     if (key.rightArrow) return void setEditor(moveRight);
-    if (key.upArrow) return void setEditor(moveUp);
-    if (key.downArrow) return void setEditor(moveDown);
+    // With an empty composer, ↑/↓ scroll the conversation — which also
+    // makes the mouse wheel work (the terminal's alternate-scroll mode
+    // translates wheel ticks into arrow keys in the alt screen).
+    if (key.upArrow) {
+      if (editor.text.length === 0) {
+        setScroll({ top: Math.max(0, top - 1), stick: false });
+      } else {
+        setEditor(moveUp);
+      }
+      return;
+    }
+    if (key.downArrow) {
+      if (editor.text.length === 0) {
+        const next = Math.min(top + 1, maxTop);
+        setScroll({ top: next, stick: next >= maxTop });
+      } else {
+        setEditor(moveDown);
+      }
+      return;
+    }
     if (key.ctrl && input === 'a') return void setEditor(moveHome);
     if (key.ctrl && input === 'e') return void setEditor(moveEnd);
     if (key.ctrl || key.meta) return;
@@ -201,7 +255,13 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
       </Box>
       <Text> </Text>
       <Composer editor={editor} active={!busy && state.phase === 'ready'} width={width} />
-      <StatusBar state={state} spinner={spinner} width={width} />
+      <StatusBar
+        state={state}
+        spinner={spinner}
+        width={width}
+        scrolledUp={top < maxTop}
+        slashOpen={editor.text.startsWith('/')}
+      />
     </Box>
   );
 }

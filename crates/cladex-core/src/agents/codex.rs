@@ -226,8 +226,10 @@ pub struct CodexStreamParser {
     pub thread_id: Option<String>,
     pub final_text: Option<String>,
     pub error: Option<String>,
-    /// Text already emitted per agent_message item id, for delta computation.
-    message_progress: HashMap<String, String>,
+    /// Bytes of text already emitted per agent_message item id. Codex sends
+    /// cumulative snapshots; tracking only the emitted length keeps delta
+    /// extraction O(delta) instead of O(total²) over a long answer.
+    message_progress: HashMap<String, usize>,
     running_commands: HashMap<String, String>,
 }
 
@@ -296,15 +298,19 @@ impl CodexStreamParser {
                     Some("agent_message") => {
                         let text = item.get("text").and_then(Value::as_str).unwrap_or("");
                         let seen = self.message_progress.entry(item_id).or_default();
-                        if let Some(delta) = text.strip_prefix(seen.as_str()) {
-                            if !delta.is_empty() {
+                        // Snapshots are cumulative; emit only the new suffix.
+                        // A shrinking or rewritten snapshot (never observed,
+                        // but tolerated) resets without emitting garbage.
+                        match text.get(*seen..) {
+                            Some(delta) if !delta.is_empty() => {
                                 out.push(AgentEvent::TextDelta {
                                     agent,
                                     text: delta.to_owned(),
                                 });
                             }
+                            _ => {}
                         }
-                        *seen = text.to_owned();
+                        *seen = text.len();
                         if t == "item.completed" {
                             self.final_text = Some(text.to_owned());
                             out.push(AgentEvent::Message {

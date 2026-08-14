@@ -217,6 +217,79 @@ describe('App', () => {
     h.unmount();
   });
 
+  it('/exit quits and /help lists commands', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    h.stdin.write('/help');
+    await tickReact();
+    // Slash hint appears while typing a command.
+    expect(h.lastFrame()).toContain('/exit · /clear · /team · /help');
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).toContain('commands  /exit');
+    expect(h.client.submit).not.toHaveBeenCalled();
+
+    h.stdin.write('/exit');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.shutdown).toHaveBeenCalled();
+    h.unmount();
+  });
+
+  it('/clear empties the conversation', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    h.emit({ type: 'message.user', turn_id: 't1', text: 'hello' });
+    h.emit({
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: 'answer',
+      consultations: 0,
+      duration_ms: 100,
+    });
+    h.emit({ type: 'turn.completed', turn_id: 't1', duration_ms: 100, consultations: 0 });
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ hello');
+    h.stdin.write('/clear');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).not.toContain('❯ hello');
+    expect(h.lastFrame()).toContain('How can we help?');
+    h.unmount();
+  });
+
+  it('renders markdown in final answers instead of raw markers', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    h.emit({ type: 'message.user', turn_id: 't1', text: 'q' });
+    h.emit({
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: '## Short answer\n\nKeep the **Rust core**.\n\n1. First point\n2. Second point',
+      consultations: 0,
+      duration_ms: 100,
+    });
+    h.emit({ type: 'turn.completed', turn_id: 't1', duration_ms: 100, consultations: 0 });
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('Short answer');
+    expect(frame).not.toContain('##');
+    expect(frame).not.toContain('**');
+    expect(frame).toContain('Keep the Rust core.');
+    expect(frame).toContain('1  First point');
+    h.unmount();
+  });
+
   it('ctrl+j inserts a newline instead of submitting', async () => {
     const h = mount();
     await tickReact();

@@ -138,8 +138,17 @@ Precedence: CLI flags > user config > defaults.
 | `Esc` | cancel the running turn / close the team panel |
 | `Ctrl+C` | cancel; twice quits |
 | `Ctrl+T` | toggle the team activity panel |
-| `PageUp` / `PageDown` | scroll the conversation |
+| `PageUp` / `PageDown`, mouse wheel, `↑`/`↓` (empty composer) | scroll the conversation |
 | `Ctrl+Q` | quit |
+
+Slash commands: `/exit` (also `/quit`), `/clear` (reset the visible
+conversation), `/team` (toggle the team panel), `/help`. Typing `/` shows
+the available commands in the status bar. When you're scrolled up, the
+status bar shows `↓ pgdn latest`.
+
+Answers render markdown natively: headings, bold/italic/inline code,
+numbered and bulleted lists with hanging indents, fenced code blocks with
+a hairline gutter, and blockquotes.
 
 The team panel (Ctrl+T) shows participants, timings, tool counts, the
 consultation exchange, and each teammate consultation's final response.

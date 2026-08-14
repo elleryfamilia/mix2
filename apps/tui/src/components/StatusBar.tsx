@@ -66,12 +66,24 @@ export function StatusBar({
   state,
   spinner,
   width,
+  scrolledUp = false,
+  slashOpen = false,
 }: {
   state: AppState;
   spinner: string;
   width: number;
+  /** The viewport is not at the bottom: newer content exists below. */
+  scrolledUp?: boolean;
+  /** The composer starts with '/': surface the available commands. */
+  slashOpen?: boolean;
 }): React.JSX.Element {
-  const { left, right } = statusSegments(state, spinner);
+  let { left, right } = statusSegments(state, spinner);
+  if (slashOpen) {
+    left = { text: '/exit · /clear · /team · /help', color: theme.text.muted };
+  }
+  if (scrolledUp) {
+    right = { text: `↓ pgdn latest · ${right.text}`, color: right.color };
+  }
   const gap = Math.max(1, width - 2 - left.text.length - right.text.length);
   return (
     <Text backgroundColor={theme.status.barBg} wrap="truncate">

@@ -17,6 +17,7 @@ import {
   theme,
 } from '../theme/theme.js';
 import { BLANK, Line, Span, span, spread, truncate, wrapText } from './lines.js';
+import { markdownLines } from './markdown.js';
 
 const INDENT = 2;
 
@@ -50,8 +51,10 @@ function userLines(text: string, ctx: RenderContext): Line[] {
 }
 
 function interimLines(item: Extract<ConversationItem, { kind: 'interim' }>, ctx: RenderContext): Line[] {
-  const width = contentWidth(ctx);
-  return wrapText(item.text, width).map((line) => pad(span(line, { color: theme.text.primary })));
+  return markdownLines(item.text, contentWidth(ctx)).map((line) => [
+    span(' '.repeat(INDENT)),
+    ...line,
+  ]);
 }
 
 function activityLines(
@@ -115,15 +118,8 @@ function finalLines(item: Extract<ConversationItem, { kind: 'final' }>, ctx: Ren
     lines.push(pad(chip('Team', theme.agent.team, chipFg('team'))));
   }
   lines.push(BLANK);
-  const width = contentWidth(ctx);
-  for (const raw of item.text.split('\n')) {
-    if (raw.trim() === '') {
-      lines.push(BLANK);
-      continue;
-    }
-    for (const line of wrapText(raw, width)) {
-      lines.push(pad(span(line, { color: theme.text.primary })));
-    }
+  for (const line of markdownLines(item.text, contentWidth(ctx))) {
+    lines.push([span(' '.repeat(INDENT)), ...line]);
   }
   return lines;
 }

@@ -80,8 +80,11 @@ function parseArgs(argv: string[]): CliArgs {
 const args = parseArgs(process.argv.slice(2));
 const cwd = args.cwd ? path.resolve(args.cwd) : process.cwd();
 
-const ALT_SCREEN_ON = '\x1b[?1049h\x1b[H';
-const ALT_SCREEN_OFF = '\x1b[?1049l';
+// 1049: alternate screen buffer. 1007: alternate scroll — the terminal
+// translates mouse-wheel ticks into arrow keys while in the alt screen,
+// which the app maps to conversation scrolling.
+const ALT_SCREEN_ON = '\x1b[?1049h\x1b[?1007h\x1b[H';
+const ALT_SCREEN_OFF = '\x1b[?1007l\x1b[?1049l';
 let altScreen = false;
 
 function enterAltScreen(): void {

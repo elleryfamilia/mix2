@@ -211,6 +211,14 @@ shape (taught to the lead via instructions, not enforced):
   ◐ team     lead's call — ship now, file the rework
 ```
 
+**Markdown in answers** — agent text renders as terminal markdown, in the
+same quiet vocabulary: headings bold (marker stripped, blank line before),
+numbered lists with the number in muted and a hanging indent, bullets as
+muted `•`, inline code in secondary on the bar background, fenced code
+behind a `│` gutter in `border.bridge` (truncated, never wrapped),
+blockquotes behind `▏` in muted italic, rules as a short `─` run. No
+boxes. Raw markdown markers must never reach the screen.
+
 **Error**
 
 ```text

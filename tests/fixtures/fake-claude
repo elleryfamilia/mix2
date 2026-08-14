@@ -149,10 +149,19 @@ def main():
         except Exception as e:  # noqa: BLE001 - fixture reports all failures
             consult_notes.append(f"[consult{i + 1}:exc:{e}]")
 
-    text = (
-        f"fake-claude reply [session:{session_id}] [resumed:{resumed}] [role:{role}] "
-        + " ".join(consult_notes)
-    ).strip()
+    if "markdown" in scenarios:
+        text = (
+            "## Short answer\n\nWe'd keep the **Rust core** and the `JSONL` protocol — neither is "
+            "the bottleneck.\n\n1. **Fix the startup tail.** The version probe blocks readiness "
+            "longer than it should on slow machines.\n2. **Coalesce text deltas** so per-token "
+            "cost drops to nothing.\n\n- measure before optimizing\n- provider latency dominates\n\n"
+            "```rust\nlet delta = &text[seen..];\n```\n\n> A fast good answer beats a slow perfect one."
+        )
+    else:
+        text = (
+            f"fake-claude reply [session:{session_id}] [resumed:{resumed}] [role:{role}] "
+            + " ".join(consult_notes)
+        ).strip()
 
     for chunk in (text[i:i + 24] for i in range(0, len(text), 24)):
         out({

@@ -79,7 +79,9 @@ impl ChildProcess {
         Ok(BufReader::new(stdout).lines())
     }
 
-    /// Collect stderr in the background; returns a handle resolving to its tail.
+    /// Collect stderr in the background; returns a handle resolving to its
+    /// tail. Reads in chunks and keeps only the last few KB, so a chatty
+    /// provider can never balloon memory.
     pub fn stderr_tail(&mut self) -> Result<tokio::task::JoinHandle<String>> {
         let stderr = self
             .child
@@ -87,21 +89,24 @@ impl ChildProcess {
             .take()
             .context("child stderr unavailable")?;
         Ok(tokio::spawn(async move {
-            let mut buf = String::new();
-            let mut reader = BufReader::new(stderr);
-            let _ = reader.read_to_string(&mut buf).await;
             const TAIL: usize = 4000;
-            if buf.len() > TAIL {
-                let cut = buf.len() - TAIL;
-                let cut = buf
-                    .char_indices()
-                    .map(|(i, _)| i)
-                    .find(|&i| i >= cut)
-                    .unwrap_or(0);
-                buf.split_off(cut)
-            } else {
-                buf
+            let mut reader = BufReader::new(stderr);
+            let mut tail: Vec<u8> = Vec::with_capacity(TAIL * 2);
+            let mut chunk = [0u8; 4096];
+            loop {
+                match reader.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        tail.extend_from_slice(&chunk[..n]);
+                        if tail.len() > TAIL {
+                            tail.drain(..tail.len() - TAIL);
+                        }
+                    }
+                }
             }
+            // A trimmed buffer can start mid-character; lossy decoding turns
+            // that into a replacement char, which is fine for an error tail.
+            String::from_utf8_lossy(&tail).into_owned()
         }))
     }
 

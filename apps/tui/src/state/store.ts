@@ -109,7 +109,11 @@ export type Action =
   | { type: 'core-event'; event: CoreEvent; now: number }
   | { type: 'core-exited'; code: number | null }
   | { type: 'toggle-team-panel' }
-  | { type: 'close-team-panel' };
+  | { type: 'close-team-panel' }
+  /** Local notice from the UI itself (slash command feedback, /help). */
+  | { type: 'local-notice'; text: string }
+  /** /clear: empty the visible conversation; the session continues. */
+  | { type: 'clear-conversation' };
 
 /** Settle the lead's open stream segment into a persistent interim item.
  * Called when activity interrupts the lead's speech (tools, consultation).
@@ -173,6 +177,10 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, teamPanelOpen: !state.teamPanelOpen };
     case 'close-team-panel':
       return state.teamPanelOpen ? { ...state, teamPanelOpen: false } : state;
+    case 'local-notice':
+      return { ...state, items: [...state.items, { kind: 'notice', text: action.text }] };
+    case 'clear-conversation':
+      return { ...state, items: [], lastSummary: undefined };
     case 'core-exited':
       if (state.phase === 'fatal') return state;
       return {

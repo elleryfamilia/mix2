@@ -114,12 +114,15 @@ impl Runtime {
         let lead_agent = build_agent(config.lead, &config);
         let teammate_agent = build_agent(config.teammate, &config);
 
-        let probe = |agent: Arc<dyn Agent>| async move {
-            tokio::time::timeout(Duration::from_secs(20), agent.version()).await
+        // The lead probe gates readiness, so it gets a generous timeout; a
+        // hung teammate probe must not hold the whole UI hostage (a missing
+        // teammate is explicitly nonfatal), so it gets a short one.
+        let probe = |agent: Arc<dyn Agent>, secs: u64| async move {
+            tokio::time::timeout(Duration::from_secs(secs), agent.version()).await
         };
         let (lead_version, teammate_version) = tokio::join!(
-            probe(Arc::clone(&lead_agent)),
-            probe(Arc::clone(&teammate_agent))
+            probe(Arc::clone(&lead_agent), 20),
+            probe(Arc::clone(&teammate_agent), 6)
         );
 
         let lead_version = match lead_version {
