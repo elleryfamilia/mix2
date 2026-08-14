@@ -339,11 +339,14 @@ impl Runtime {
     fn handle_consult_update(&mut self, turn: &mut TurnState, update: ConsultUpdate) {
         let teammate = self.config.teammate;
         match update {
-            ConsultUpdate::Started { index, max, .. } => emit(&Event::ConsultStarted {
+            ConsultUpdate::Started {
+                index, max, prompt, ..
+            } => emit(&Event::ConsultStarted {
                 turn_id: turn.ui_id.clone(),
                 agent: teammate,
                 index,
                 max,
+                prompt,
             }),
             ConsultUpdate::AgentEvent { event, .. } => {
                 let turn_id = turn.ui_id.clone();

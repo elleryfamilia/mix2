@@ -1,0 +1,14 @@
+{
+  "name": "cladex-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm build:core && pnpm --filter cladex dev",
+    "build": "pnpm build:core:release && pnpm --filter cladex build",
+    "build:core": "cargo build",
+    "build:core:release": "cargo build --release",
+    "test": "pnpm --filter cladex test",
+    "typecheck": "pnpm --filter cladex typecheck",
+    "check": "pnpm typecheck && pnpm test && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test"
+  },
+  "packageManager": "pnpm@11.9.0"
+}

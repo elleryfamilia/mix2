@@ -89,6 +89,8 @@ pub enum Event {
         agent: AgentKind,
         index: u32,
         max: u32,
+        /// The lead's written consultation prompt (team panel only).
+        prompt: String,
     },
     /// `text` is the teammate's final consultation response — shown only in
     /// the optional team panel, never spliced into the conversation.
@@ -151,11 +153,12 @@ mod tests {
             agent: AgentKind::Codex,
             index: 1,
             max: 2,
+            prompt: "evaluate X".into(),
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"consult.started","turn_id":"t1","agent":"codex","index":1,"max":2}"#
+            r#"{"type":"consult.started","turn_id":"t1","agent":"codex","index":1,"max":2,"prompt":"evaluate X"}"#
         );
     }
 

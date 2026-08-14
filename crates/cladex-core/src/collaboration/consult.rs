@@ -68,6 +68,8 @@ pub enum ConsultUpdate {
         turn_id: Uuid,
         index: u32,
         max: u32,
+        /// The lead's written consultation prompt (shown in the team panel).
+        prompt: String,
     },
     AgentEvent {
         turn_id: Uuid,
@@ -306,6 +308,7 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
             turn_id,
             index,
             max: budget.max(),
+            prompt: request.prompt.clone(),
         })
         .await;
 

@@ -1,0 +1,32 @@
+{
+  "name": "cladex",
+  "version": "0.1.0",
+  "description": "A terminal interface that turns Claude Code and Codex into a small AI engineering team.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cladex": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.tsx",
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ink": "^7.1.1",
+    "react": "^19.2.4",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  }
+}

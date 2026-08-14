@@ -1,0 +1,446 @@
+/**
+ * Renders domain state into styled lines per Design #4:
+ * user/answer dominance, settled-activity quieting, agent-colored tiles
+ * that merge into mauve when the agents actually exchange, and a collapsed
+ * trace pill once collaboration finishes.
+ */
+import type { ActiveTurn, AppState, ConsultState, ConversationItem } from '../state/store.js';
+import { formatElapsed } from '../state/store.js';
+import {
+  MAX_CONTENT_WIDTH,
+  TILE_BREAKPOINT,
+  agentColor,
+  agentGlyph,
+  chipFg,
+  displayName,
+  glyphs,
+  theme,
+} from '../theme/theme.js';
+import { BLANK, Line, Span, span, spread, truncate, wrapText } from './lines.js';
+
+const INDENT = 2;
+
+export interface RenderContext {
+  /** Full terminal columns available to the viewport. */
+  width: number;
+  /** Current spinner frame glyph. */
+  spinner: string;
+  /** Current timestamp for elapsed displays. */
+  now: number;
+}
+
+function contentWidth(ctx: RenderContext): number {
+  return Math.min(ctx.width - INDENT, MAX_CONTENT_WIDTH);
+}
+
+function pad(...spans: Span[]): Line {
+  return [span(' '.repeat(INDENT)), ...spans];
+}
+
+// ---------------------------------------------------------------- settled
+
+function userLines(text: string, ctx: RenderContext): Line[] {
+  const width = contentWidth(ctx) - 2;
+  const wrapped = text.split('\n').flatMap((l) => wrapText(l, width));
+  return wrapped.map((line, i) =>
+    i === 0
+      ? pad(span(glyphs.prompt, { bold: true, color: theme.text.primary }), span(' '), span(line, { color: theme.text.primary }))
+      : pad(span('  '), span(line, { color: theme.text.primary })),
+  );
+}
+
+function interimLines(item: Extract<ConversationItem, { kind: 'interim' }>, ctx: RenderContext): Line[] {
+  const width = contentWidth(ctx);
+  return wrapText(item.text, width).map((line) => pad(span(line, { color: theme.text.primary })));
+}
+
+function activityLines(
+  item: Extract<ConversationItem, { kind: 'activity' }>,
+  ctx: RenderContext,
+): Line[] {
+  const name = displayName(item.agent);
+  const details = item.details.length > 0 ? ` ${glyphs.dot} ${item.details.join(', ')}` : '';
+  const summary = truncate(
+    `${item.toolsCount} tool call${item.toolsCount === 1 ? '' : 's'}${details} ${glyphs.dot} ${formatElapsed(item.durationMs)}`,
+    contentWidth(ctx) - 4,
+  );
+  return [
+    pad(
+      span(agentGlyph(item.agent), { color: agentColor(item.agent) }),
+      span(` ${name}`, { color: agentColor(item.agent), bold: true }),
+      span(' — investigated', { color: theme.text.muted }),
+    ),
+    pad(span('  '), span(`${glyphs.treeEnd} ${summary}`, { color: theme.text.faint })),
+  ];
+}
+
+function traceLines(item: Extract<ConversationItem, { kind: 'trace' }>, ctx: RenderContext): Line[] {
+  const left: Line = pad(
+    span(`${glyphs.treeEnd} trace`, { color: theme.text.faint }),
+    span('  '),
+    span(agentGlyph(item.leadAgent), { color: agentColor(item.leadAgent) }),
+    span(` ${formatElapsed(item.leadMs)}`, { color: theme.text.faint }),
+    span('  '),
+    span(glyphs.confer, { color: theme.agent.team }),
+    span(
+      ` ${item.consultCount} consultation${item.consultCount === 1 ? '' : 's'}`,
+      { color: theme.text.faint },
+    ),
+    span('  '),
+    span(agentGlyph(item.teammateAgent), { color: agentColor(item.teammateAgent) }),
+    span(` ${formatElapsed(item.teammateMs)}`, { color: theme.text.faint }),
+  );
+  return [spread(left, [span('ctrl+t ', { color: theme.text.faint })], Math.min(ctx.width, MAX_CONTENT_WIDTH))];
+}
+
+function chip(label: string, bg: string, fg: string): Span {
+  return span(` ${label} `, { bgColor: bg, color: fg, bold: true });
+}
+
+function finalLines(item: Extract<ConversationItem, { kind: 'final' }>, ctx: RenderContext): Line[] {
+  const lines: Line[] = [];
+  if (item.speaker === 'team') {
+    lines.push(
+      pad(
+        chip('Team', theme.agent.team, chipFg('team')),
+        span(`  ${item.lead} + ${item.lead === 'claude' ? 'codex' : 'claude'}`, {
+          color: theme.text.faint,
+        }),
+      ),
+    );
+  } else {
+    lines.push(pad(chip(displayName(item.speaker), agentColor(item.speaker), chipFg(item.speaker))));
+  }
+  lines.push(BLANK);
+  const width = contentWidth(ctx);
+  for (const raw of item.text.split('\n')) {
+    if (raw.trim() === '') {
+      lines.push(BLANK);
+      continue;
+    }
+    for (const line of wrapText(raw, width)) {
+      lines.push(pad(span(line, { color: theme.text.primary })));
+    }
+  }
+  return lines;
+}
+
+function errorLines(item: Extract<ConversationItem, { kind: 'error' }>, ctx: RenderContext): Line[] {
+  const width = contentWidth(ctx) - 2;
+  return wrapText(`${glyphs.fail} ${item.text}`, width).map((line) =>
+    pad(span(line, { color: theme.status.error })),
+  );
+}
+
+// ------------------------------------------------------------------ live
+
+function statusWord(turn: ActiveTurn): string {
+  switch (turn.phase) {
+    case 'working':
+      return turn.tools.length > 0 ? 'investigating' : 'thinking';
+    case 'consulting':
+      return 'consulting';
+    case 'synthesizing':
+      return 'reconciling both perspectives';
+  }
+}
+
+function leadWorkingLines(turn: ActiveTurn, ctx: RenderContext): Line[] {
+  const color = agentColor(turn.leadAgent);
+  const width = Math.min(ctx.width, MAX_CONTENT_WIDTH);
+  const elapsed = formatElapsed(ctx.now - turn.startedAt);
+  const head = spread(
+    pad(
+      span(agentGlyph(turn.leadAgent), { color }),
+      span(` ${displayName(turn.leadAgent)}`, { color, bold: true }),
+      span(` — ${statusWord(turn)}`, { color: theme.text.muted }),
+    ),
+    [span(`${ctx.spinner} ${elapsed}`, { color: theme.text.faint })],
+    width,
+  );
+  const lines: Line[] = [head];
+
+  // Live tool tree: most recent three entries.
+  const recent = turn.tools.slice(-3);
+  const hidden = turn.tools.length - recent.length;
+  recent.forEach((tool, i) => {
+    const last = i === recent.length - 1;
+    const connector = last ? glyphs.treeEnd : glyphs.treeMid;
+    const label = tool.detail ? `${tool.name.toLowerCase()} ${tool.detail}` : tool.name.toLowerCase();
+    const extra = last && hidden > 0 ? `  +${hidden} more` : '';
+    lines.push(
+      pad(
+        span('  '),
+        span(
+          `${connector} ${truncate(label, contentWidth(ctx) - 6)}${extra}`,
+          { color: theme.text.faint },
+        ),
+      ),
+    );
+  });
+
+  // The lead talking while it works (interim, not yet settled).
+  const stream = turn.streamText.trim();
+  if (stream) {
+    lines.push(BLANK);
+    for (const line of wrapText(stream, contentWidth(ctx)).slice(-4)) {
+      lines.push(pad(span(line, { color: theme.text.primary })));
+    }
+  }
+  return lines;
+}
+
+interface TileSpec {
+  headerLeft: Line;
+  headerRight: Line;
+  body: Line[];
+  borderColor: string;
+}
+
+function buildTile(spec: TileSpec, width: number): Line[] {
+  const inner = width - 2;
+  const border = { color: spec.borderColor };
+  const top: Line = [
+    span('╭ ', border),
+    ...spec.headerLeft,
+    span(' '),
+    span(
+      '─'.repeat(
+        Math.max(
+          1,
+          inner - 2 - spec.headerLeft.reduce((n, s) => n + s.text.length, 0) - spec.headerRight.reduce((n, s) => n + s.text.length, 0) - 2,
+        ),
+      ),
+      border,
+    ),
+    span(' '),
+    ...spec.headerRight,
+    span(' ╮', border),
+  ];
+  const rows = spec.body.map((line) => {
+    const text = line.reduce((n, s) => n + s.text.length, 0);
+    const fill = Math.max(0, inner - 2 - text);
+    return [span('│ ', border), ...line, span(' '.repeat(fill)), span(' │', border)];
+  });
+  const bottom: Line = [span('╰' + '─'.repeat(Math.max(0, width - 2)) + '╯', border)];
+  return [top, ...rows, bottom];
+}
+
+function zipTiles(left: Line[], right: Line[], gap: number): Line[] {
+  const height = Math.max(left.length, right.length);
+  const leftWidth = Math.max(...left.map((l) => l.reduce((n, s) => n + s.text.length, 0)));
+  const out: Line[] = [];
+  for (let i = 0; i < height; i++) {
+    const l = left[i] ?? [span(' '.repeat(leftWidth))];
+    const lw = l.reduce((n, s) => n + s.text.length, 0);
+    const r = right[i] ?? [];
+    out.push([span('  '), ...l, span(' '.repeat(Math.max(0, leftWidth - lw) + gap)), ...r]);
+  }
+  return out;
+}
+
+function consultLines(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
+  const lines: Line[] = [];
+  const teammateName = consult.agent;
+
+  lines.push(
+    pad(
+      span(`${glyphs.consult} bringing in ${teammateName}`, { color: theme.text.muted }),
+      span(
+        consult.max > 1 ? `  ${glyphs.dot} ${consult.index} of ${consult.max}` : '',
+        { color: theme.text.faint },
+      ),
+    ),
+  );
+
+  if (consult.status === 'running') {
+    lines.push(BLANK);
+    lines.push(...parallelTiles(turn, consult, ctx));
+  } else if (consult.status === 'done') {
+    lines.push(BLANK);
+    lines.push(...mergedTile(turn, consult, ctx));
+  } else if (consult.status === 'failed') {
+    lines.push(
+      pad(
+        span('  '),
+        span(
+          `${glyphs.treeEnd} ${truncate(consult.message ?? 'consultation failed', contentWidth(ctx) - 6)}`,
+          { color: theme.text.muted },
+        ),
+      ),
+    );
+  }
+  return lines;
+}
+
+function tileBody(consult: ConsultState, width: number): Line[] {
+  const body: Line[] = [];
+  const stream = consult.streamText.trim();
+  if (stream) {
+    for (const line of wrapText(stream, width).slice(-2)) {
+      body.push([span(line, { color: theme.text.muted, italic: true })]);
+    }
+  }
+  for (const tool of consult.tools.slice(-2)) {
+    const label = tool.detail ? `${tool.name.toLowerCase()} ${tool.detail}` : tool.name.toLowerCase();
+    body.push([span(`${glyphs.treeEnd} ${truncate(label, width)}`, { color: theme.text.faint })]);
+  }
+  if (body.length === 0) {
+    body.push([span(`${glyphs.treeEnd} starting up`, { color: theme.text.faint })]);
+  }
+  return body;
+}
+
+function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
+  const lead = turn.leadAgent;
+  const teammate = consult.agent;
+  const full = Math.min(ctx.width, MAX_CONTENT_WIDTH);
+  const stacked = ctx.width < TILE_BREAKPOINT;
+  const tileWidth = stacked ? full - INDENT : Math.floor((full - INDENT - 2) / 2);
+  const innerWidth = tileWidth - 4;
+
+  const leadStream = turn.streamText.trim();
+  const leadBody: Line[] = leadStream
+    ? wrapText(leadStream, innerWidth)
+        .slice(-2)
+        .map((l) => [span(l, { color: theme.text.muted, italic: true })])
+    : [[span(`${glyphs.treeEnd} waiting on ${teammate} ${ctx.spinner}`, { color: theme.text.faint })]];
+
+  const leadTile = buildTile(
+    {
+      headerLeft: [
+        span(agentGlyph(lead), { color: agentColor(lead) }),
+        span(` ${lead} — ${leadStream ? 'drafting' : 'waiting'}`, { color: agentColor(lead), bold: true }),
+      ],
+      headerRight: [span(formatElapsed(ctx.now - turn.startedAt), { color: theme.text.faint })],
+      body: leadBody,
+      borderColor: agentColor(lead),
+    },
+    tileWidth,
+  );
+  const teammateTile = buildTile(
+    {
+      headerLeft: [
+        span(agentGlyph(teammate), { color: agentColor(teammate) }),
+        span(` ${teammate} — reviewing`, { color: agentColor(teammate), bold: true }),
+      ],
+      headerRight: [
+        span(`${ctx.spinner} ${formatElapsed(ctx.now - consult.startedAt)}`, { color: theme.text.faint }),
+      ],
+      body: tileBody(consult, innerWidth),
+      borderColor: agentColor(teammate),
+    },
+    tileWidth,
+  );
+
+  if (stacked) {
+    return [...leadTile.map((l) => [span('  '), ...l]), ...teammateTile.map((l) => [span('  '), ...l])];
+  }
+  return zipTiles(leadTile, teammateTile, 2);
+}
+
+/** After the exchange actually happened, the tiles fuse into one mauve tile
+ * with the dialogue visible (Design 3b), summarized to one line per side. */
+function mergedTile(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
+  const lead = turn.leadAgent;
+  const teammate = consult.agent;
+  const full = Math.min(ctx.width, MAX_CONTENT_WIDTH);
+  const tileWidth = full - INDENT;
+  const innerWidth = tileWidth - 6;
+
+  const ask = firstMeaningfulLine(consult.prompt) ?? 'consultation request';
+  const answer = firstMeaningfulLine(consult.text) ?? 'assessment returned';
+
+  const body: Line[] = [
+    [
+      span(agentGlyph(lead), { color: agentColor(lead) }),
+      span(` ${truncate(ask, innerWidth)}`, { color: theme.text.secondary }),
+    ],
+    [
+      span(agentGlyph(teammate), { color: agentColor(teammate) }),
+      span(` ${truncate(answer, innerWidth)}`, { color: theme.text.secondary }),
+    ],
+  ];
+
+  const tile = buildTile(
+    {
+      headerLeft: [
+        chip(displayName(lead), agentColor(lead), chipFg(lead)),
+        span(` ${glyphs.confer} `, { color: theme.agent.team, bold: true }),
+        chip(displayName(teammate), agentColor(teammate), chipFg(teammate)),
+      ],
+      headerRight: [
+        span(formatElapsed(consult.durationMs ?? 0), { color: theme.text.faint }),
+      ],
+      body,
+      borderColor: theme.agent.team,
+    },
+    tileWidth,
+  );
+  return [
+    pad(span(`${glyphs.confer} conferred`, { color: theme.agent.team })),
+    ...tile.map((l) => [span('  '), ...l]),
+  ];
+}
+
+function firstMeaningfulLine(text?: string): string | undefined {
+  if (!text) return undefined;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+// -------------------------------------------------------------- assembly
+
+export function renderItem(item: ConversationItem, ctx: RenderContext): Line[] {
+  switch (item.kind) {
+    case 'user':
+      return userLines(item.text, ctx);
+    case 'interim':
+      return interimLines(item, ctx);
+    case 'activity':
+      return activityLines(item, ctx);
+    case 'trace':
+      return traceLines(item, ctx);
+    case 'final':
+      return finalLines(item, ctx);
+    case 'error':
+      return errorLines(item, ctx);
+    case 'cancelled':
+      return [pad(span('× cancelled', { color: theme.text.muted }))];
+    case 'notice':
+      return wrapText(item.text, contentWidth(ctx)).map((line) =>
+        pad(span(line, { color: theme.text.muted })),
+      );
+  }
+}
+
+export function renderLiveTurn(turn: ActiveTurn, ctx: RenderContext): Line[] {
+  const lines: Line[] = [];
+  lines.push(...leadWorkingLines(turn, ctx));
+  for (const consult of turn.consults) {
+    lines.push(BLANK);
+    lines.push(...consultLines(turn, consult, ctx));
+  }
+  return lines;
+}
+
+/** The full conversation as lines: settled items, then the live turn. */
+export function renderConversation(state: AppState, ctx: RenderContext): Line[] {
+  const lines: Line[] = [];
+  if (state.items.length === 0 && !state.turn) {
+    lines.push(pad(span('How can we help?', { color: theme.text.primary })));
+    return lines;
+  }
+  for (const item of state.items) {
+    if (lines.length > 0) lines.push(BLANK);
+    lines.push(...renderItem(item, ctx));
+  }
+  if (state.turn) {
+    if (lines.length > 0) lines.push(BLANK);
+    lines.push(...renderLiveTurn(state.turn, ctx));
+  }
+  return lines;
+}
