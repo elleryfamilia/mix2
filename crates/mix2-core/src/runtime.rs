@@ -6,7 +6,7 @@ use crate::collaboration::consult::{ActiveTurn, ConsultServer, ConsultUpdate};
 use crate::collaboration::ConsultBudget;
 use crate::config::Config;
 use crate::ipc::{AgentInfo, Command, Event, Speaker, PROTOCOL_VERSION};
-use crate::session::CladexSession;
+use crate::session::Mix2Session;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -41,14 +41,14 @@ pub struct RuntimeOptions {
 }
 
 fn build_agent(kind: AgentKind, config: &Config) -> Arc<dyn Agent> {
-    // Test/dev injection: CLADEX_CLAUDE_CMD / CLADEX_CODEX_CMD point the
+    // Test/dev injection: MIX2_CLAUDE_CMD / MIX2_CODEX_CMD point the
     // adapters at fake provider fixtures without touching user config.
     let command = match kind {
         AgentKind::Claude => {
-            std::env::var("CLADEX_CLAUDE_CMD").unwrap_or_else(|_| config.claude_command.clone())
+            std::env::var("MIX2_CLAUDE_CMD").unwrap_or_else(|_| config.claude_command.clone())
         }
         AgentKind::Codex => {
-            std::env::var("CLADEX_CODEX_CMD").unwrap_or_else(|_| config.codex_command.clone())
+            std::env::var("MIX2_CODEX_CMD").unwrap_or_else(|_| config.codex_command.clone())
         }
     };
     match kind {
@@ -75,7 +75,7 @@ fn runtime_dir_for(session_id: Uuid) -> PathBuf {
     let base = PathBuf::from("/tmp");
     #[cfg(not(unix))]
     let base = std::env::temp_dir();
-    base.join("cladex").join(session_id.to_string())
+    base.join("mix2").join(session_id.to_string())
 }
 
 fn helper_dir() -> Option<PathBuf> {
@@ -86,7 +86,7 @@ fn helper_dir() -> Option<PathBuf> {
 
 pub struct Runtime {
     config: Config,
-    session: CladexSession,
+    session: Mix2Session,
     lead_agent: Arc<dyn Agent>,
     lead_info: AgentInfo,
     teammate_info: AgentInfo,
@@ -143,7 +143,7 @@ impl Runtime {
             Err(_) => (false, None, Some("did not respond to --version".to_owned())),
         };
 
-        let session = CladexSession::new(config.lead, cwd);
+        let session = Mix2Session::new(config.lead, cwd);
         let runtime_dir = runtime_dir_for(session.id);
         tokio::fs::create_dir_all(&runtime_dir).await?;
         #[cfg(unix)]
@@ -193,17 +193,17 @@ impl Runtime {
         })
     }
 
-    fn cladex_env(&self, turn_uuid: Uuid, role: AgentRole) -> HashMap<String, String> {
+    fn mix2_env(&self, turn_uuid: Uuid, role: AgentRole) -> HashMap<String, String> {
         let mut env = HashMap::new();
-        env.insert("CLADEX_ROLE".to_owned(), role.to_string());
+        env.insert("MIX2_ROLE".to_owned(), role.to_string());
         env.insert(
-            "CLADEX_DEPTH".to_owned(),
+            "MIX2_DEPTH".to_owned(),
             if role == AgentRole::Lead { "0" } else { "1" }.to_owned(),
         );
-        env.insert("CLADEX_SESSION_ID".to_owned(), self.session.id.to_string());
-        env.insert("CLADEX_TURN_ID".to_owned(), turn_uuid.to_string());
+        env.insert("MIX2_SESSION_ID".to_owned(), self.session.id.to_string());
+        env.insert("MIX2_TURN_ID".to_owned(), turn_uuid.to_string());
         env.insert(
-            "CLADEX_RUNTIME_DIR".to_owned(),
+            "MIX2_RUNTIME_DIR".to_owned(),
             self.runtime_dir.display().to_string(),
         );
         env
@@ -232,7 +232,7 @@ impl Runtime {
                 self.config.teammate,
                 self.teammate_info.available,
             ),
-            env: self.cladex_env(turn_uuid, AgentRole::Lead),
+            env: self.mix2_env(turn_uuid, AgentRole::Lead),
             path_prepend: helper_dir(),
             runtime_dir: Some(self.runtime_dir.clone()),
         };

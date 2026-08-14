@@ -1,17 +1,17 @@
 [package]
-name = "cladex-core"
+name = "mix2-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cladex runtime: agent orchestration core (internal binary, not user-facing)"
+description = "mix2 runtime: agent orchestration core (internal binary, not user-facing)"
 
 [[bin]]
-name = "cladex-core"
+name = "mix2-core"
 path = "src/main.rs"
 
 [[bin]]
-name = "cladex-consult"
-path = "src/bin/cladex_consult.rs"
+name = "mix2-consult"
+path = "src/bin/mix2_consult.rs"
 
 [dependencies]
 anyhow = "1"

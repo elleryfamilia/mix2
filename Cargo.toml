@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cladex-core"]
+members = ["crates/mix2-core"]
 
 [workspace.package]
 version = "0.1.0"

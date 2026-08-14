@@ -23,7 +23,7 @@ pub const SOCKET_NAME: &str = "consult.sock";
 pub const FILE_DIR_NAME: &str = "consult";
 
 pub const REFUSAL_TEAMMATE: &str =
-    "Consultation unavailable: this agent is already running as a Cladex teammate. \
+    "Consultation unavailable: this agent is already running as a mix2 teammate. \
      Complete your independent analysis without delegating.";
 
 pub fn budget_exhausted_message() -> String {
@@ -41,7 +41,7 @@ pub fn teammate_unavailable_message(teammate: AgentKind, reason: &str) -> String
     )
 }
 
-/// Request sent by `cladex-consult` over the socket or file transport.
+/// Request sent by `mix2-consult` over the socket or file transport.
 ///
 /// `mode` selects between the blocking flow and the concurrent flow:
 /// - `sync` (default): run the consultation and reply with the result.
@@ -53,9 +53,9 @@ pub struct ConsultRequest {
     pub v: u32,
     #[serde(default)]
     pub prompt: String,
-    /// CLADEX_ROLE of the calling agent process.
+    /// MIX2_ROLE of the calling agent process.
     pub role: String,
-    /// CLADEX_DEPTH of the calling agent process.
+    /// MIX2_DEPTH of the calling agent process.
     pub depth: u32,
     #[serde(default)]
     pub mode: Option<String>,
@@ -119,7 +119,7 @@ struct Shared {
     cwd: PathBuf,
     runtime_dir: PathBuf,
     session_id: Uuid,
-    /// Directory containing `cladex-consult`, prepended to the teammate's
+    /// Directory containing `mix2-consult`, prepended to the teammate's
     /// PATH too — so a misbehaving teammate that tries to consult receives
     /// the explicit refusal instead of a confusing "command not found".
     helper_dir: Option<PathBuf>,
@@ -339,7 +339,7 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
         let active = shared.active.read().await;
         match active.as_ref() {
             Some(turn) => (turn.turn_id, Arc::clone(&turn.budget), turn.cancel.clone()),
-            None => return refuse("Consultation unavailable: no active Cladex turn.".to_owned()),
+            None => return refuse("Consultation unavailable: no active mix2 turn.".to_owned()),
         }
     };
 
@@ -453,15 +453,12 @@ async fn run_consultation(
     cancel: CancellationToken,
 ) -> Result<String> {
     let mut env = HashMap::new();
-    env.insert("CLADEX_ROLE".to_owned(), "teammate".to_owned());
-    env.insert("CLADEX_DEPTH".to_owned(), "1".to_owned());
+    env.insert("MIX2_ROLE".to_owned(), "teammate".to_owned());
+    env.insert("MIX2_DEPTH".to_owned(), "1".to_owned());
+    env.insert("MIX2_SESSION_ID".to_owned(), shared.session_id.to_string());
+    env.insert("MIX2_TURN_ID".to_owned(), turn_id.to_string());
     env.insert(
-        "CLADEX_SESSION_ID".to_owned(),
-        shared.session_id.to_string(),
-    );
-    env.insert("CLADEX_TURN_ID".to_owned(), turn_id.to_string());
-    env.insert(
-        "CLADEX_RUNTIME_DIR".to_owned(),
+        "MIX2_RUNTIME_DIR".to_owned(),
         shared.runtime_dir.display().to_string(),
     );
 

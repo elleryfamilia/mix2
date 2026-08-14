@@ -1,21 +1,21 @@
-//! `cladex-consult` — the command a Cladex lead agent runs to ask its
+//! `mix2-consult` — the command a mix2 lead agent runs to ask its
 //! teammate for an independent opinion.
 //!
 //! Three forms:
-//!   cladex-consult                 read prompt from stdin, block, print reply
-//!   cladex-consult start           read prompt from stdin, print a ticket
+//!   mix2-consult                 read prompt from stdin, block, print reply
+//!   mix2-consult start           read prompt from stdin, print a ticket
 //!                                  immediately so the caller can keep
 //!                                  working while the teammate researches
-//!   cladex-consult wait <ticket>   block until that consultation finishes,
+//!   mix2-consult wait <ticket>   block until that consultation finishes,
 //!                                  print the teammate's reply
 //!
-//! Transport: first a Unix socket at `$CLADEX_RUNTIME_DIR/consult.sock`
+//! Transport: first a Unix socket at `$MIX2_RUNTIME_DIR/consult.sock`
 //! (reachable from Claude Code's Bash sandbox); if the sandbox blocks
 //! sockets (Codex does), falls back to file-based request/response in
-//! `$CLADEX_RUNTIME_DIR/consult/`.
+//! `$MIX2_RUNTIME_DIR/consult/`.
 //!
 //! Recursion prevention runs here *and* in the runtime: if this process is
-//! already a teammate (CLADEX_ROLE=teammate) or too deep (CLADEX_DEPTH),
+//! already a teammate (MIX2_ROLE=teammate) or too deep (MIX2_DEPTH),
 //! the call is refused before any provider is spawned.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -52,15 +52,15 @@ enum Mode {
 }
 
 fn run() -> Result<String, String> {
-    let role = std::env::var("CLADEX_ROLE").unwrap_or_default();
-    let depth: u32 = std::env::var("CLADEX_DEPTH")
+    let role = std::env::var("MIX2_ROLE").unwrap_or_default();
+    let depth: u32 = std::env::var("MIX2_DEPTH")
         .ok()
         .and_then(|d| d.parse().ok())
         .unwrap_or(0);
 
     if role == "teammate" {
         return Err(
-            "Consultation unavailable: this agent is already running as a Cladex teammate. \
+            "Consultation unavailable: this agent is already running as a mix2 teammate. \
              Complete your independent analysis without delegating."
                 .to_owned(),
         );
@@ -71,9 +71,9 @@ fn run() -> Result<String, String> {
         ));
     }
 
-    let runtime_dir = std::env::var("CLADEX_RUNTIME_DIR").map_err(|_| {
-        "Consultation unavailable: not running inside a Cladex session \
-         (CLADEX_RUNTIME_DIR is not set)."
+    let runtime_dir = std::env::var("MIX2_RUNTIME_DIR").map_err(|_| {
+        "Consultation unavailable: not running inside a mix2 session \
+         (MIX2_RUNTIME_DIR is not set)."
             .to_owned()
     })?;
     let runtime_dir = PathBuf::from(runtime_dir);
@@ -85,7 +85,7 @@ fn run() -> Result<String, String> {
             let ticket = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "Usage: cladex-consult wait <ticket>".to_owned())?;
+                .ok_or_else(|| "Usage: mix2-consult wait <ticket>".to_owned())?;
             Mode::Wait(ticket)
         }
         _ => Mode::Sync,
@@ -114,7 +114,7 @@ fn run() -> Result<String, String> {
             if prompt.is_empty() {
                 return Err(
                     "Consultation failed: empty prompt. Pipe the consultation prompt on stdin, e.g.\n\
-                     cladex-consult <<'CONSULT'\n...prompt...\nCONSULT"
+                     mix2-consult <<'CONSULT'\n...prompt...\nCONSULT"
                         .to_owned(),
                 );
             }
@@ -148,7 +148,7 @@ fn run() -> Result<String, String> {
         if let Some(ticket) = value.get("ticket").and_then(serde_json::Value::as_str) {
             return Ok(format!(
                 "ticket: {ticket}\nThe teammate is now working. Continue your own research, \
-                 then run `cladex-consult wait {ticket}` to collect the response."
+                 then run `mix2-consult wait {ticket}` to collect the response."
             ));
         }
         Ok(value
@@ -199,7 +199,7 @@ fn try_files(runtime_dir: &Path, request: &str) -> Result<String, String> {
 
     std::fs::write(&tmp, request).map_err(|e| {
         format!(
-            "Consultation failed: the Cladex runtime is unreachable from this sandbox \
+            "Consultation failed: the mix2 runtime is unreachable from this sandbox \
              (socket blocked and cannot write {}: {e}). Continue with your own analysis.",
             dir.display()
         )

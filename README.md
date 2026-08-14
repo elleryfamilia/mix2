@@ -1,6 +1,6 @@
-# Cladex
+# mix2
 
-Cladex is a terminal interface for Claude Code and Codex that turns them
+mix2 is a terminal interface for Claude Code and Codex that turns them
 into a small AI engineering team. Choose the lead, talk normally, and the
 lead decides when bringing in the other agent for a second opinion,
 challenge, or review would improve the result.
@@ -8,9 +8,9 @@ challenge, or review would improve the result.
 You talk to one team, not two chat windows:
 
 ```text
-$ cladex --lead claude
+$ mix2 --lead claude
 
-  cladex   Claude lead · Codex teammate                    ~/src/acme
+  mix2   Claude lead · Codex teammate                    ~/src/acme
 ────────────────────────────────────────────────────────────────────────
 
   ❯ I'm thinking about replacing Postgres with DynamoDB. What do you think?
@@ -36,7 +36,7 @@ $ cladex --lead claude
 
 Two frontier coding agents disagree in useful ways — but only if the
 second one forms its opinion independently, and only if someone owns the
-final answer. Cladex is not "run Claude and Codex at the same time": it is
+final answer. mix2 is not "run Claude and Codex at the same time": it is
 **adaptive collaboration**. You came for the team — if you wanted a single
 agent you would have opened it directly — so the lead consults its
 teammate on every substantive request by default, challenges material
@@ -47,14 +47,14 @@ acknowledgements) and clarifying questions stay single-agent.
 ## How it works
 
 - One agent (your choice via `--lead`) coordinates the team and owns the
-  conversation, running with its normal configuration plus appended Cladex
+  conversation, running with its normal configuration plus appended mix2
   role instructions. This is an internal mechanic: the UI never labels
   anyone "lead", and every answer speaks as "we".
 - The coordinating agent gets one extra shell command,
-  **`cladex-consult`**: pipe a prompt in, get the teammate's independent
-  written assessment back. `cladex-consult start` returns a ticket
+  **`mix2-consult`**: pipe a prompt in, get the teammate's independent
+  written assessment back. `mix2-consult start` returns a ticket
   immediately so both agents research **concurrently**, and
-  `cladex-consult wait <ticket>` collects the result; the instructions
+  `mix2-consult wait <ticket>` collects the result; the instructions
   tell the coordinator to fire the consultation first and investigate in
   parallel. It is used for anything substantive and skipped only for
   no-ops; the Rust runtime decides *whether it is allowed* (budget,
@@ -94,25 +94,25 @@ pnpm install
 pnpm build          # release cargo build + TypeScript build
 
 # development (debug core, tsx runner):
-pnpm dev            # runs cladex in the current directory
+pnpm dev            # runs mix2 in the current directory
 ```
 
-The user-facing command is `cladex` (`apps/tui/dist/cli.js`, exposed as a
-bin). It launches the internal `cladex-core` runtime itself — users never
+The user-facing command is `mix2` (`apps/tui/dist/cli.js`, exposed as a
+bin). It launches the internal `mix2-core` runtime itself — users never
 interact with the core directly. In development the core is found in
 `target/{debug,release}` automatically; a packaged install can point at it
-with `CLADEX_CORE_BIN`.
+with `MIX2_CORE_BIN`.
 
 ```bash
-cladex                    # lead from config, else claude
-cladex --lead codex       # short: -l codex
-cladex --cwd ~/src/acme   # run against another project
-cladex --debug            # verbose logs + IPC trace in /tmp
+mix2                    # lead from config, else claude
+mix2 --lead codex       # short: -l codex
+mix2 --cwd ~/src/acme   # run against another project
+mix2 --debug            # verbose logs + IPC trace in /tmp
 ```
 
 ## Configuration
 
-`~/.config/cladex/config.toml` (respects `$XDG_CONFIG_HOME`):
+`~/.config/mix2/config.toml` (respects `$XDG_CONFIG_HOME`):
 
 ```toml
 lead = "claude"
@@ -156,18 +156,18 @@ Hidden model reasoning is never shown anywhere.
 
 ## Security model
 
-- Cladex does not touch provider authentication; both CLIs use your
+- mix2 does not touch provider authentication; both CLIs use your
   existing logins. Auth failures surface the provider's own message.
 - No permission bypass flags, ever. Claude Code runs with your normal
   permission configuration plus exactly one added allowance:
-  `Bash(cladex-consult:*)`, so the lead can reach its teammate.
+  `Bash(mix2-consult:*)`, so the lead can reach its teammate.
 - Codex as *teammate* runs with your default `codex exec` sandbox
   (read-only). Codex as *lead* runs with Codex's standard
   `workspace-write` sandbox (still no network) — its default read-only
   sandbox blocks the consult channel entirely; this is the one deliberate
   elevation, and it matches what interactive Codex does anyway.
 - Recursion (`teammate consulting anyone`) is refused by the runtime.
-- Runtime state in `/tmp/cladex/<session>/` contains no credentials and is
+- Runtime state in `/tmp/mix2/<session>/` contains no credentials and is
   removed on exit. Debug logs never include prompts, file contents, or
   teammate responses.
 
@@ -177,7 +177,7 @@ Verified against `claude` 2.1.x (`-p --output-format stream-json`,
 `--append-system-prompt`, `--resume`) and `codex-cli` 0.146.x
 (`exec --json`, `exec resume`, `-c developer_instructions=…`). Adapters
 parse tolerantly: unknown event types from newer CLIs are ignored, never
-fatal. If an installed CLI lacks a required capability, Cladex reports a
+fatal. If an installed CLI lacks a required capability, mix2 reports a
 clear compatibility error at startup.
 
 ## Limitations (MVP)
@@ -186,7 +186,7 @@ clear compatibility error at startup.
   is designed so `--team codex,gemini` can exist later).
 - Teammate consultations are stateless between turns by design.
 - Analysis-first: the lead can edit files only where your provider
-  permissions already allow it; Cladex does not widen write access.
+  permissions already allow it; mix2 does not widen write access.
 - Unix (macOS/Linux) only for now; process management is isolated so
   Windows support can be added.
 - No slash commands, themes, or MCP integration yet.
@@ -203,10 +203,10 @@ Automated tests never call real models: `tests/fixtures/fake-claude` and
 `fake-codex` are executable stand-ins that speak each provider's exact
 stream format and support scenarios (streaming, tool events, session
 resume, consultation, failure, rate limit, malformed output, slow runs,
-child-process trees for cancellation tests). Point Cladex at them with
-`CLADEX_CLAUDE_CMD` / `CLADEX_CODEX_CMD` — the integration suite drives
+child-process trees for cancellation tests). Point mix2 at them with
+`MIX2_CLAUDE_CMD` / `MIX2_CODEX_CMD` — the integration suite drives
 the full stack this way, including both consult transports, budget
 enforcement, recursion refusal, and process-tree cancellation.
 
-> Cladex is a working name; branding is confined to the crate/package
+> mix2 is a working name; branding is confined to the crate/package
 > names and the header chip, so a rename stays shallow.

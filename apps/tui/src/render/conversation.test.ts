@@ -67,9 +67,11 @@ describe('live activity', () => {
       detail: 'src/db/session.ts',
     });
     const lines = text(s);
-    const working = lines.find((l) => l.includes('● Claude'));
+    const working = lines.find((l) => l.includes('◐ Team'));
     expect(working).toBeDefined();
     expect(working).toContain('investigating');
+    // Solo work is the team's, never a named agent's.
+    expect(lines.some((l) => l.includes('● Claude'))).toBe(false);
     expect(working).toContain('⠸ 0:48');
     expect(lines.some((l) => l.includes('└ read src/db/session.ts'))).toBe(true);
   });

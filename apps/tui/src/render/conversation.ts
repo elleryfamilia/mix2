@@ -61,7 +61,6 @@ function activityLines(
   item: Extract<ConversationItem, { kind: 'activity' }>,
   ctx: RenderContext,
 ): Line[] {
-  const name = displayName(item.agent);
   const details = item.details.length > 0 ? ` ${glyphs.dot} ${item.details.join(', ')}` : '';
   const summary = truncate(
     `${item.toolsCount} tool call${item.toolsCount === 1 ? '' : 's'}${details} ${glyphs.dot} ${formatElapsed(item.durationMs)}`,
@@ -69,8 +68,8 @@ function activityLines(
   );
   return [
     pad(
-      span(agentGlyph(item.agent), { color: agentColor(item.agent) }),
-      span(` ${name}`, { color: agentColor(item.agent), bold: true }),
+      span(glyphs.team, { color: theme.agent.team }),
+      span(' Team', { color: theme.agent.team, bold: true }),
       span(' — investigated', { color: theme.text.muted }),
     ),
     pad(span('  '), span(`${glyphs.treeEnd} ${summary}`, { color: theme.text.faint })),
@@ -145,13 +144,16 @@ function statusWord(turn: ActiveTurn): string {
 }
 
 function leadWorkingLines(turn: ActiveTurn, ctx: RenderContext): Line[] {
-  const color = agentColor(turn.leadAgent);
+  // The user talks to one team: solo work is the *team* thinking, not a
+  // named agent. Individual identity appears only where the work visibly
+  // splits (tiles, trace pill, team panel).
+  const color = theme.agent.team;
   const width = Math.min(ctx.width, MAX_CONTENT_WIDTH);
   const elapsed = formatElapsed(ctx.now - turn.startedAt);
   const head = spread(
     pad(
-      span(agentGlyph(turn.leadAgent), { color }),
-      span(` ${displayName(turn.leadAgent)}`, { color, bold: true }),
+      span(glyphs.team, { color }),
+      span(' Team', { color, bold: true }),
       span(` — ${statusWord(turn)}`, { color: theme.text.muted }),
     ),
     [span(`${ctx.spinner} ${elapsed}`, { color: theme.text.faint })],
@@ -282,12 +284,19 @@ function tileBody(consult: ConsultState, width: number): Line[] {
   }
   for (const tool of consult.tools.slice(-2)) {
     const label = tool.detail ? `${tool.name.toLowerCase()} ${tool.detail}` : tool.name.toLowerCase();
-    body.push([span(`${glyphs.treeEnd} ${truncate(label, width)}`, { color: theme.text.faint })]);
+    // The `└ ` prefix costs 2 columns of the row budget.
+    body.push([span(`${glyphs.treeEnd} ${truncate(label, width - 2)}`, { color: theme.text.faint })]);
   }
   if (body.length === 0) {
     body.push([span(`${glyphs.treeEnd} starting up`, { color: theme.text.faint })]);
   }
   return body;
+}
+
+/** Pad the shorter body with blank rows so paired tiles are the same size. */
+function equalizeBodies(a: Line[], b: Line[]): void {
+  while (a.length < b.length) a.push([span('')]);
+  while (b.length < a.length) b.push([span('')]);
 }
 
 function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
@@ -309,7 +318,9 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
     leadStatus = 'researching';
     leadBody = leadTools.map((tool) => {
       const label = tool.detail ? `${tool.name.toLowerCase()} ${tool.detail}` : tool.name.toLowerCase();
-      return [span(`${glyphs.treeEnd} ${truncate(label, innerWidth)}`, { color: theme.text.faint })];
+      return [
+        span(`${glyphs.treeEnd} ${truncate(label, innerWidth - 2)}`, { color: theme.text.faint }),
+      ];
     });
   } else if (leadStream) {
     leadStatus = 'drafting';
@@ -321,6 +332,12 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
     leadBody = [
       [span(`${glyphs.treeEnd} waiting on ${teammate} ${ctx.spinner}`, { color: theme.text.faint })],
     ];
+  }
+
+  const teammateBody = tileBody(consult, innerWidth);
+  if (!stacked) {
+    // Side-by-side tiles read as one unit; equal heights keep them so.
+    equalizeBodies(leadBody, teammateBody);
   }
 
   const leadTile = buildTile(
@@ -344,7 +361,7 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
       headerRight: [
         span(`${ctx.spinner} ${formatElapsed(ctx.now - consult.startedAt)}`, { color: theme.text.faint }),
       ],
-      body: tileBody(consult, innerWidth),
+      body: teammateBody,
       borderColor: agentColor(teammate),
     },
     tileWidth,

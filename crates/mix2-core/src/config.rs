@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-/// User configuration, loaded from `~/.config/cladex/config.toml`
+/// User configuration, loaded from `~/.config/mix2/config.toml`
 /// (respecting `$XDG_CONFIG_HOME`). Everything is optional; precedence is
 /// CLI > user config > defaults. Project-level config can slot in between
 /// later without changing this shape.
@@ -86,7 +86,7 @@ pub fn config_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")));
-    base.map(|b| b.join("cladex").join("config.toml"))
+    base.map(|b| b.join("mix2").join("config.toml"))
 }
 
 pub fn load_file(path: Option<&Path>) -> Result<FileConfig> {

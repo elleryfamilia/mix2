@@ -26,9 +26,9 @@ pub struct AgentRequest {
     pub turn_id: Uuid,
     /// Role instructions appended to the provider's own system prompt.
     pub instructions: String,
-    /// Extra environment for the spawned CLI (CLADEX_* markers).
+    /// Extra environment for the spawned CLI (MIX2_* markers).
     pub env: HashMap<String, String>,
-    /// Directory prepended to PATH so `cladex-consult` resolves.
+    /// Directory prepended to PATH so `mix2-consult` resolves.
     pub path_prepend: Option<PathBuf>,
     /// Runtime dir that must stay writable for consult file IPC (codex lead).
     pub runtime_dir: Option<PathBuf>,

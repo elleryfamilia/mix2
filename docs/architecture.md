@@ -1,9 +1,9 @@
-# Cladex architecture
+# mix2 architecture
 
 ```text
         Ink UI  (apps/tui — TypeScript, React, Ink)
             ↕  JSONL over stdin/stdout (protocol v1)
-        Rust core  (crates/cladex-core)
+        Rust core  (crates/mix2-core)
           ↙                      ↘
    claude CLI                codex CLI
    (lead or teammate)        (teammate or lead)
@@ -20,11 +20,11 @@ never crosses it.
 There is no classifier in front of the lead. The user's message goes
 straight to the selected lead agent (Claude Code or Codex) with role
 instructions appended to the provider's own system prompt. Those
-instructions bias hard toward collaboration: users open Cladex to get the
+instructions bias hard toward collaboration: users open mix2 to get the
 team, so the lead consults on every substantive request and answers alone
 only for no-ops (greetings, acknowledgements) and clarifying questions.
 The lead still makes that call in context — as part of doing the actual
-work — by running the `cladex-consult` command. The runtime's job is to
+work — by running the `mix2-consult` command. The runtime's job is to
 keep the collaboration *bounded* (budget, depth, cancellation), not to
 make the call.
 
@@ -36,11 +36,11 @@ choice, not a product concept.
 ## The consultation path
 
 ```text
-lead agent (claude -p / codex exec, CLADEX_ROLE=lead)
-  └─ runs: cladex-consult <<'CONSULT' … CONSULT           (blocking)
-     or:   cladex-consult start … → ticket                (concurrent)
+lead agent (claude -p / codex exec, MIX2_ROLE=lead)
+  └─ runs: mix2-consult <<'CONSULT' … CONSULT           (blocking)
+     or:   mix2-consult start … → ticket                (concurrent)
            …keeps researching while the teammate works…
-           cladex-consult wait <ticket> → assessment
+           mix2-consult wait <ticket> → assessment
        └─ connects to the runtime:
             1. Unix socket  <runtime>/consult.sock      (Claude's sandbox allows this)
             2. file mailbox <runtime>/consult/req-*.json (fallback; Codex's sandbox
@@ -49,10 +49,10 @@ lead agent (claude -p / codex exec, CLADEX_ROLE=lead)
             └─ runtime checks role/depth/budget, then spawns the *other*
                provider fresh, with teammate instructions, same cwd
                  └─ teammate's final response returns through the same
-                    channel and is printed on cladex-consult's stdout
+                    channel and is printed on mix2-consult's stdout
 ```
 
-The lead only ever knows the name `cladex-consult`; the runtime resolves
+The lead only ever knows the name `mix2-consult`; the runtime resolves
 who the teammate is. When the lead is Claude, consultations go to Codex,
 and vice versa.
 
@@ -67,7 +67,7 @@ second opinion drift toward the first one — independence is the value.
 The lead, by contrast, keeps its native provider conversation across turns
 (`--resume` for Claude, `exec resume` for Codex). The provider session id
 is captured from the event stream (`system:init` / `thread.started`) and
-stored in the Cladex session; a new Cladex session always starts clean and
+stored in the mix2 session; a new mix2 session always starts clean and
 can never accidentally resume an old provider conversation.
 
 ## Why collaboration is budgeted
@@ -83,8 +83,8 @@ continues normally.
 
 Enforced in code, twice:
 
-- `cladex-consult` refuses immediately when `CLADEX_ROLE=teammate` or
-  `CLADEX_DEPTH` ≥ 1 (both are set by the runtime when spawning agents).
+- `mix2-consult` refuses immediately when `MIX2_ROLE=teammate` or
+  `MIX2_DEPTH` ≥ 1 (both are set by the runtime when spawning agents).
 - The runtime's consult server independently rejects requests whose role
   is `teammate` or whose depth exceeds the maximum, and refuses anything
   outside an active turn.
@@ -133,7 +133,7 @@ turn cancels a token that:
 
 If the UI dies (stdin EOF), the core cancels everything and exits, so no
 `claude`/`codex` processes are orphaned. Runtime state lives in
-`/tmp/cladex/<session-id>/` (socket + consult mailbox, never credentials)
+`/tmp/mix2/<session-id>/` (socket + consult mailbox, never credentials)
 and is deleted on shutdown. The process-group logic is isolated in
 `process/child.rs` so a Windows Job Objects implementation can slot in
 behind the same interface.
@@ -141,7 +141,7 @@ behind the same interface.
 ## Failure model
 
 - Teammate missing/rate-limited/crashed → the *lead* receives a clear
-  message from `cladex-consult` and continues; the turn still completes,
+  message from `mix2-consult` and continues; the turn still completes,
   attributed to the lead alone.
 - Lead crash → `turn.failed` with the provider's useful stderr; the
   session and composer stay usable.

@@ -1,4 +1,4 @@
-# Cladex terminal design system
+# mix2 terminal design system
 
 This document records the design system implemented by the Ink TUI. It is
 derived from **Design Direction #4** of the shared Claude Design exploration
@@ -46,7 +46,7 @@ them through semantic roles (`theme.ts`), never as raw values in components.
 | `agent.claude`        | `#e0a06a` | Claude glyph `●`, chip background, tile border |
 | `agent.codex`         | `#8ab8d6` | Codex glyph `○`, chip background, tile border |
 | `agent.team`          | `#b795e6` | mauve: confer glyph `⇄`, Team chip, disagreement `△` |
-| `chip.appBg/appFg`    | `#d6d3dc` / `#17161b` | inverted ` cladex ` chip |
+| `chip.appBg/appFg`    | `#d6d3dc` / `#17161b` | inverted ` mix2 ` chip |
 | `chip.claudeFg`       | `#1c1208` | text on Claude chip |
 | `chip.codexFg`        | `#0c141c` | text on Codex chip |
 | `chip.teamFg`         | `#160e20` | text on Team chip |
@@ -82,9 +82,9 @@ Everything is the user's monospace font. Weight and color carry hierarchy:
 Full-screen alternate-buffer app, three fixed regions:
 
 ```text
-header      1 row   full-width bar in bgStatus: ` cladex ` chip ·
-                    ● Claude lead · ○ Codex teammate (glyphs in agent
-                    colors) · right-aligned cwd
+header      1 row   full-width bar in bgStatus: ` mix2 ` chip ·
+                    ● Claude · ○ Codex roster (glyphs in agent colors,
+                    no role labels) · right-aligned cwd
 spacing     1 row
 conversation  *     scrollable viewport, 2-space left inset
 composer    1+ rows ❯ + multiline input
@@ -118,24 +118,33 @@ invisible, and the bar edge is the separator.
 `❯` bold; message text in primary at medium weight (rendered bold-off,
 color primary — terminals lack a 500 weight).
 
-**Lead working (live)**
+**Team working (live)** — solo work belongs to the team, never a named
+agent; individual identity appears only where the work visibly splits
+(tiles, trace pill, team panel, the parallel status-bar state):
 
 ```text
-  ● Claude — investigating                                    ⠸ 0:48
+  ◐ Team — investigating                                      ⠸ 0:48
     ├ read src/db/session.ts
     ├ search "SessionManager" — 14 matches
     └ ↔ Codex — second opinion on the data model
 ```
 
-Agent glyph + name in agent color; `— status` in muted. Elapsed time right
-aligned in faint. Tool tree lines in faint, latest 3 visible while live.
+`◐ Team` in mauve; `— status` in muted. Elapsed time right aligned in
+faint. Tool tree lines in faint, latest 3 visible while live.
 
-**Lead working (settled)** — the tree collapses to one dim line:
+**Team working (settled)** — the tree collapses to one dim line:
 
 ```text
-  ● Claude — investigated
+  ◐ Team — investigated
     └ 12 tool calls · routes.ts, git diff, bench · 0:48
 ```
+
+Paired consultation tiles are always the same width *and* height (the
+shorter body pads with blank rows) so they read as one unit. The status
+bar mirrors reality: `⠸ · ⠧ working in parallel` (spinners in agent
+colors, out of phase) when both agents are active, `⠧ codex reviewing`
+only when the coordinator is idle, `⠋ team working` / `⠋ team
+reconciling` (mauve) for solo phases.
 
 **Interim finding** — the lead talks while working: plain primary text
 paragraph between activity blocks.
@@ -289,6 +298,6 @@ panel says so: `○ codex   teammate  unavailable — <reason>`.
 
 - `NO_COLOR` / 16-color terminals: agent identity survives via glyphs
   (`●`/`○`/`◐`) and text labels; chips fall back to bracketed labels
-  (`[cladex]`, `[Team]`).
+  (`[mix2]`, `[Team]`).
 - Light terminals: all roles are chosen to keep ≥ AA contrast against both
   `#17161b` and light backgrounds except `text.faint`, which is decorative.

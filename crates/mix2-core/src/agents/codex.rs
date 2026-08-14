@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 ///   codex exec --json --skip-git-repo-check [-c developer_instructions=...] -
 ///   codex exec resume <thread-id> --json --skip-git-repo-check ... -
 /// with the prompt on stdin and the working directory set on the child
-/// process. `-c developer_instructions=...` layers Cladex's role instructions
+/// process. `-c developer_instructions=...` layers mix2's role instructions
 /// on top of Codex's built-in agent instructions per run, without touching
 /// the user's `~/.codex/config.toml`.
 ///
@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 /// both Unix-socket connects and all file writes (verified empirically), so
 /// a Codex *lead* could never reach the consult helper. Leads therefore run
 /// with `sandbox_mode="workspace-write"` — Codex's standard interactive
-/// sandbox level (workspace-writable, still no network) — plus the Cladex
+/// sandbox level (workspace-writable, still no network) — plus the mix2
 /// runtime dir added to writable roots for consult file IPC. Teammate
 /// consultations keep the user's default sandbox untouched.
 pub struct CodexAgent {

@@ -116,7 +116,7 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
         dispatch({
           type: 'local-notice',
           text:
-            'commands  /exit quit cladex · /clear clear the conversation · /team toggle the team panel · /help this list\n' +
+            'commands  /exit quit mix2 · /clear clear the conversation · /team toggle the team panel · /help this list\n' +
             'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t team panel · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
         });
         return;
@@ -234,7 +234,7 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
     return (
       <Box flexDirection="column" width={width} height={size.rows} paddingX={2} paddingY={1}>
         <Text color={theme.status.error} bold>
-          cladex hit a fatal error
+          mix2 hit a fatal error
         </Text>
         <Text> </Text>
         <Text color={theme.text.primary}>{state.fatalMessage}</Text>

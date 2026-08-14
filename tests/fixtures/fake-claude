@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake Claude Code CLI for Cladex tests.
+"""Fake Claude Code CLI for mix2 tests.
 
 Speaks the same stream-json shape as `claude -p --output-format stream-json`.
 Scenario markers in the prompt select behavior:
@@ -9,7 +9,7 @@ Scenario markers in the prompt select behavior:
   SCENARIO:malformed    emit a garbage line before a valid response
   SCENARIO:slow         sleep a long time before responding
   SCENARIO:spawn_child  spawn a `sleep` child; PIDFILE:<path> records pids
-  SCENARIO:consult      invoke cladex-consult once and fold in the reply
+  SCENARIO:consult      invoke mix2-consult once and fold in the reply
   SCENARIO:consult_twice / SCENARIO:consult_thrice  repeat consultations
 
 The final text always includes bracketed markers so tests can assert on
@@ -106,7 +106,7 @@ def main():
         consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Quick take: evaluate the plan."
         try:
             proc = subprocess.run(
-                ["cladex-consult", "start"], input=consult_prompt, text=True,
+                ["mix2-consult", "start"], input=consult_prompt, text=True,
                 capture_output=True, timeout=60,
             )
             ticket = ""
@@ -121,7 +121,7 @@ def main():
                 time.sleep(0.3)
                 consult_notes.append("[own-research:done]")
                 done = subprocess.run(
-                    ["cladex-consult", "wait", ticket], text=True,
+                    ["mix2-consult", "wait", ticket], text=True,
                     capture_output=True, timeout=300,
                 )
                 status = "ok" if done.returncode == 0 else "err"
@@ -140,7 +140,7 @@ def main():
         consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Independently evaluate the plan."
         try:
             proc = subprocess.run(
-                ["cladex-consult"], input=consult_prompt, text=True,
+                ["mix2-consult"], input=consult_prompt, text=True,
                 capture_output=True, timeout=300,
             )
             reply = proc.stdout.strip()

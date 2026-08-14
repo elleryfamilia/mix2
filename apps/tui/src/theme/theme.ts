@@ -1,5 +1,5 @@
 /**
- * Semantic color roles and glyph vocabulary for the Cladex TUI.
+ * Semantic color roles and glyph vocabulary for the mix2 TUI.
  *
  * Values come from Design Direction #4 (see docs/design-system.md). UI code
  * must reference roles, never raw hex values. Colors degrade to glyph +

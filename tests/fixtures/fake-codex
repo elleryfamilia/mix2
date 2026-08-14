@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake OpenAI Codex CLI for Cladex tests.
+"""Fake OpenAI Codex CLI for mix2 tests.
 
 Speaks the same JSONL shape as `codex exec --json`. Scenario markers match
 fake-claude (see that file). Final text carries the same bracketed markers:
@@ -94,7 +94,7 @@ def main():
         consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Quick take: evaluate the plan."
         try:
             proc = subprocess.run(
-                ["cladex-consult", "start"], input=consult_prompt, text=True,
+                ["mix2-consult", "start"], input=consult_prompt, text=True,
                 capture_output=True, timeout=60,
             )
             ticket = ""
@@ -109,7 +109,7 @@ def main():
                 time.sleep(0.3)
                 consult_notes.append("[own-research:done]")
                 done = subprocess.run(
-                    ["cladex-consult", "wait", ticket], text=True,
+                    ["mix2-consult", "wait", ticket], text=True,
                     capture_output=True, timeout=300,
                 )
                 status = "ok" if done.returncode == 0 else "err"
@@ -128,7 +128,7 @@ def main():
         consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Independently evaluate the plan."
         try:
             proc = subprocess.run(
-                ["cladex-consult"], input=consult_prompt, text=True,
+                ["mix2-consult"], input=consult_prompt, text=True,
                 capture_output=True, timeout=300,
             )
             reply = proc.stdout.strip()

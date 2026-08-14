@@ -14,7 +14,7 @@ function shortenPath(cwd: string, maxLength: number): string {
 
 /**
  * App chrome, top bar (Design 1c, hyprland-flavored): a full-width bar in
- * the same background as the status bar, carrying the inverted ` cladex `
+ * the same background as the status bar, carrying the inverted ` mix2 `
  * chip, the team roster as colored glyphs (● Claude · ○ Codex — no role
  * labels; who coordinates is internal), and the right-aligned project
  * path. Top and bottom bars frame the conversation on any terminal
@@ -28,7 +28,7 @@ export function Header({
   width: number;
 }): React.JSX.Element {
   const bg = theme.status.barBg;
-  const chipLabel = ' cladex ';
+  const chipLabel = ' mix2 ';
 
   // The team roster: no lead/teammate labels — the user talks to one team,
   // and who coordinates is an internal mechanic.

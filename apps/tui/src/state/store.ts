@@ -1,5 +1,5 @@
 /**
- * Domain state for the Cladex TUI, kept strictly separate from the visual
+ * Domain state for the mix2 TUI, kept strictly separate from the visual
  * components: a plain reducer over core protocol events plus a handful of
  * local UI actions. Components render this state; they never interpret
  * provider behavior.
@@ -186,7 +186,7 @@ export function reduce(state: AppState, action: Action): AppState {
       return {
         ...state,
         phase: 'fatal',
-        fatalMessage: `the Cladex runtime exited unexpectedly (code ${action.code ?? 'unknown'})`,
+        fatalMessage: `the mix2 runtime exited unexpectedly (code ${action.code ?? 'unknown'})`,
       };
     case 'core-event':
       return applyEvent(state, action.event, action.now);

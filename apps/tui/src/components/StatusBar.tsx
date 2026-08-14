@@ -2,46 +2,73 @@ import { Text } from 'ink';
 import React from 'react';
 import type { AppState } from '../state/store.js';
 import { formatDuration } from '../state/store.js';
-import { agentColor, glyphs, theme } from '../theme/theme.js';
+import { agentColor, glyphs, spinnerFrames, theme } from '../theme/theme.js';
 
-interface Segment {
+interface Piece {
   text: string;
   color: string;
 }
 
-/** Derive the status-bar state per the design's state table. */
+type Segment = Piece[];
+
+function segmentLength(segment: Segment): number {
+  return segment.reduce((n, piece) => n + piece.text.length, 0);
+}
+
+/** Derive the status-bar state per the design's state table. The user talks
+ * to one team, so solo work reads as the team; individual agent names show
+ * only when the work has visibly split (parallel state, consult). */
 export function statusSegments(state: AppState, spinner: string): { left: Segment; right: Segment } {
   const faint = theme.text.faint;
+  const muted = theme.text.muted;
+  // A second spinner frame, deliberately out of phase (design 3a shows the
+  // two agents' spinners desynchronized).
+  const index = spinnerFrames.indexOf(spinner as (typeof spinnerFrames)[number]);
+  const spinner2 = spinnerFrames[(Math.max(index, 0) + 4) % spinnerFrames.length] ?? spinner;
+
   if (state.phase === 'fatal') {
     return {
-      left: { text: 'runtime error', color: theme.status.error },
-      right: { text: 'q quit', color: faint },
+      left: [{ text: 'runtime error', color: theme.status.error }],
+      right: [{ text: 'q quit', color: faint }],
     };
   }
   if (state.teamPanelOpen) {
     return {
-      left: { text: `${glyphs.team} team`, color: theme.agent.team },
-      right: { text: 'esc close', color: faint },
+      left: [{ text: `${glyphs.team} team`, color: theme.agent.team }],
+      right: [{ text: 'esc close', color: faint }],
     };
   }
   const turn = state.turn;
   if (turn) {
-    const right = { text: 'esc cancel · ctrl+t', color: faint };
+    const right: Segment = [{ text: 'esc cancel · ctrl+t', color: faint }];
     const running = turn.consults.find((c) => c.status === 'running');
+    const leadBusy =
+      turn.tools.some((t) => !t.done) || turn.streamText.trim().length > 0;
+    if (running && leadBusy) {
+      return {
+        left: [
+          { text: spinner, color: agentColor(turn.leadAgent) },
+          { text: ` ${glyphs.dot} `, color: muted },
+          { text: spinner2, color: agentColor(running.agent) },
+          { text: ' working in parallel', color: muted },
+        ],
+        right,
+      };
+    }
     if (running) {
       return {
-        left: { text: `${spinner} ${running.agent} reviewing`, color: agentColor(running.agent) },
+        left: [{ text: `${spinner} ${running.agent} reviewing`, color: agentColor(running.agent) }],
         right,
       };
     }
     if (turn.phase === 'synthesizing') {
       return {
-        left: { text: `${spinner} ${turn.leadAgent} reconciling`, color: agentColor(turn.leadAgent) },
+        left: [{ text: `${spinner} team reconciling`, color: theme.agent.team }],
         right,
       };
     }
     return {
-      left: { text: `${spinner} ${turn.leadAgent} working`, color: agentColor(turn.leadAgent) },
+      left: [{ text: `${spinner} team working`, color: theme.agent.team }],
       right,
     };
   }
@@ -52,13 +79,13 @@ export function statusSegments(state: AppState, spinner: string): { left: Segmen
         ? ` ${glyphs.dot} ${glyphs.confer} ${consultations} consultation${consultations === 1 ? '' : 's'}`
         : '';
     return {
-      left: { text: `done in ${formatDuration(durationMs)}${consultNote}`, color: theme.text.muted },
-      right: { text: 'ctrl+t team', color: faint },
+      left: [{ text: `done in ${formatDuration(durationMs)}${consultNote}`, color: muted }],
+      right: [{ text: 'ctrl+t team', color: faint }],
     };
   }
   return {
-    left: { text: state.phase === 'ready' ? 'ready' : 'starting…', color: theme.text.muted },
-    right: { text: 'ctrl+t team · ctrl+q quit', color: faint },
+    left: [{ text: state.phase === 'ready' ? 'ready' : 'starting…', color: muted }],
+    right: [{ text: 'ctrl+t team · ctrl+q quit', color: faint }],
   };
 }
 
@@ -79,17 +106,28 @@ export function StatusBar({
 }): React.JSX.Element {
   let { left, right } = statusSegments(state, spinner);
   if (slashOpen) {
-    left = { text: '/exit · /clear · /team · /help', color: theme.text.muted };
+    left = [{ text: '/exit · /clear · /team · /help', color: theme.text.muted }];
   }
   if (scrolledUp) {
-    right = { text: `↓ pgdn latest · ${right.text}`, color: right.color };
+    right = [{ text: '↓ pgdn latest · ', color: theme.text.faint }, ...right];
   }
-  const gap = Math.max(1, width - 2 - left.text.length - right.text.length);
+  const bg = theme.status.barBg;
+  const gap = Math.max(1, width - 2 - segmentLength(left) - segmentLength(right));
   return (
-    <Text backgroundColor={theme.status.barBg} wrap="truncate">
-      <Text backgroundColor={theme.status.barBg} color={left.color}>{` ${left.text}`}</Text>
-      <Text backgroundColor={theme.status.barBg}>{' '.repeat(gap)}</Text>
-      <Text backgroundColor={theme.status.barBg} color={right.color}>{`${right.text} `}</Text>
+    <Text backgroundColor={bg} wrap="truncate">
+      <Text backgroundColor={bg}> </Text>
+      {left.map((piece, i) => (
+        <Text key={`l${i}`} backgroundColor={bg} color={piece.color}>
+          {piece.text}
+        </Text>
+      ))}
+      <Text backgroundColor={bg}>{' '.repeat(gap)}</Text>
+      {right.map((piece, i) => (
+        <Text key={`r${i}`} backgroundColor={bg} color={piece.color}>
+          {piece.text}
+        </Text>
+      ))}
+      <Text backgroundColor={bg}> </Text>
     </Text>
   );
 }

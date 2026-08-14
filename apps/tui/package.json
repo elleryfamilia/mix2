@@ -1,11 +1,11 @@
 {
-  "name": "cladex",
+  "name": "mix2",
   "version": "0.1.0",
   "description": "A terminal interface that turns Claude Code and Codex into a small AI engineering team.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "cladex": "./dist/cli.js"
+    "mix2": "./dist/cli.js"
   },
   "engines": {
     "node": ">=22"

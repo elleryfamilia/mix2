@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 /// Invocation shape (verified against claude 2.1.x):
 ///   claude -p --output-format stream-json --verbose --include-partial-messages \
 ///          --append-system-prompt <role instructions> [--resume <session-id>]
-/// with the prompt on stdin. `--append-system-prompt` layers Cladex's role
+/// with the prompt on stdin. `--append-system-prompt` layers mix2's role
 /// instructions on top of Claude Code's own system prompt instead of
-/// replacing it, and `--allowedTools Bash(cladex-consult:*)` permits exactly
+/// replacing it, and `--allowedTools Bash(mix2-consult:*)` permits exactly
 /// the consult helper without widening anything else.
 pub struct ClaudeAgent {
     pub command: String,
@@ -39,11 +39,11 @@ impl ClaudeAgent {
             request.instructions.clone(),
         ];
         if request.role == AgentRole::Lead {
-            // The one targeted permission Cladex needs: the lead must be able
+            // The one targeted permission mix2 needs: the lead must be able
             // to run the consult helper. Everything else follows the user's
             // own Claude Code permission configuration.
             args.push("--allowedTools".into());
-            args.push("Bash(cladex-consult:*)".into());
+            args.push("Bash(mix2-consult:*)".into());
         }
         if let Some(id) = resume {
             args.push("--resume".into());
@@ -202,7 +202,7 @@ impl Agent for ClaudeAgent {
 
 /// Tolerant parser for `claude --output-format stream-json` lines.
 /// Unknown event types are ignored (with a parser warning in debug logs);
-/// they must never crash Cladex. Thinking deltas are consumed for state but
+/// they must never crash mix2. Thinking deltas are consumed for state but
 /// never surfaced as text.
 #[derive(Default)]
 pub struct ClaudeStreamParser {

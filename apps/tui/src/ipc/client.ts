@@ -1,5 +1,5 @@
 /**
- * CoreClient owns the cladex-core child process and the JSONL exchange with
+ * CoreClient owns the mix2-core child process and the JSONL exchange with
  * it. The UI layer never sees provider-specific data — only validated
  * protocol events.
  */
@@ -14,7 +14,7 @@ export interface CoreClientOptions {
   lead?: string;
   cwd?: string;
   debug?: boolean;
-  /** Explicit path to the cladex-core binary (CLADEX_CORE_BIN wins). */
+  /** Explicit path to the mix2-core binary (MIX2_CORE_BIN wins). */
   corePath?: string;
   /** Path to append raw IPC traffic to, for debugging. */
   logPath?: string;
@@ -26,23 +26,23 @@ export interface CoreClientHandlers {
   onExit: (code: number | null) => void;
 }
 
-/** Locate the cladex-core binary: explicit option, then $CLADEX_CORE_BIN,
+/** Locate the mix2-core binary: explicit option, then $MIX2_CORE_BIN,
  * then dev target dirs relative to this package, then PATH. */
 export function locateCore(explicit?: string): string {
-  const env = process.env['CLADEX_CORE_BIN'];
+  const env = process.env['MIX2_CORE_BIN'];
   if (explicit) return explicit;
   if (env) return env;
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.resolve(here, '../../../../target/release/cladex-core'),
-    path.resolve(here, '../../../../target/debug/cladex-core'),
-    path.resolve(here, '../../../../../target/release/cladex-core'),
-    path.resolve(here, '../../../../../target/debug/cladex-core'),
+    path.resolve(here, '../../../../target/release/mix2-core'),
+    path.resolve(here, '../../../../target/debug/mix2-core'),
+    path.resolve(here, '../../../../../target/release/mix2-core'),
+    path.resolve(here, '../../../../../target/debug/mix2-core'),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
-  return 'cladex-core';
+  return 'mix2-core';
 }
 
 export class CoreClient {
@@ -84,8 +84,8 @@ export class CoreClient {
       this.handlers.onEvent({
         type: 'fatal',
         message:
-          `could not start the Cladex runtime (${bin}). ` +
-          'Build it with `cargo build` or set CLADEX_CORE_BIN.',
+          `could not start the mix2 runtime (${bin}). ` +
+          'Build it with `cargo build` or set MIX2_CORE_BIN.',
       });
     });
     child.on('exit', (code) => {

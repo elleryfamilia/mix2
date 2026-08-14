@@ -1,4 +1,4 @@
-//! End-to-end tests of the cladex-core serve loop against the fake provider
+//! End-to-end tests of the mix2-core serve loop against the fake provider
 //! fixtures in tests/fixtures. No real Claude/Codex quota is ever used.
 
 use std::io::{BufRead, BufReader, Write};
@@ -14,7 +14,7 @@ fn fixtures_dir() -> PathBuf {
         .expect("fixtures dir exists")
 }
 
-/// Harness around a `cladex-core serve` child speaking JSONL on stdio.
+/// Harness around a `mix2-core serve` child speaking JSONL on stdio.
 struct Core {
     child: Child,
     stdin: std::process::ChildStdin,
@@ -43,7 +43,7 @@ impl Core {
     fn start(options: CoreOptions) -> Self {
         // Ensure the consult helper is built and resolvable next to the core
         // binary (runtime prepends its own directory to the lead's PATH).
-        let _ = env!("CARGO_BIN_EXE_cladex-consult");
+        let _ = env!("CARGO_BIN_EXE_mix2-consult");
 
         let config_dir = tempfile::tempdir().expect("tempdir");
         let config_path = config_dir.path().join("config.toml");
@@ -55,21 +55,21 @@ impl Core {
         // Leak the tempdir so the config outlives the child.
         std::mem::forget(config_dir);
 
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_cladex-core"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mix2-core"));
         cmd.args(["serve", "--config", config_path.to_str().unwrap()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env_remove("CLADEX_CLAUDE_CMD")
-            .env_remove("CLADEX_CODEX_CMD");
+            .env_remove("MIX2_CLAUDE_CMD")
+            .env_remove("MIX2_CODEX_CMD");
         if let Some(claude) = &options.claude_cmd {
-            cmd.env("CLADEX_CLAUDE_CMD", claude);
+            cmd.env("MIX2_CLAUDE_CMD", claude);
         }
         if let Some(codex) = &options.codex_cmd {
-            cmd.env("CLADEX_CODEX_CMD", codex);
+            cmd.env("MIX2_CODEX_CMD", codex);
         }
 
-        let mut child = cmd.spawn().expect("spawn cladex-core");
+        let mut child = cmd.spawn().expect("spawn mix2-core");
         let stdin = child.stdin.take().expect("stdin");
         let stdout = child.stdout.take().expect("stdout");
         let (tx, rx) = mpsc::channel();
@@ -333,7 +333,7 @@ fn teammate_cannot_recurse() {
     core.events_until("ready", LONG);
 
     // The lead consults; the consultation prompt itself carries
-    // SCENARIO:consult, so the fake teammate tries to call cladex-consult
+    // SCENARIO:consult, so the fake teammate tries to call mix2-consult
     // from its teammate context. The runtime must refuse.
     core.submit("t1", "SCENARIO:consult CONSULT_PROMPT:SCENARIO:consult");
     let events = core.events_until("turn.completed", LONG);
@@ -436,7 +436,7 @@ fn follow_up_resumes_the_same_lead_session() {
 }
 
 #[test]
-fn new_cladex_session_does_not_resume_old_provider_session() {
+fn new_mix2_session_does_not_resume_old_provider_session() {
     let mut core = Core::start(CoreOptions::default());
     core.events_until("ready", LONG);
     core.submit("t1", "hello");
@@ -461,7 +461,7 @@ fn cancellation_kills_the_provider_tree() {
     let mut core = Core::start(CoreOptions::default());
     core.events_until("ready", LONG);
 
-    let pidfile = std::env::temp_dir().join(format!("cladex-test-pids-{}", std::process::id()));
+    let pidfile = std::env::temp_dir().join(format!("mix2-test-pids-{}", std::process::id()));
     let _ = std::fs::remove_file(&pidfile);
     core.submit(
         "t1",
@@ -559,7 +559,7 @@ fn invalid_command_yields_error_event() {
 #[test]
 fn protocol_mismatch_is_fatal() {
     // Bypass Core::start's initialize by driving the child manually.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_cladex-core"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mix2-core"))
         .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

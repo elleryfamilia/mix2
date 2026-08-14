@@ -1,13 +1,13 @@
 {
-  "name": "cladex-workspace",
+  "name": "mix2-workspace",
   "private": true,
   "scripts": {
-    "dev": "pnpm build:core && pnpm --filter cladex dev",
-    "build": "pnpm build:core:release && pnpm --filter cladex build",
+    "dev": "pnpm build:core && pnpm --filter mix2 dev",
+    "build": "pnpm build:core:release && pnpm --filter mix2 build",
     "build:core": "cargo build",
     "build:core:release": "cargo build --release",
-    "test": "pnpm --filter cladex test",
-    "typecheck": "pnpm --filter cladex typecheck",
+    "test": "pnpm --filter mix2 test",
+    "typecheck": "pnpm --filter mix2 typecheck",
     "check": "pnpm typecheck && pnpm test && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test"
   },
   "packageManager": "pnpm@11.9.0"

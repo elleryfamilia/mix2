@@ -1,5 +1,5 @@
 /**
- * The JSONL protocol between the Ink UI and cladex-core, version 1.
+ * The JSONL protocol between the Ink UI and mix2-core, version 1.
  * Zod schemas validate every event before it reaches application state;
  * unknown event types are surfaced as `unknown` and ignored upstream so a
  * newer core never crashes an older UI.

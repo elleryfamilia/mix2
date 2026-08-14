@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `cladex` — one conversational interface backed by two coding agents.
+ * `mix2` — one conversational interface backed by two coding agents.
  * This entry point parses arguments, launches the Rust core, and renders
  * the Ink app in the terminal's alternate screen buffer, restoring the
  * terminal on any exit path.
@@ -12,16 +12,16 @@ import { App } from './components/App.js';
 import { CoreClient } from './ipc/client.js';
 import type { CoreEvent } from './ipc/protocol.js';
 
-const HELP = `cladex — talk to an AI engineering team in your terminal
+const HELP = `mix2 — talk to an AI engineering team in your terminal
 
 Usage:
-  cladex [options]
+  mix2 [options]
 
 Options:
   -l, --lead <agent>   Lead agent: claude or codex (default: configured, else claude)
       --cwd <path>     Project directory (default: current directory)
-      --debug          Verbose runtime logging (IPC log in /tmp/cladex)
-      --core <path>    Path to the cladex-core binary
+      --debug          Verbose runtime logging (IPC log in /tmp/mix2)
+      --core <path>    Path to the mix2-core binary
   -h, --help           Show this help
   -V, --version        Show version
 
@@ -62,7 +62,7 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '-V':
       case '--version':
-        process.stdout.write('cladex 0.1.0\n');
+        process.stdout.write('mix2 0.1.0\n');
         process.exit(0);
         break;
       default:
@@ -110,7 +110,7 @@ process.on('SIGTERM', () => {
 });
 process.on('uncaughtException', (error) => {
   leaveAltScreen();
-  console.error('cladex crashed:', error);
+  console.error('mix2 crashed:', error);
   process.exit(1);
 });
 
@@ -125,7 +125,7 @@ const client = new CoreClient(
     cwd,
     debug: args.debug,
     corePath: args.core,
-    logPath: args.debug ? `/tmp/cladex-tui-${process.pid}.log` : undefined,
+    logPath: args.debug ? `/tmp/mix2-tui-${process.pid}.log` : undefined,
   },
   {
     onEvent: (event) => handlers.onEvent(event),

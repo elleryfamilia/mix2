@@ -57,7 +57,7 @@ describe('App', () => {
     h.emit(ready);
     await tickReact();
     const frame = h.lastFrame()!;
-    expect(frame).toContain(' cladex ');
+    expect(frame).toContain(' mix2 ');
     expect(frame).toContain('Claude ·');
     expect(frame).toContain('Codex');
     expect(frame).toContain('src/acme');

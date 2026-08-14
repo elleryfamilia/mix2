@@ -1,12 +1,12 @@
 use anyhow::Result;
-use cladex_core::runtime::{self, RuntimeOptions};
 use clap::{Parser, Subcommand};
+use mix2_core::runtime::{self, RuntimeOptions};
 use std::path::PathBuf;
 
-/// Internal runtime binary behind the `cladex` TUI. Users interact with
-/// `cladex`; this process speaks JSONL on stdin/stdout.
+/// Internal runtime binary behind the `mix2` TUI. Users interact with
+/// `mix2`; this process speaks JSONL on stdin/stdout.
 #[derive(Parser)]
-#[command(name = "cladex-core", version, about)]
+#[command(name = "mix2-core", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
