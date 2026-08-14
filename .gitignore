@@ -1,0 +1,9 @@
+/target
+node_modules/
+dist/
+*.log
+.DS_Store
+/apps/tui/dist
+.pnpm-store/
+CLAUDE.local.md
+.loadout/

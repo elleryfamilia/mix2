@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Fake Claude Code CLI for Cladex tests.
+
+Speaks the same stream-json shape as `claude -p --output-format stream-json`.
+Scenario markers in the prompt select behavior:
+
+  SCENARIO:fail         exit non-zero with a stderr message
+  SCENARIO:rate_limit   emit an is_error result (rate limited)
+  SCENARIO:malformed    emit a garbage line before a valid response
+  SCENARIO:slow         sleep a long time before responding
+  SCENARIO:spawn_child  spawn a `sleep` child; PIDFILE:<path> records pids
+  SCENARIO:consult      invoke cladex-consult once and fold in the reply
+  SCENARIO:consult_twice / SCENARIO:consult_thrice  repeat consultations
+
+The final text always includes bracketed markers so tests can assert on
+session identity, resume behavior, and role:
+  [session:<id>] [resumed:yes|no] [role:lead|teammate|none]
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args:
+        print("9.9.9-fake (Claude Code)")
+        return 0
+
+    resume_id = None
+    system_prompt = ""
+    for i, a in enumerate(args):
+        if a == "--resume" and i + 1 < len(args):
+            resume_id = args[i + 1]
+        if a == "--append-system-prompt" and i + 1 < len(args):
+            system_prompt = args[i + 1]
+
+    prompt = sys.stdin.read()
+    scenarios = _leading_scenarios(prompt)
+
+    if "fail" in scenarios:
+        sys.stderr.write("fake-claude: simulated provider failure (auth expired)\n")
+        return 1
+
+    session_id = resume_id or str(uuid.uuid4())
+    resumed = "yes" if resume_id else "no"
+    if "lead engineer" in system_prompt:
+        role = "lead"
+    elif "consulting engineer" in system_prompt:
+        role = "teammate"
+    else:
+        role = "none"
+
+    out({
+        "type": "system", "subtype": "init",
+        "cwd": os.getcwd(), "session_id": session_id, "tools": ["Bash", "Read"],
+    })
+
+    if "rate_limit" in scenarios:
+        out({
+            "type": "result", "subtype": "error_during_execution", "is_error": True,
+            "result": "Claude usage limit reached. Try again later.",
+            "session_id": session_id,
+        })
+        return 1
+
+    if "malformed" in scenarios:
+        sys.stdout.write("this is not json at all {{{\n")
+        sys.stdout.flush()
+
+    if "spawn_child" in scenarios:
+        child = subprocess.Popen(["sleep", "600"])
+        pidfile = _extract(prompt, "PIDFILE:")
+        if pidfile:
+            with open(pidfile, "w") as f:
+                f.write(f"{os.getpid()}\n{child.pid}\n")
+
+    if "slow" in scenarios:
+        time.sleep(120)
+
+    # A little tool activity, like a real session inspecting the repo.
+    out({
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use", "id": "toolu_fake1", "name": "Read",
+            "input": {"file_path": "src/db.ts"},
+        }]},
+    })
+    out({
+        "type": "user",
+        "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "toolu_fake1", "content": "ok",
+        }]},
+    })
+
+    consult_notes = []
+    n_consults = 0
+    if "consult_thrice" in scenarios:
+        n_consults = 3
+    elif "consult_twice" in scenarios:
+        n_consults = 2
+    elif "consult" in scenarios:
+        n_consults = 1
+    for i in range(n_consults):
+        consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Independently evaluate the plan."
+        try:
+            proc = subprocess.run(
+                ["cladex-consult"], input=consult_prompt, text=True,
+                capture_output=True, timeout=300,
+            )
+            reply = proc.stdout.strip()
+            status = "ok" if proc.returncode == 0 else "err"
+            consult_notes.append(f"[consult{i + 1}:{status}:{reply}]")
+        except Exception as e:  # noqa: BLE001 - fixture reports all failures
+            consult_notes.append(f"[consult{i + 1}:exc:{e}]")
+
+    text = (
+        f"fake-claude reply [session:{session_id}] [resumed:{resumed}] [role:{role}] "
+        + " ".join(consult_notes)
+    ).strip()
+
+    for chunk in (text[i:i + 24] for i in range(0, len(text), 24)):
+        out({
+            "type": "stream_event",
+            "event": {"type": "content_block_delta", "index": 0,
+                      "delta": {"type": "text_delta", "text": chunk}},
+            "parent_tool_use_id": None, "session_id": session_id,
+        })
+
+    out({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": text, "session_id": session_id,
+        "usage": {"input_tokens": 12, "output_tokens": len(text) // 4},
+    })
+    return 0
+
+
+def _extract(prompt, key):
+    for token in prompt.split():
+        if token.startswith(key):
+            return token[len(key):]
+    return None
+
+
+def _leading_scenarios(prompt):
+    """Scenario markers only count at the start of the prompt, so markers
+    embedded in a consultation prompt don't leak into the outer agent."""
+    scenarios = set()
+    for token in prompt.split():
+        if token.startswith("SCENARIO:"):
+            scenarios.add(token[len("SCENARIO:"):])
+        else:
+            break
+    return scenarios
+
+
+if __name__ == "__main__":
+    sys.exit(main())
