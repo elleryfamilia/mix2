@@ -193,6 +193,7 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
   return (
     <Box flexDirection="column" width={width} height={size.rows}>
       <Header session={state.session} width={width} />
+      <Text> </Text>
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {visible.map((line, i) => (
           <LineView key={top + i} line={line} />

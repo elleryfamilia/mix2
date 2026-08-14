@@ -37,10 +37,12 @@ $ cladex --lead claude
 Two frontier coding agents disagree in useful ways — but only if the
 second one forms its opinion independently, and only if someone owns the
 final answer. Cladex is not "run Claude and Codex at the same time": it is
-**adaptive collaboration**. The lead answers trivial things alone, brings
-the teammate in for judgment calls, challenges material disagreements
-once, and gives you one coherent recommendation with the disagreement
-disclosed when it matters.
+**adaptive collaboration**. You came for the team — if you wanted a single
+agent you would have opened it directly — so the lead consults its
+teammate on every substantive request by default, challenges material
+disagreements once, and gives you one coherent recommendation with the
+disagreement disclosed when it matters. Only no-ops (greetings,
+acknowledgements) and clarifying questions stay single-agent.
 
 ## How it works
 
@@ -48,8 +50,9 @@ disclosed when it matters.
   normal configuration plus appended Cladex role instructions.
 - The lead gets one extra shell command, **`cladex-consult`**: pipe a
   prompt in, get the teammate's independent written assessment back. The
-  lead decides *when* to use it; the Rust runtime decides *whether it is
-  allowed to* (budget, recursion, availability).
+  lead is instructed to use it for anything substantive and to skip it
+  only for no-ops; the Rust runtime decides *whether it is allowed to*
+  (budget, recursion, availability).
 - Consultations run as **fresh teammate sessions** in the same project
   directory, un-anchored by the lead's opinion.
 - If at least one consultation succeeded, the answer is attributed to

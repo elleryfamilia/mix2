@@ -82,12 +82,19 @@ Everything is the user's monospace font. Weight and color carry hierarchy:
 Full-screen alternate-buffer app, three fixed regions:
 
 ```text
-header      1 row   ` cladex ` chip · lead/teammate note · right-aligned cwd
-hairline    1 row   ─ in border.hairline
+header      1 row   full-width bar in bgStatus: ` cladex ` chip ·
+                    ● Claude lead · ○ Codex teammate (glyphs in agent
+                    colors) · right-aligned cwd
+spacing     1 row
 conversation  *     scrollable viewport, 2-space left inset
 composer    1+ rows ❯ + multiline input
 status bar  1 row   bgStatus; left = state, right = keyboard hints
 ```
+
+The top and bottom bars share the same `bgStatus` background so they read
+as app chrome on any terminal theme — the hyprland-style frame. The
+original hairline row was dropped: on non-design backgrounds it was
+invisible, and the bar edge is the separator.
 
 - Content column: 2-space indent; continuation lines of the user message
   align under the first character of the message (4 spaces).

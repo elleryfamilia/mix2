@@ -19,13 +19,14 @@ never crosses it.
 
 There is no classifier in front of the lead. The user's message goes
 straight to the selected lead agent (Claude Code or Codex) with role
-instructions appended to the provider's own system prompt. The lead decides
-— as part of doing the actual work — whether an independent second opinion
-would materially improve the answer, and asks for one by running the
-`cladex-consult` command. This keeps the judgment where the context is: the
-model that has read the repository and the conversation. The runtime's job
-is to keep that collaboration *bounded* (budget, depth, cancellation), not
-to make the call.
+instructions appended to the provider's own system prompt. Those
+instructions bias hard toward collaboration: users open Cladex to get the
+team, so the lead consults on every substantive request and answers alone
+only for no-ops (greetings, acknowledgements) and clarifying questions.
+The lead still makes that call in context — as part of doing the actual
+work — by running the `cladex-consult` command. The runtime's job is to
+keep the collaboration *bounded* (budget, depth, cancellation), not to
+make the call.
 
 ## The consultation path
 

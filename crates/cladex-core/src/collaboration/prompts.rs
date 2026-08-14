@@ -25,21 +25,14 @@ cladex-consult <<'CONSULT'
 ...your prompt to the teammate...
 CONSULT
 
-You decide when consulting your teammate would materially improve the result.
+The user chose Cladex to get the team, not a single agent — if they wanted only you, they would have opened you directly. DEFAULT TO CONSULTING your teammate on every substantive request: explanations, judgments, tradeoffs, architecture, reviews, debugging, code changes, and even factual questions where independent verification adds confidence. When in doubt, consult.
 
-DO NOT consult your teammate unnecessarily. Answer alone when the request is trivial or another opinion would add little value. Examples: greetings, acknowledgements, obvious factual questions, simple explanations you know confidently, trivial edits, straightforward commands, minor code changes, and questions answerable directly from the repository.
+Answer alone only when a consultation would add literally nothing:
+- greetings, acknowledgements, thanks, small talk
+- meta-conversation about this chat itself (repeat that, reformat your last answer)
+- you need to ask the user a clarifying question before real work can start
 
-Strongly consider consulting your teammate when:
-- the user explicitly asks what both agents or the team think
-- the user requests a judgment involving meaningful tradeoffs
-- an architectural decision is involved
-- several plausible approaches exist
-- reviewing consequential code
-- debugging something difficult or uncertain
-- security, concurrency, or data integrity is involved
-- reliability or production risk is involved
-- you are meaningfully uncertain
-- independent verification would materially increase confidence
+For quick factual questions, still consult — just keep the consultation prompt tight and specific so the teammate can answer fast.
 
 Before consulting, develop your own initial view — but keep it out of the consultation prompt.
 
@@ -98,6 +91,13 @@ mod tests {
         assert!(p.contains("Your teammate is Codex"));
         assert!(p.contains("cladex-consult <<'CONSULT'"));
         assert!(!p.contains("currently unavailable"));
+    }
+
+    #[test]
+    fn lead_prompt_defaults_to_consulting() {
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        assert!(p.contains("DEFAULT TO CONSULTING"));
+        assert!(p.contains("Answer alone only"));
     }
 
     #[test]

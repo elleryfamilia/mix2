@@ -1,7 +1,7 @@
-import { Box, Text } from 'ink';
+import { Text } from 'ink';
 import React from 'react';
 import type { SessionInfo } from '../state/store.js';
-import { displayName, theme } from '../theme/theme.js';
+import { agentColor, agentGlyph, displayName, theme } from '../theme/theme.js';
 
 function shortenPath(cwd: string, maxLength: number): string {
   const home = process.env['HOME'];
@@ -12,8 +12,13 @@ function shortenPath(cwd: string, maxLength: number): string {
   return short;
 }
 
-/** App chrome: inverted name chip, lead/teammate note, right-aligned cwd,
- * hairline underneath (Design 1c). */
+/**
+ * App chrome, top bar (Design 1c, hyprland-flavored): a full-width bar in
+ * the same background as the status bar, carrying the inverted ` cladex `
+ * chip, agent identity as colored glyphs (● Claude lead · ○ Codex
+ * teammate), and the right-aligned project path. Top and bottom bars frame
+ * the conversation on any terminal background.
+ */
 export function Header({
   session,
   width,
@@ -21,34 +26,53 @@ export function Header({
   session?: SessionInfo;
   width: number;
 }): React.JSX.Element {
-  const parts: string[] = [];
-  if (session) {
-    parts.push(`${displayName(session.lead.kind)} lead`);
-    parts.push(
-      session.teammate.available
-        ? `${displayName(session.teammate.kind)} teammate`
-        : `${displayName(session.teammate.kind)} unavailable`,
-    );
-  }
-  const identity = session ? `  ${parts.join(' · ')}` : '';
-  // The header must never wrap: cap the cwd to the space left of the
-  // identity block, ellipsizing from the left (the tail is the useful part).
-  const cwdBudget = Math.max(8, width - 2 - ' cladex '.length - identity.length - 3);
+  const bg = theme.status.barBg;
+  const chipLabel = ' cladex ';
+
+  const lead = session?.lead.kind;
+  const teammate = session?.teammate.kind;
+  const teammateLabel = session
+    ? session.teammate.available
+      ? `${displayName(teammate!)} teammate`
+      : `${displayName(teammate!)} unavailable`
+    : '';
+  const identityPlain = session
+    ? `  ${agentGlyph(lead!)} ${displayName(lead!)} lead ${'·'} ${agentGlyph(teammate!)} ${teammateLabel}`
+    : '';
+
+  const leftLen = 1 + chipLabel.length + identityPlain.length;
+  const cwdBudget = Math.max(8, width - leftLen - 3);
   const cwd = session ? shortenPath(session.cwd, cwdBudget) : '';
+  const gap = Math.max(1, width - leftLen - cwd.length - 1);
+
   return (
-    <Box flexDirection="column">
-      <Box justifyContent="space-between" paddingX={1}>
-        <Text wrap="truncate">
-          <Text backgroundColor={theme.chip.appBg} color={theme.chip.appFg} bold>
-            {' cladex '}
+    <Text backgroundColor={bg} wrap="truncate">
+      <Text backgroundColor={bg}> </Text>
+      <Text backgroundColor={theme.chip.appBg} color={theme.chip.appFg} bold>
+        {chipLabel}
+      </Text>
+      {session && (
+        <>
+          <Text backgroundColor={bg}>  </Text>
+          <Text backgroundColor={bg} color={agentColor(lead!)}>
+            {agentGlyph(lead!)}
           </Text>
-          {session && <Text color={theme.text.muted}>{identity}</Text>}
-        </Text>
-        <Text wrap="truncate" color={theme.text.faint}>
-          {cwd}
-        </Text>
-      </Box>
-      <Text color={theme.border.hairline}>{'─'.repeat(Math.max(0, width))}</Text>
-    </Box>
+          <Text backgroundColor={bg} color={theme.text.muted}>
+            {` ${displayName(lead!)} lead · `}
+          </Text>
+          <Text backgroundColor={bg} color={agentColor(teammate!)}>
+            {agentGlyph(teammate!)}
+          </Text>
+          <Text backgroundColor={bg} color={theme.text.muted}>
+            {` ${teammateLabel}`}
+          </Text>
+        </>
+      )}
+      <Text backgroundColor={bg}>{' '.repeat(gap)}</Text>
+      <Text backgroundColor={bg} color={theme.text.faint}>
+        {cwd}
+      </Text>
+      <Text backgroundColor={bg}> </Text>
+    </Text>
   );
 }
