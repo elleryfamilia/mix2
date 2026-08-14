@@ -58,7 +58,7 @@ export function renderTeamPanel(state: AppState, width: number, now: number): Li
       span(agentGlyph(leadName), { color: agentColor(leadName) }),
       span(` ${leadName.padEnd(7)}`, { color: agentColor(leadName), bold: true }),
       span(
-        ` lead      ${record ? formatElapsed(record.durationMs) : '—'}${state.turn ? ' active' : ''}   ${
+        `  ${record ? formatElapsed(record.durationMs) : '—'}${state.turn ? ' active' : ''}   ${
           record ? `${record.toolsCompleted} tool${record.toolsCompleted === 1 ? '' : 's'}` : ''
         }`,
         { color: theme.text.muted },
@@ -75,7 +75,7 @@ export function renderTeamPanel(state: AppState, width: number, now: number): Li
         span(agentGlyph(teammateName), { color: agentColor(teammateName) }),
         span(` ${teammateName.padEnd(7)}`, { color: agentColor(teammateName), bold: true }),
         span(
-          ` teammate  ${consults.length > 0 ? formatElapsed(teammateMs) : '—'}   ${
+          `  ${consults.length > 0 ? formatElapsed(teammateMs) : '—'}   ${
             consults.length > 0 ? `${teammateTools} tool${teammateTools === 1 ? '' : 's'}` : 'on standby'
           }`,
           { color: theme.text.muted },
@@ -88,7 +88,7 @@ export function renderTeamPanel(state: AppState, width: number, now: number): Li
         span(agentGlyph(teammateName), { color: agentColor(teammateName) }),
         span(` ${teammateName.padEnd(7)}`, { color: agentColor(teammateName), bold: true }),
         span(
-          ` teammate  unavailable — ${truncate(teammate.reason ?? 'not found', contentW - 24)}`,
+          `  offline — ${truncate(teammate.reason ?? 'not found', contentW - 24)}`,
           { color: theme.text.muted },
         ),
       ),

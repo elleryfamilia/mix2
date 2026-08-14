@@ -28,11 +28,19 @@ work — by running the `cladex-consult` command. The runtime's job is to
 keep the collaboration *bounded* (budget, depth, cancellation), not to
 make the call.
 
+The "lead" is deliberately invisible to the user: the UI shows one team
+roster, every answer carries the Team chip, and the role instructions
+require the first-person-plural voice. Which agent coordinates is a config
+choice, not a product concept.
+
 ## The consultation path
 
 ```text
 lead agent (claude -p / codex exec, CLADEX_ROLE=lead)
-  └─ runs: cladex-consult <<'CONSULT' … CONSULT
+  └─ runs: cladex-consult <<'CONSULT' … CONSULT           (blocking)
+     or:   cladex-consult start … → ticket                (concurrent)
+           …keeps researching while the teammate works…
+           cladex-consult wait <ticket> → assessment
        └─ connects to the runtime:
             1. Unix socket  <runtime>/consult.sock      (Claude's sandbox allows this)
             2. file mailbox <runtime>/consult/req-*.json (fallback; Codex's sandbox

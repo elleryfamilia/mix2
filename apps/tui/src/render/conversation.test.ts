@@ -49,7 +49,7 @@ describe('single-agent response', () => {
     s = apply(s, { type: 'turn.completed', turn_id: 't1', duration_ms: 800, consultations: 0 });
     const lines = text(s);
     expect(lines[0]).toBe('  ❯ hi');
-    expect(lines).toContain('   Claude ');
+    expect(lines).toContain('   Team ');
     expect(lines).toContain('  Hey. What are we working on?');
   });
 });
@@ -108,6 +108,21 @@ describe('consultation activity', () => {
     for (const line of lines) {
       expect(line.length).toBeLessThanOrEqual(80);
     }
+  });
+
+  it('shows the lead researching in its tile during a concurrent consult', () => {
+    let s = consulting();
+    s = apply(s, {
+      type: 'agent.tool.started',
+      turn_id: 't1',
+      agent: 'claude',
+      role: 'lead',
+      name: 'Grep',
+      detail: 'SessionManager',
+    });
+    const lines = text(s);
+    expect(lines.some((l) => l.includes('● claude — researching'))).toBe(true);
+    expect(lines.some((l) => l.includes('└ grep SessionManager'))).toBe(true);
   });
 
   it('merges into a mauve exchange tile after completion', () => {
@@ -234,8 +249,8 @@ describe('team panel', () => {
     });
     const lines = renderTeamPanel(s, 100, T + 112_000).map(lineText);
     expect(lines.some((l) => l.includes('◐ team'))).toBe(true);
-    expect(lines.some((l) => l.includes('● claude') && l.includes('lead'))).toBe(true);
-    expect(lines.some((l) => l.includes('○ codex') && l.includes('teammate'))).toBe(true);
+    expect(lines.some((l) => l.includes('● claude'))).toBe(true);
+    expect(lines.some((l) => l.includes('○ codex'))).toBe(true);
     expect(lines.some((l) => l.includes('Does a GSI on user_id'))).toBe(true);
     expect(lines.some((l) => l.includes('consultation 1 response'))).toBe(true);
   });
@@ -247,6 +262,6 @@ describe('team panel', () => {
     };
     const s = apply(initialState, notReady);
     const lines = renderTeamPanel(s, 100, T).map(lineText);
-    expect(lines.some((l) => l.includes('unavailable — not installed'))).toBe(true);
+    expect(lines.some((l) => l.includes('offline — not installed'))).toBe(true);
   });
 });

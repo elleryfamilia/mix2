@@ -99,6 +99,9 @@ function chip(label: string, bg: string, fg: string): Span {
 
 function finalLines(item: Extract<ConversationItem, { kind: 'final' }>, ctx: RenderContext): Line[] {
   const lines: Line[] = [];
+  // One team, one voice: every answer carries the Team chip. The roster
+  // suffix appears only when both agents actually worked this turn — that
+  // participation signal stays honest.
   if (item.speaker === 'team') {
     lines.push(
       pad(
@@ -109,7 +112,7 @@ function finalLines(item: Extract<ConversationItem, { kind: 'final' }>, ctx: Ren
       ),
     );
   } else {
-    lines.push(pad(chip(displayName(item.speaker), agentColor(item.speaker), chipFg(item.speaker))));
+    lines.push(pad(chip('Team', theme.agent.team, chipFg('team'))));
   }
   lines.push(BLANK);
   const width = contentWidth(ctx);
@@ -299,18 +302,36 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
   const tileWidth = stacked ? full - INDENT : Math.floor((full - INDENT - 2) / 2);
   const innerWidth = tileWidth - 4;
 
+  // With concurrent consultations the lead keeps researching while the
+  // teammate works: show its live tools, else its interim text, else the
+  // waiting state.
   const leadStream = turn.streamText.trim();
-  const leadBody: Line[] = leadStream
-    ? wrapText(leadStream, innerWidth)
-        .slice(-2)
-        .map((l) => [span(l, { color: theme.text.muted, italic: true })])
-    : [[span(`${glyphs.treeEnd} waiting on ${teammate} ${ctx.spinner}`, { color: theme.text.faint })]];
+  const leadTools = turn.tools.filter((t) => !t.done).slice(-2);
+  let leadBody: Line[];
+  let leadStatus: string;
+  if (leadTools.length > 0) {
+    leadStatus = 'researching';
+    leadBody = leadTools.map((tool) => {
+      const label = tool.detail ? `${tool.name.toLowerCase()} ${tool.detail}` : tool.name.toLowerCase();
+      return [span(`${glyphs.treeEnd} ${truncate(label, innerWidth)}`, { color: theme.text.faint })];
+    });
+  } else if (leadStream) {
+    leadStatus = 'drafting';
+    leadBody = wrapText(leadStream, innerWidth)
+      .slice(-2)
+      .map((l) => [span(l, { color: theme.text.muted, italic: true })]);
+  } else {
+    leadStatus = 'waiting';
+    leadBody = [
+      [span(`${glyphs.treeEnd} waiting on ${teammate} ${ctx.spinner}`, { color: theme.text.faint })],
+    ];
+  }
 
   const leadTile = buildTile(
     {
       headerLeft: [
         span(agentGlyph(lead), { color: agentColor(lead) }),
-        span(` ${lead} — ${leadStream ? 'drafting' : 'waiting'}`, { color: agentColor(lead), bold: true }),
+        span(` ${lead} — ${leadStatus}`, { color: agentColor(lead), bold: true }),
       ],
       headerRight: [span(formatElapsed(ctx.now - turn.startedAt), { color: theme.text.faint })],
       body: leadBody,

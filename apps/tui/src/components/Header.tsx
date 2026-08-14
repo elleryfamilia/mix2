@@ -29,15 +29,17 @@ export function Header({
   const bg = theme.status.barBg;
   const chipLabel = ' cladex ';
 
+  // The team roster: no lead/teammate labels — the user talks to one team,
+  // and who coordinates is an internal mechanic.
   const lead = session?.lead.kind;
   const teammate = session?.teammate.kind;
   const teammateLabel = session
     ? session.teammate.available
-      ? `${displayName(teammate!)} teammate`
-      : `${displayName(teammate!)} unavailable`
+      ? displayName(teammate!)
+      : `${displayName(teammate!)} offline`
     : '';
   const identityPlain = session
-    ? `  ${agentGlyph(lead!)} ${displayName(lead!)} lead ${'·'} ${agentGlyph(teammate!)} ${teammateLabel}`
+    ? `  ${agentGlyph(lead!)} ${displayName(lead!)} ${'·'} ${agentGlyph(teammate!)} ${teammateLabel}`
     : '';
 
   const leftLen = 1 + chipLabel.length + identityPlain.length;
@@ -58,7 +60,7 @@ export function Header({
             {agentGlyph(lead!)}
           </Text>
           <Text backgroundColor={bg} color={theme.text.muted}>
-            {` ${displayName(lead!)} lead · `}
+            {` ${displayName(lead!)} · `}
           </Text>
           <Text backgroundColor={bg} color={agentColor(teammate!)}>
             {agentGlyph(teammate!)}

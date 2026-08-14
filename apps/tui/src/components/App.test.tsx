@@ -58,8 +58,8 @@ describe('App', () => {
     await tickReact();
     const frame = h.lastFrame()!;
     expect(frame).toContain(' cladex ');
-    expect(frame).toContain('Claude lead');
-    expect(frame).toContain('Codex teammate');
+    expect(frame).toContain('Claude ·');
+    expect(frame).toContain('Codex');
     expect(frame).toContain('src/acme');
     expect(frame).toContain('How can we help?');
     expect(frame).toContain('ready');
@@ -75,7 +75,7 @@ describe('App', () => {
       teammate: { kind: 'codex', name: 'Codex', available: false, reason: 'not installed' },
     });
     await tickReact();
-    expect(h.lastFrame()).toContain('Codex unavailable');
+    expect(h.lastFrame()).toContain('Codex offline');
     h.unmount();
   });
 
@@ -111,7 +111,7 @@ describe('App', () => {
     await tickReact();
     const frame = h.lastFrame()!;
     expect(frame).toContain('❯ hi');
-    expect(frame).toContain(' Claude ');
+    expect(frame).toContain(' Team');
     expect(frame).toContain('Hey. What are we working on?');
     expect(frame).toContain('done in 1s');
     h.unmount();

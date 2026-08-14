@@ -1,7 +1,13 @@
 //! `cladex-consult` — the command a Cladex lead agent runs to ask its
-//! teammate for an independent opinion. Reads the consultation prompt from
-//! stdin, routes it to the Cladex runtime, and prints the teammate's final
-//! response to stdout.
+//! teammate for an independent opinion.
+//!
+//! Three forms:
+//!   cladex-consult                 read prompt from stdin, block, print reply
+//!   cladex-consult start           read prompt from stdin, print a ticket
+//!                                  immediately so the caller can keep
+//!                                  working while the teammate researches
+//!   cladex-consult wait <ticket>   block until that consultation finishes,
+//!                                  print the teammate's reply
 //!
 //! Transport: first a Unix socket at `$CLADEX_RUNTIME_DIR/consult.sock`
 //! (reachable from Claude Code's Bash sandbox); if the sandbox blocks
@@ -39,6 +45,12 @@ fn main() -> ExitCode {
     }
 }
 
+enum Mode {
+    Sync,
+    Start,
+    Wait(String),
+}
+
 fn run() -> Result<String, String> {
     let role = std::env::var("CLADEX_ROLE").unwrap_or_default();
     let depth: u32 = std::env::var("CLADEX_DEPTH")
@@ -66,40 +78,79 @@ fn run() -> Result<String, String> {
     })?;
     let runtime_dir = PathBuf::from(runtime_dir);
 
-    let mut prompt = String::new();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if !args.is_empty() {
-        prompt = args.join(" ");
-    } else {
-        std::io::stdin()
-            .read_to_string(&mut prompt)
-            .map_err(|e| format!("Consultation failed: could not read stdin: {e}"))?;
-    }
-    let prompt = prompt.trim().to_owned();
-    if prompt.is_empty() {
-        return Err(
-            "Consultation failed: empty prompt. Pipe the consultation prompt on stdin, e.g.\n\
-             cladex-consult <<'CONSULT'\n...prompt...\nCONSULT"
-                .to_owned(),
-        );
-    }
+    let mode = match args.first().map(String::as_str) {
+        Some("start") => Mode::Start,
+        Some("wait") => {
+            let ticket = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| "Usage: cladex-consult wait <ticket>".to_owned())?;
+            Mode::Wait(ticket)
+        }
+        _ => Mode::Sync,
+    };
+
+    let prompt = match &mode {
+        Mode::Wait(_) => String::new(),
+        Mode::Sync | Mode::Start => {
+            let mut prompt = String::new();
+            let extra: Vec<&String> = match mode {
+                Mode::Start => args.iter().skip(1).collect(),
+                _ => args.iter().collect(),
+            };
+            if !extra.is_empty() {
+                prompt = extra
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            } else {
+                std::io::stdin()
+                    .read_to_string(&mut prompt)
+                    .map_err(|e| format!("Consultation failed: could not read stdin: {e}"))?;
+            }
+            let prompt = prompt.trim().to_owned();
+            if prompt.is_empty() {
+                return Err(
+                    "Consultation failed: empty prompt. Pipe the consultation prompt on stdin, e.g.\n\
+                     cladex-consult <<'CONSULT'\n...prompt...\nCONSULT"
+                        .to_owned(),
+                );
+            }
+            prompt
+        }
+    };
 
     let request = serde_json::json!({
         "v": 1,
         "prompt": prompt,
         "role": if role.is_empty() { "lead" } else { &role },
         "depth": depth,
+        "mode": match &mode { Mode::Sync => "sync", Mode::Start => "start", Mode::Wait(_) => "wait" },
+        "ticket": match &mode { Mode::Wait(t) => Some(t.clone()), _ => None },
     })
     .to_string();
 
     let response = match try_socket(&runtime_dir, &request) {
         Ok(response) => response,
-        Err(_socket_err) => try_files(&runtime_dir, &request)?,
+        Err(_socket_err) => match &mode {
+            // File transport: `wait` polls the done-file the runtime writes
+            // when the ticketed consultation finishes; no request needed.
+            Mode::Wait(ticket) => poll_done_file(&runtime_dir, ticket)?,
+            _ => try_files(&runtime_dir, &request)?,
+        },
     };
 
     let value: serde_json::Value = serde_json::from_str(&response)
         .map_err(|e| format!("Consultation failed: invalid runtime response: {e}"))?;
     if value.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        if let Some(ticket) = value.get("ticket").and_then(serde_json::Value::as_str) {
+            return Ok(format!(
+                "ticket: {ticket}\nThe teammate is now working. Continue your own research, \
+                 then run `cladex-consult wait {ticket}` to collect the response."
+            ));
+        }
         Ok(value
             .get("text")
             .and_then(serde_json::Value::as_str)
@@ -164,6 +215,22 @@ fn try_files(runtime_dir: &Path, request: &str) -> Result<String, String> {
         }
         if started.elapsed() > RESPONSE_TIMEOUT {
             let _ = std::fs::remove_file(&req);
+            return Err("Consultation failed: timed out waiting for the teammate.".to_owned());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn poll_done_file(runtime_dir: &Path, ticket: &str) -> Result<String, String> {
+    let path = runtime_dir
+        .join("consult")
+        .join(format!("done-{ticket}.json"));
+    let started = Instant::now();
+    loop {
+        if let Ok(body) = std::fs::read_to_string(&path) {
+            return Ok(body);
+        }
+        if started.elapsed() > RESPONSE_TIMEOUT {
             return Err("Consultation failed: timed out waiting for the teammate.".to_owned());
         }
         std::thread::sleep(POLL_INTERVAL);

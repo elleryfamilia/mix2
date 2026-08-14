@@ -243,6 +243,53 @@ fn codex_lead_consults_claude() {
 }
 
 #[test]
+fn concurrent_consultation_via_start_and_wait() {
+    let mut core = Core::start(CoreOptions::default());
+    core.events_until("ready", LONG);
+
+    core.submit("t1", "SCENARIO:consult_async evaluate concurrently");
+    let events = core.events_until("turn.completed", LONG);
+
+    // The consultation ran and completed while the lead kept working.
+    assert_eq!(count(&events, "consult.started"), 1);
+    assert_eq!(count(&events, "consult.completed"), 1);
+    let final_msg = find(&events, "message.final").unwrap();
+    assert_eq!(final_msg["speaker"], "team");
+    let text = final_msg["text"].as_str().unwrap();
+    assert!(
+        text.contains("[own-research:done]"),
+        "lead should have researched between start and wait: {text}"
+    );
+    assert!(
+        text.contains("[consult1:ok:fake-codex reply"),
+        "wait should return the teammate's response: {text}"
+    );
+}
+
+#[test]
+fn async_consultations_share_the_budget() {
+    let mut core = Core::start(CoreOptions {
+        max_consults: Some(1),
+        ..CoreOptions::default()
+    });
+    core.events_until("ready", LONG);
+
+    // consult_async uses the one slot via `start`; a second sync consult in
+    // the same turn must be refused.
+    core.submit("t1", "SCENARIO:consult_async SCENARIO:consult budget check");
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(count(&events, "consult.completed"), 1);
+    let text = find(&events, "message.final").unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        text.contains("budget"),
+        "second consult should hit the budget message: {text}"
+    );
+}
+
+#[test]
 fn consultation_budget_is_enforced() {
     let mut core = Core::start(CoreOptions::default());
     core.events_until("ready", LONG);

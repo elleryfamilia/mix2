@@ -46,13 +46,22 @@ acknowledgements) and clarifying questions stay single-agent.
 
 ## How it works
 
-- The **lead** (your choice) owns the conversation and runs with its
-  normal configuration plus appended Cladex role instructions.
-- The lead gets one extra shell command, **`cladex-consult`**: pipe a
-  prompt in, get the teammate's independent written assessment back. The
-  lead is instructed to use it for anything substantive and to skip it
-  only for no-ops; the Rust runtime decides *whether it is allowed to*
-  (budget, recursion, availability).
+- One agent (your choice via `--lead`) coordinates the team and owns the
+  conversation, running with its normal configuration plus appended Cladex
+  role instructions. This is an internal mechanic: the UI never labels
+  anyone "lead", and every answer speaks as "we".
+- The coordinating agent gets one extra shell command,
+  **`cladex-consult`**: pipe a prompt in, get the teammate's independent
+  written assessment back. `cladex-consult start` returns a ticket
+  immediately so both agents research **concurrently**, and
+  `cladex-consult wait <ticket>` collects the result; the instructions
+  tell the coordinator to fire the consultation first and investigate in
+  parallel. It is used for anything substantive and skipped only for
+  no-ops; the Rust runtime decides *whether it is allowed* (budget,
+  recursion, availability).
+- Both roles are told to match depth to the question: quick takes for
+  conversational questions, deep review only when asked or when the
+  stakes clearly demand it.
 - Consultations run as **fresh teammate sessions** in the same project
   directory, un-anchored by the lead's opinion.
 - If at least one consultation succeeded, the answer is attributed to

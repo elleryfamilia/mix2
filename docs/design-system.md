@@ -191,9 +191,13 @@ settles to one faint line:
     └ ~ src/middleware/validate.ts · ✓ 214 tests
 ```
 
-Speaker chip: ` Team ` (mauve bg) when ≥1 consultation actually succeeded,
-otherwise ` Claude ` / ` Codex ` in the lead's color. Suffix `claude + codex`
-in faint, only on Team. Body text primary at full width ≤ max reading width.
+Speaker chip: always ` Team ` (mauve bg) — the user talks to one team with
+one voice, and the answer text says "we". The faint `claude + codex`
+suffix appears only when at least one consultation actually succeeded, so
+the participation signal stays honest. Body text primary at full width ≤
+max reading width. Individual agent identity (names, glyphs, colors)
+appears only in live activity: working lines, tiles, the trace pill, and
+the team panel.
 
 **Disagreement stance block (4b)** — when the lead reports a split, it is
 part of the lead's own final text; the UI additionally renders the runtime's

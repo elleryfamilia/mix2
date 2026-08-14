@@ -52,7 +52,7 @@ def main():
 
     session_id = resume_id or str(uuid.uuid4())
     resumed = "yes" if resume_id else "no"
-    if "lead engineer" in system_prompt:
+    if "coordinate the team" in system_prompt:
         role = "lead"
     elif "consulting engineer" in system_prompt:
         role = "teammate"
@@ -102,6 +102,33 @@ def main():
     })
 
     consult_notes = []
+    if "consult_async" in scenarios:
+        consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Quick take: evaluate the plan."
+        try:
+            proc = subprocess.run(
+                ["cladex-consult", "start"], input=consult_prompt, text=True,
+                capture_output=True, timeout=60,
+            )
+            ticket = ""
+            for line in proc.stdout.splitlines():
+                if line.startswith("ticket:"):
+                    ticket = line.split(":", 1)[1].strip()
+                    break
+            if not ticket:
+                consult_notes.append(f"[consult1:err:no-ticket:{proc.stdout.strip()[:120]}]")
+            else:
+                # Simulate the lead doing its own research concurrently.
+                time.sleep(0.3)
+                consult_notes.append("[own-research:done]")
+                done = subprocess.run(
+                    ["cladex-consult", "wait", ticket], text=True,
+                    capture_output=True, timeout=300,
+                )
+                status = "ok" if done.returncode == 0 else "err"
+                consult_notes.append(f"[consult1:{status}:{done.stdout.strip()}]")
+        except Exception as e:  # noqa: BLE001 - fixture reports all failures
+            consult_notes.append(f"[consult1:exc:{e}]")
+
     n_consults = 0
     if "consult_thrice" in scenarios:
         n_consults = 3

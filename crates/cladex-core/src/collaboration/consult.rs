@@ -42,23 +42,36 @@ pub fn teammate_unavailable_message(teammate: AgentKind, reason: &str) -> String
 }
 
 /// Request sent by `cladex-consult` over the socket or file transport.
+///
+/// `mode` selects between the blocking flow and the concurrent flow:
+/// - `sync` (default): run the consultation and reply with the result.
+/// - `start`: launch the consultation and reply immediately with a ticket,
+///   so the caller can keep doing its own research in parallel.
+/// - `wait`: block until the ticketed consultation finishes, then reply.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConsultRequest {
     pub v: u32,
+    #[serde(default)]
     pub prompt: String,
     /// CLADEX_ROLE of the calling agent process.
     pub role: String,
     /// CLADEX_DEPTH of the calling agent process.
     pub depth: u32,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub ticket: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsultResponse {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
 }
 
 /// Progress updates surfaced to the runtime while consultations run.
@@ -111,6 +124,10 @@ struct Shared {
     /// the explicit refusal instead of a confusing "command not found".
     helper_dir: Option<PathBuf>,
     updates: mpsc::Sender<ConsultUpdate>,
+    /// In-flight `start`ed consultations by ticket. Each holds a watch
+    /// channel that flips from None to the final response. Cleared per turn.
+    pending:
+        tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<ConsultResponse>>>>,
     active: RwLock<Option<ActiveTurn>>,
     consult_timeout: Duration,
 }
@@ -147,6 +164,7 @@ impl ConsultServer {
             session_id,
             helper_dir,
             updates,
+            pending: tokio::sync::Mutex::new(HashMap::new()),
             active: RwLock::new(None),
             consult_timeout: Duration::from_secs(15 * 60),
         });
@@ -193,10 +211,12 @@ impl ConsultServer {
 
     pub async fn begin_turn(&self, turn: ActiveTurn) {
         *self.shared.active.write().await = Some(turn);
+        self.shared.pending.lock().await.clear();
     }
 
     pub async fn end_turn(&self) {
         *self.shared.active.write().await = None;
+        self.shared.pending.lock().await.clear();
     }
 }
 
@@ -250,19 +270,40 @@ async fn handle_line(shared: &Arc<Shared>, line: &str) -> ConsultResponse {
                 ok: false,
                 text: None,
                 error: Some(format!("invalid consult request: {e}")),
+                ticket: None,
             }
         }
     };
     handle_request(shared, request).await
 }
 
-async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> ConsultResponse {
-    let refuse = |error: String| ConsultResponse {
+fn refuse(error: String) -> ConsultResponse {
+    ConsultResponse {
         ok: false,
         text: None,
         error: Some(error),
-    };
+        ticket: None,
+    }
+}
 
+/// Await a pending consultation's watch channel until its result lands.
+async fn await_result(
+    mut rx: tokio::sync::watch::Receiver<Option<ConsultResponse>>,
+) -> ConsultResponse {
+    loop {
+        if let Some(response) = rx.borrow().clone() {
+            return response;
+        }
+        if rx.changed().await.is_err() {
+            return refuse(
+                "Consultation ended without a result (the turn may have been cancelled)."
+                    .to_owned(),
+            );
+        }
+    }
+}
+
+async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> ConsultResponse {
     // Recursion prevention is enforced here in code, not only in prompts.
     if request.role == "teammate" {
         return refuse(REFUSAL_TEAMMATE.to_owned());
@@ -271,6 +312,27 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
         return refuse(format!(
             "Consultation unavailable: maximum collaboration depth ({MAX_DEPTH}) reached."
         ));
+    }
+
+    let mode = request.mode.as_deref().unwrap_or("sync");
+
+    if mode == "wait" {
+        let Some(ticket) = request.ticket else {
+            return refuse("wait requires a consultation ticket.".to_owned());
+        };
+        let rx = shared.pending.lock().await.get(&ticket).cloned();
+        let Some(rx) = rx else {
+            return refuse(format!(
+                "Unknown consultation ticket {ticket} (it may belong to an earlier turn)."
+            ));
+        };
+        return await_result(rx).await;
+    }
+    if mode != "sync" && mode != "start" {
+        return refuse(format!("Unknown consult mode '{mode}'."));
+    }
+    if request.prompt.trim().is_empty() {
+        return refuse("Consultation failed: empty prompt.".to_owned());
     }
 
     let (turn_id, budget, cancel) = {
@@ -312,40 +374,75 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
         })
         .await;
 
-    let started = Instant::now();
-    let result = run_consultation(shared, &teammate, turn_id, &request.prompt, cancel).await;
-    let duration_ms = started.elapsed().as_millis() as u64;
+    // Run the consultation as a detached task feeding a watch channel, so
+    // `start` can return immediately while the caller keeps researching.
+    let ticket = Uuid::new_v4().to_string();
+    let (result_tx, result_rx) = tokio::sync::watch::channel::<Option<ConsultResponse>>(None);
+    shared
+        .pending
+        .lock()
+        .await
+        .insert(ticket.clone(), result_rx.clone());
 
-    match result {
-        Ok(text) => {
-            let _ = shared
-                .updates
-                .send(ConsultUpdate::Completed {
-                    turn_id,
-                    index,
-                    duration_ms,
-                    text: text.clone(),
-                })
-                .await;
-            ConsultResponse {
-                ok: true,
-                text: Some(text),
-                error: None,
+    let task_shared = Arc::clone(shared);
+    let prompt = request.prompt.clone();
+    let task_ticket = ticket.clone();
+    tokio::spawn(async move {
+        let started = Instant::now();
+        let result = run_consultation(&task_shared, &teammate, turn_id, &prompt, cancel).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let response = match result {
+            Ok(text) => {
+                let _ = task_shared
+                    .updates
+                    .send(ConsultUpdate::Completed {
+                        turn_id,
+                        index,
+                        duration_ms,
+                        text: text.clone(),
+                    })
+                    .await;
+                ConsultResponse {
+                    ok: true,
+                    text: Some(text),
+                    error: None,
+                    ticket: None,
+                }
             }
+            Err(e) => {
+                let message =
+                    teammate_unavailable_message(task_shared.teammate_kind, &e.to_string());
+                let _ = task_shared
+                    .updates
+                    .send(ConsultUpdate::Failed {
+                        turn_id,
+                        index,
+                        message: message.clone(),
+                    })
+                    .await;
+                refuse(message)
+            }
+        };
+        // File-transport waiters poll for done-<ticket>.json directly.
+        let dir = task_shared.runtime_dir.join(FILE_DIR_NAME);
+        let payload = serde_json::to_string(&response).unwrap_or_default();
+        let tmp = dir.join(format!("done-{task_ticket}.json.tmp"));
+        let fin = dir.join(format!("done-{task_ticket}.json"));
+        if tokio::fs::write(&tmp, payload).await.is_ok() {
+            let _ = tokio::fs::rename(&tmp, &fin).await;
         }
-        Err(e) => {
-            let message = teammate_unavailable_message(shared.teammate_kind, &e.to_string());
-            let _ = shared
-                .updates
-                .send(ConsultUpdate::Failed {
-                    turn_id,
-                    index,
-                    message: message.clone(),
-                })
-                .await;
-            refuse(message)
-        }
+        let _ = result_tx.send(Some(response));
+    });
+
+    if mode == "start" {
+        return ConsultResponse {
+            ok: true,
+            text: None,
+            error: None,
+            ticket: Some(ticket),
+        };
     }
+    await_result(result_rx).await
 }
 
 async fn run_consultation(
