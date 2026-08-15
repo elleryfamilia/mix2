@@ -151,6 +151,12 @@ faint. Tool tree lines in faint, latest 3 visible while live.
     └ 12 tool calls · routes.ts, git diff, bench · 0:48
 ```
 
+Once collaboration starts, the live `◐ Team — …` block moves to the TAIL
+of the body — below the tiles and the conferred tile — so the newest
+thing on screen is always the rotating mark saying work continues. A
+settled tile must never be the last thing visible while the team is
+still reconciling.
+
 Paired consultation tiles are always the same width *and* height (the
 shorter body pads with blank rows) so they read as one unit. The status
 bar mirrors reality: `⠸ · ⠧ working in parallel` (spinners in agent

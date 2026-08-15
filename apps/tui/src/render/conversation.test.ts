@@ -168,6 +168,53 @@ describe('consultation activity', () => {
   });
 });
 
+describe('synthesis stays visibly alive', () => {
+  it('keeps the live team line below the conferred tile while reconciling', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'decide' }, T);
+    s = apply(s, {
+      type: 'consult.started',
+      turn_id: 't1',
+      agent: 'codex',
+      index: 1,
+      max: 2,
+      prompt: 'evaluate',
+    });
+    s = apply(s, {
+      type: 'consult.completed',
+      turn_id: 't1',
+      agent: 'codex',
+      index: 1,
+      duration_ms: 30_000,
+      text: 'my assessment',
+    });
+    s = apply(s, { type: 'lead.synthesizing', turn_id: 't1', agent: 'claude' });
+    const lines = text(s);
+    const tileBottom = lines.findIndex((l) => l.includes('╰'));
+    const liveLine = lines.findIndex((l) => l.includes('◐ Team — reconciling'));
+    expect(tileBottom).toBeGreaterThan(-1);
+    expect(liveLine).toBeGreaterThan(tileBottom);
+  });
+
+  it('the live line trails the tiles during an active consult too', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'go' }, T);
+    s = apply(s, {
+      type: 'consult.started',
+      turn_id: 't1',
+      agent: 'codex',
+      index: 1,
+      max: 2,
+      prompt: 'evaluate',
+    });
+    const lines = text(s);
+    const tileTop = lines.findIndex((l) => l.includes('╭'));
+    const liveLine = lines.findIndex((l) => l.includes('◐ Team — consulting'));
+    expect(tileTop).toBeGreaterThan(-1);
+    expect(liveLine).toBeGreaterThan(tileTop);
+  });
+});
+
 describe('team response', () => {
   it('renders the Team chip with participants and a trace pill', () => {
     let s = apply(initialState, ready);

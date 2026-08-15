@@ -459,11 +459,22 @@ export function renderItem(item: ConversationItem, ctx: RenderContext): Line[] {
 
 export function renderLiveTurn(turn: ActiveTurn, ctx: RenderContext): Line[] {
   const lines: Line[] = [];
-  lines.push(...leadWorkingLines(turn, ctx));
-  for (const consult of turn.consults) {
-    lines.push(BLANK);
+  // Before any consultation, the live block leads (the design's core
+  // motif: status line with the tool tree hanging under it). Once
+  // collaboration starts, the live block moves to the TAIL — below the
+  // tiles — so the newest thing on screen is always the rotating team
+  // mark saying work continues. Otherwise a settled conferred tile at the
+  // bottom reads as "finished" while the team is still reconciling.
+  if (turn.consults.length === 0) {
+    lines.push(...leadWorkingLines(turn, ctx));
+    return lines;
+  }
+  for (const [i, consult] of turn.consults.entries()) {
+    if (i > 0) lines.push(BLANK);
     lines.push(...consultLines(turn, consult, ctx));
   }
+  lines.push(BLANK);
+  lines.push(...leadWorkingLines(turn, ctx));
   return lines;
 }
 
