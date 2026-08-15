@@ -4,9 +4,10 @@ import { glyphs, theme } from '../theme/theme.js';
 import { splitAtCursor, type EditorState } from './editing.js';
 
 /**
- * The input composer (Design 1c): a bold `❯` with a block cursor. Multiline
- * content renders with a two-space continuation indent; soft wrapping is
- * delegated to Ink. Editing state lives in App; this component only renders.
+ * The input composer: a bold `❯` with a block cursor inside a rounded
+ * frame, so what you type is visually unmistakable from what the team
+ * says. Multiline content soft-wraps via Ink. Editing state lives in App;
+ * this component only renders.
  */
 export function Composer({
   editor,
@@ -22,7 +23,12 @@ export function Composer({
   const promptColor = active ? theme.text.primary : theme.text.faint;
   const textColor = active ? theme.text.primary : theme.text.muted;
   return (
-    <Box paddingX={2} width={width}>
+    <Box
+      borderStyle="round"
+      borderColor={active ? theme.text.faint : theme.border.subtle}
+      paddingX={1}
+      width={width}
+    >
       <Text color={promptColor} bold>
         {glyphs.prompt}{' '}
       </Text>
@@ -43,12 +49,12 @@ export function Composer({
   );
 }
 
-/** Rows the composer needs at a given width (for viewport math). */
+/** Rows the composer needs at a given width, including its frame. */
 export function composerHeight(editor: EditorState, width: number): number {
-  const usable = Math.max(8, width - 4);
+  const usable = Math.max(8, width - 6);
   let rows = 0;
   for (const line of editor.text.split('\n')) {
     rows += Math.max(1, Math.ceil((line.length + 1) / usable));
   }
-  return Math.max(1, rows);
+  return Math.max(1, rows) + 2; // top + bottom border
 }

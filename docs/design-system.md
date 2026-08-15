@@ -274,10 +274,15 @@ panel says so: `○ codex   teammate  unavailable — <reason>`.
 ## Composer
 
 ```text
-  ❯ I'm thinking about replacing Postgres with▊
-    DynamoDB. What do you think?
+╭──────────────────────────────────────────────────╮
+│ ❯ I'm thinking about replacing Postgres with▊    │
+╰──────────────────────────────────────────────────╯
 ```
 
+- A rounded full-width frame separates input from output at a glance (a
+  deliberate exception to the no-boxes rule, alongside the consultation
+  tiles): border in `text.faint` when ready, `border.subtle` while a turn
+  runs.
 - `❯` bold in primary when focused/ready; faint while a turn runs.
 - Multiline: wrapped visually plus hard newlines.
 - Keys: `Enter` submit · `ctrl+j` (and `alt+enter` where the terminal sends

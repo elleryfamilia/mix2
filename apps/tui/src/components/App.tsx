@@ -7,6 +7,7 @@ import type { Line } from '../render/lines.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import { initialState, reduce, type AppState } from '../state/store.js';
 import { glyphs, spinnerFrames, teamSpinnerFrames, theme } from '../theme/theme.js';
+import { copyToClipboard } from '../util/clipboard.js';
 import { Composer, composerHeight } from './Composer.js';
 import {
   backspace,
@@ -86,8 +87,8 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
       : renderConversation(state, ctx);
   }, [state, width, spinner, teamGlyph]);
 
-  const composerRows = composerHeight(editor, width);
-  const chromeRows = 2 /* header */ + 1 /* status */ + 1 /* composer separator */;
+  const composerRows = composerHeight(editor, width); // includes its frame
+  const chromeRows = 2 /* header + spacing */ + 1 /* status */;
   const viewportRows = Math.max(3, size.rows - chromeRows - composerRows);
 
   const maxTop = Math.max(0, lines.length - viewportRows);
@@ -108,6 +109,18 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
     setScroll({ top: 0, stick: true });
   };
 
+  const copyLastAnswer = () => {
+    for (let i = state.items.length - 1; i >= 0; i--) {
+      const item = state.items[i];
+      if (item?.kind === 'final') {
+        copyToClipboard(item.text);
+        dispatch({ type: 'local-notice', text: 'answer copied to clipboard' });
+        return;
+      }
+    }
+    dispatch({ type: 'local-notice', text: 'nothing to copy yet' });
+  };
+
   const runSlashCommand = (text: string) => {
     const command = text.slice(1).split(/\s+/)[0]?.toLowerCase() ?? '';
     setEditor(emptyEditor);
@@ -117,12 +130,15 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
       case 'q':
         quit();
         return;
+      case 'copy':
+        copyLastAnswer();
+        return;
       case 'help':
         dispatch({
           type: 'local-notice',
           text:
-            'commands  /exit quit mix2 · /clear clear the conversation · /team toggle the team panel · /help this list\n' +
-            'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t team panel · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
+            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /team toggle the team panel · /help this list\n' +
+            'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t team panel · ctrl+y copy answer · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
         });
         return;
       case 'clear':
@@ -175,6 +191,10 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
     }
     if (key.ctrl && input === 't') {
       dispatch({ type: 'toggle-team-panel' });
+      return;
+    }
+    if (key.ctrl && input === 'y') {
+      copyLastAnswer();
       return;
     }
     if (key.escape) {
@@ -258,7 +278,6 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
           <LineView key={top + i} line={line} />
         ))}
       </Box>
-      <Text> </Text>
       <Composer editor={editor} active={!busy && state.phase === 'ready'} width={width} />
       <StatusBar
         state={state}

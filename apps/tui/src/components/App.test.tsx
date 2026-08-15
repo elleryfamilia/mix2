@@ -225,7 +225,7 @@ describe('App', () => {
     h.stdin.write('/help');
     await tickReact();
     // Slash hint appears while typing a command.
-    expect(h.lastFrame()).toContain('/exit · /clear · /team · /help');
+    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /team · /help');
     h.stdin.write('\r');
     await tickReact();
     expect(h.lastFrame()).toContain('commands  /exit');
@@ -287,6 +287,45 @@ describe('App', () => {
     expect(frame).not.toContain('**');
     expect(frame).toContain('Keep the Rust core.');
     expect(frame).toContain('1  First point');
+    h.unmount();
+  });
+
+  it('frames the composer so input is distinct from output', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('╭');
+    expect(frame).toContain('╰');
+    expect(frame).toContain('❯');
+    h.unmount();
+  });
+
+  it('ctrl+y and /copy copy the last answer', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    h.stdin.write('\x19'); // ctrl+y with nothing to copy
+    await tickReact();
+    expect(h.lastFrame()).toContain('nothing to copy yet');
+
+    h.emit({ type: 'message.user', turn_id: 't1', text: 'q' });
+    h.emit({
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: 'the answer',
+      consultations: 0,
+      duration_ms: 100,
+    });
+    h.emit({ type: 'turn.completed', turn_id: 't1', duration_ms: 100, consultations: 0 });
+    await tickReact();
+    h.stdin.write('\x19');
+    await tickReact();
+    expect(h.lastFrame()).toContain('answer copied to clipboard');
     h.unmount();
   });
 

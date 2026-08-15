@@ -114,7 +114,7 @@ export function StatusBar({
 }): React.JSX.Element {
   let { left, right } = statusSegments(state, spinner, teamGlyph);
   if (slashOpen) {
-    left = [{ text: '/exit · /clear · /team · /help', color: theme.text.muted }];
+    left = [{ text: '/exit · /clear · /copy · /team · /help', color: theme.text.muted }];
   }
   if (scrolledUp) {
     right = [{ text: '↓ pgdn latest · ', color: theme.text.faint }, ...right];

@@ -139,12 +139,20 @@ Precedence: CLI flags > user config > defaults.
 | `Ctrl+C` | cancel; twice quits |
 | `Ctrl+T` | toggle the team activity panel |
 | `PageUp` / `PageDown`, mouse wheel, `↑`/`↓` (empty composer) | scroll the conversation |
+| `Ctrl+Y` | copy the latest answer to the clipboard |
 | `Ctrl+Q` | quit |
 
 Slash commands: `/exit` (also `/quit`), `/clear` (reset the visible
-conversation), `/team` (toggle the team panel), `/help`. Typing `/` shows
-the available commands in the status bar. When you're scrolled up, the
-status bar shows `↓ pgdn latest`.
+conversation), `/copy` (copy the latest answer), `/team` (toggle the team
+panel), `/help`. Typing `/` shows the available commands in the status
+bar. When you're scrolled up, the status bar shows `↓ pgdn latest`.
+
+Copying: `Ctrl+Y` / `/copy` write the latest answer to your clipboard via
+OSC 52 (works over SSH) plus the platform clipboard tool. mix2 never
+captures the mouse, so your terminal's native drag-selection also works
+as usual — enable your terminal's "copy on select" setting (iTerm2,
+kitty, Ghostty, WezTerm, and alacritty all have one) if you want
+selections copied automatically.
 
 Answers render markdown natively: headings, bold/italic/inline code,
 numbered and bulleted lists with hanging indents, fenced code blocks with
