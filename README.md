@@ -1,141 +1,146 @@
 # mix2
 
-mix2 is a terminal interface for Claude Code and Codex that turns them
-into a small AI engineering team. Choose the lead, talk normally, and the
-lead decides when bringing in the other agent for a second opinion,
-challenge, or review would improve the result.
+**Claude Code and OpenAI Codex, on the same team. Yes, really.**
 
-You talk to one team, not two chat windows:
+mix2 is a terminal app that turns two rival frontier coding agents into
+one small engineering team. You ask one question; both investigate in
+parallel, independently; they compare notes, argue when they should, and
+hand you a single answer — signed by the team, not by either of them.
+
+Sworn competitors. Model colleagues.
 
 ```text
-$ mix2 --lead claude
-
-  mix2   Claude lead · Codex teammate                    ~/src/acme
-────────────────────────────────────────────────────────────────────────
+  mix2   ● Claude · ○ Codex                                  ~/src/acme
 
   ❯ I'm thinking about replacing Postgres with DynamoDB. What do you think?
 
-  ● Claude — investigating                                        ⠸ 0:14
+  ◐ Team — investigating                                          0:14
     ├ read src/db/session.ts
     └ search "SessionManager" — 14 matches
 
-  ↔ codex, your take?
+  ↔ second opinion  · 1 of 2
+
+  ╭ ● claude — researching ──── 0:31 ╮  ╭ ○ codex — reviewing ── ⠧ 0:29 ╮
+  │ └ read src/db/pool.ts            │  │ └ rg "JOIN" src/ · 41 matches  │
+  ╰──────────────────────────────────╯  ╰────────────────────────────────╯
 
   ⇄ conferred
-  ╭─  Claude  ⇄  Codex  ─────────────────────────────────────── 0:31 ─╮
-  │ ● independently evaluate DynamoDB for this repository             │
-  │ ○ your session queries lean on joins you'd have to denormalize    │
-  ╰────────────────────────────────────────────────────────────────────╯
+  ╭  Claude  ⇄  Codex  ─────────────────────────────────────── 0:31 ─╮
+  │ ● independently evaluate DynamoDB for this repository            │
+  │ ○ your session queries lean on joins you'd have to denormalize   │
+  ╰──────────────────────────────────────────────────────────────────╯
 
    Team  claude + codex
 
-  I wouldn't replace Postgres wholesale. …
+  We wouldn't replace Postgres wholesale. …
 ```
 
-## Why
+## Why two agents?
 
-Two frontier coding agents disagree in useful ways — but only if the
-second one forms its opinion independently, and only if someone owns the
-final answer. mix2 is not "run Claude and Codex at the same time": it is
-**adaptive collaboration**. You came for the team — if you wanted a single
-agent you would have opened it directly — so the lead consults its
-teammate on every substantive request by default, challenges material
-disagreements once, and gives you one coherent recommendation with the
-disagreement disclosed when it matters. Only no-ops (greetings,
-acknowledgements) and clarifying questions stay single-agent.
+Because one model agreeing with itself is not a review. Claude and Codex
+are trained by different labs, disagree in genuinely useful ways, and —
+crucially — mix2 keeps their opinions independent: the consulted agent
+gets a clean, unanchored brief and forms its own view before the two are
+reconciled. When they agree, you know something. When they don't, you
+*really* know something, and the answer says so instead of papering over
+it.
 
-## How it works
+This is not "run two chatbots side by side." One conversation, one
+answer, one team — with the argument happening where you can inspect it
+(`ctrl+t`) but never have to.
 
-- **Vague asks get scoped first.** For a broad request ("check for
-  security issues") the team replies once with what it would do — scope,
-  focus, deliverable — and waits for your go-ahead before both agents
-  spend minutes and tokens. Specific or detailed requests go straight to
-  work, no back-and-forth.
-- **The team writes plans, not code.** `.mix2/` in your project is the
-  team's scratchpad — the only place it can write (for Claude leads this
-  is enforced by path-scoped permissions, not just instructions). Ask for
-  an implementation and you get a reviewed, agreed plan in
-  `.mix2/<topic>-plan.md` plus the exact handoff command to run in
-  `claude` or `codex`, where you can steer and approve the execution.
-- **No project? Still useful.** In a directory that isn't a code project,
-  the team switches to general brainstorming — product ideas, business
-  viability, strategy — and keeps notes in `.mix2/` when worth keeping.
-- One agent (your choice via `--lead`) coordinates the team and owns the
-  conversation, running with its normal configuration plus appended mix2
-  role instructions. This is an internal mechanic: the UI never labels
-  anyone "lead", and every answer speaks as "we".
-- The coordinating agent gets one extra shell command,
-  **`mix2-consult`**: pipe a prompt in, get the teammate's independent
-  written assessment back. `mix2-consult start` returns a ticket
-  immediately so both agents research **concurrently**, and
-  `mix2-consult wait <ticket>` collects the result; the instructions
-  tell the coordinator to fire the consultation first and investigate in
-  parallel. It is used for anything substantive and skipped only for
-  no-ops; the Rust runtime decides *whether it is allowed* (budget,
-  recursion, availability).
-- Both roles are told to match depth to the question: quick takes for
-  conversational questions, deep review only when asked or when the
-  stakes clearly demand it.
-- Consultations run as **fresh teammate sessions** in the same project
-  directory, un-anchored by the lead's opinion.
-- If at least one consultation succeeded, the answer is attributed to
-  **Team**; otherwise to the lead alone. Attribution never lies.
-- The runtime enforces a per-turn consultation budget (default 2) and
-  refuses recursive consultation in code, not prompts.
+## What it's for
 
-Architecture details: [docs/architecture.md](docs/architecture.md).
-Visual system: [docs/design-system.md](docs/design-system.md).
+The team's sweet spot is **judgment**: brainstorming, architecture and
+design, code review, debugging discussions, tradeoffs, "is this idea any
+good." Ask it to *implement* something and it does everything except
+touch your code: both agents investigate, agree on an approach, and
+write a complete plan to `.mix2/<topic>-plan.md` — then hand you the
+exact `claude`/`codex` command to execute it interactively, where you
+can steer and approve. You leave with a plan two rivals signed off on,
+which is more than most human meetings produce.
+
+Run it outside a code project and the team notices, drops the code lens,
+and brainstorms whatever you bring: a product idea, business viability,
+strategy, a document.
+
+## How the collaboration actually works
+
+- **Consult-by-default.** Substantive questions engage both agents; only
+  greetings, meta-chat, and clarifying rounds stay single-agent.
+- **Vague asks get scoped first.** "Check for security issues" earns one
+  short reply — what we'd look at, how deep, what you'll get — before
+  both agents burn minutes and tokens. Specific prompts skip straight to
+  work.
+- **Concurrent, not sequential.** The consultation fires first
+  (`mix2-consult start` returns a ticket), both agents research in
+  parallel, then the results reconcile (`mix2-consult wait`).
+- **Budgeted.** At most 2 consultations per turn (configurable), enforced
+  atomically by the Rust runtime — not by asking the models nicely.
+  Recursion (the consulted agent consulting anyone) is refused in code.
+- **Effort-calibrated.** Every consultation brief carries a depth budget,
+  defaulting to "Quick take — 2 minutes, a handful of file reads."
+  Measured effect on the same question: 349s → 101s.
+- **Honest attribution.** Every answer speaks as "we", but the roster
+  suffix (`claude + codex`) appears only when both actually worked, and
+  disagreements are disclosed, never smoothed over. No visible boss:
+  which agent coordinates is a config detail the UI refuses to leak.
+
+## Architecture
 
 ```text
 Ink UI (TypeScript + React)  ↕ JSONL  Rust core  →  claude / codex CLIs
 ```
 
+The TypeScript layer renders; the Rust core owns everything real:
+process lifecycles (process-group kill on cancel — no orphaned agents),
+sessions, the consult server (Unix socket, with a file mailbox fallback
+for Codex's socket-blocking sandbox), budgets, and tolerant provider
+stream parsing. Details in [docs/architecture.md](docs/architecture.md);
+the visual system is specified in
+[docs/design-system.md](docs/design-system.md).
+
 ## Requirements
 
 - macOS or Linux
-- Node.js ≥ 22 and pnpm
-- Rust (stable) — for building the core
+- Node.js ≥ 22 and pnpm; Rust (stable) to build the core
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`), logged in
 - [Codex](https://developers.openai.com/codex/cli) CLI (`codex`), logged in
 
-Only the **lead** must be installed; a missing teammate degrades
-gracefully (the lead works solo and says so).
+Only one of the two is strictly required — a missing teammate degrades
+gracefully to solo work, and the team says so rather than pretending.
 
 ## Install & run
 
 ```bash
 pnpm install
 pnpm build          # release cargo build + TypeScript build
-
-# development (debug core, tsx runner):
-pnpm dev            # runs mix2 in the current directory
+pnpm dev            # development: run mix2 in the current directory
 ```
 
-The user-facing command is `mix2` (`apps/tui/dist/cli.js`, exposed as a
-bin). It launches the internal `mix2-core` runtime itself — users never
-interact with the core directly. In development the core is found in
-`target/{debug,release}` automatically; a packaged install can point at it
-with `MIX2_CORE_BIN`.
-
 ```bash
-mix2                    # lead from config, else claude
-mix2 --lead codex       # short: -l codex
+mix2                    # coordinator from config, else claude
+mix2 --lead codex       # let codex coordinate (the UI won't tell)
 mix2 --cwd ~/src/acme   # run against another project
 mix2 --debug            # verbose logs + IPC trace in /tmp
 ```
+
+The user-facing command is `mix2`; it launches the internal `mix2-core`
+runtime itself. In development the core is found in `target/{debug,release}`
+automatically (`MIX2_CORE_BIN` overrides).
 
 ## Configuration
 
 `~/.config/mix2/config.toml` (respects `$XDG_CONFIG_HOME`):
 
 ```toml
-lead = "claude"
+lead = "claude"                # who coordinates; the UI keeps it secret
 
 [collaboration]
 max_consults_per_turn = 2
 
 [claude]
-command = "claude"        # or a custom path
+command = "claude"             # or a custom path
 
 [codex]
 command = "codex"
@@ -143,7 +148,7 @@ command = "codex"
 
 Precedence: CLI flags > user config > defaults.
 
-## Keyboard
+## Using it
 
 | Key | Action |
 | --- | --- |
@@ -151,90 +156,77 @@ Precedence: CLI flags > user config > defaults.
 | `Ctrl+J` (or `Shift+Enter` where supported) | newline in the composer |
 | `Esc` | cancel the running turn / close the team panel |
 | `Ctrl+C` | cancel; twice quits |
-| `Ctrl+T` | toggle the team activity panel |
-| `PageUp` / `PageDown`, mouse wheel, `↑`/`↓` (empty composer) | scroll the conversation |
-| `Ctrl+Y` | copy the latest answer to the clipboard |
+| `Ctrl+T` | the team panel: who did what, the real exchange, timings |
+| `PageUp`/`PageDown`, mouse wheel, `↑`/`↓` (empty composer) | scroll |
+| `Ctrl+Y` | copy the latest answer |
 | `Ctrl+Q` | quit |
 
-While you read a long answer, the question it belongs to stays anchored
-under the header; it updates as you scroll through history, and clicking
-it jumps back to that prompt.
+Slash commands: `/exit` (also `/quit`), `/clear`, `/copy`, `/team`,
+`/help` — recognized commands light up as you type, and `/` surfaces the
+list in the status bar.
 
-Slash commands: `/exit` (also `/quit`), `/clear` (reset the visible
-conversation), `/copy` (copy the latest answer), `/team` (toggle the team
-panel), `/help`. Typing `/` shows the available commands in the status
-bar. When you're scrolled up, the status bar shows `↓ pgdn latest`.
-
-Copying: **drag-select any conversation text with the mouse and it is
-copied the moment you release** — mix2 renders its own selection
-highlight and writes the text via OSC 52 (works over SSH) plus the
-platform clipboard tool, with a "selection copied" confirmation in the
-status bar. `Ctrl+Y` / `/copy` grab the whole latest answer without
-touching the mouse. The wheel scrolls the conversation. For your
-terminal's *native* selection instead, hold Shift (Option in iTerm2)
-while dragging — the standard bypass for mouse-reporting apps.
-
-Answers render markdown natively: headings, bold/italic/inline code,
-numbered and bulleted lists with hanging indents, fenced code blocks with
-a hairline gutter, and blockquotes.
-
-The team panel (Ctrl+T) shows participants, timings, tool counts, the
-consultation exchange, and each teammate consultation's final response.
-Hidden model reasoning is never shown anywhere.
+Reading comfort is a feature: answers render markdown natively; the
+prompt you're reading the answer to stays anchored under the header
+(click it to jump back); drag-selecting any text copies it on release;
+when you're scrolled up the status bar shows `↓ pgdn latest`. While the
+team thinks, its `◐` mark rotates — when the mark stops, the team has.
 
 ## Security model
 
-- mix2 does not touch provider authentication; both CLIs use your
-  existing logins. Auth failures surface the provider's own message.
-- No permission bypass flags, ever. Claude Code runs with your normal
-  permission configuration plus exactly one added allowance:
-  `Bash(mix2-consult:*)`, so the lead can reach its teammate.
-- Codex as *teammate* runs with your default `codex exec` sandbox
-  (read-only). Codex as *lead* runs with Codex's standard
-  `workspace-write` sandbox (still no network) — its default read-only
-  sandbox blocks the consult channel entirely; this is the one deliberate
-  elevation, and it matches what interactive Codex does anyway.
-- Recursion (`teammate consulting anyone`) is refused by the runtime.
-- Runtime state in `/tmp/mix2/<session>/` contains no credentials and is
-  removed on exit. Debug logs never include prompts, file contents, or
-  teammate responses.
+- Your existing provider logins are used untouched; auth failures surface
+  the provider's own message. No permission bypass flags, ever.
+- The team's only write access is the `.mix2/` scratchpad. For Claude
+  coordinators that's *enforced* — the adapter grants exactly
+  `Bash(mix2-consult:*)`, `Write(.mix2/**)`, `Edit(.mix2/**)` on top of
+  your own Claude settings. Codex coordinators run Codex's standard
+  workspace-write sandbox (its read-only sandbox blocks the consult
+  channel entirely); there the rule is instruction-enforced, and this is
+  the one deliberate elevation.
+- Consulted agents are read-only reviewers: default Codex sandbox, no
+  added Claude permissions, no scratchpad pen.
+- Recursive consultation is refused by the runtime, in code.
+- Runtime state lives in `/tmp/mix2/<session>/` (socket + consult
+  mailbox, never credentials) and is removed on exit. Debug logs never
+  include prompts, file contents, or agent responses. Hidden model
+  reasoning is never shown anywhere — only what the agents actually
+  wrote to each other, behind `ctrl+t`.
 
 ## Provider requirements
 
 Verified against `claude` 2.1.x (`-p --output-format stream-json`,
 `--append-system-prompt`, `--resume`) and `codex-cli` 0.146.x
-(`exec --json`, `exec resume`, `-c developer_instructions=…`). Adapters
-parse tolerantly: unknown event types from newer CLIs are ignored, never
-fatal. If an installed CLI lacks a required capability, mix2 reports a
-clear compatibility error at startup.
+(`exec --json`, `exec resume`, `-c developer_instructions=…`). Parsers
+are tolerant: unknown events from newer CLIs are ignored, never fatal.
+Missing required capabilities produce a clear startup error.
 
-## Limitations (MVP)
+## Limitations
 
-- Two agents, one lead, one teammate; no third agent yet (the agent model
-  is designed so `--team codex,gemini` can exist later).
-- Teammate consultations are stateless between turns by design.
-- Analysis-first: the lead can edit files only where your provider
-  permissions already allow it; mix2 does not widen write access.
+- Two agents, one coordinator; the model is designed so
+  `--team codex,gemini` can exist someday, but it doesn't yet.
+- Consultations are stateless between turns by design — independence is
+  the point.
+- Execution belongs to the interactive CLIs; mix2 produces the plan.
 - Unix (macOS/Linux) only for now; process management is isolated so
-  Windows support can be added.
-- No slash commands, themes, or MCP integration yet.
+  Windows can be added.
 
 ## Development & testing
 
 ```bash
-pnpm check      # typecheck + vitest + cargo fmt/clippy/test
+pnpm check      # typecheck + vitest + cargo fmt/clippy/test — the gate
 cargo test      # Rust unit + integration suites
 pnpm test       # TUI suites (vitest + ink-testing-library)
 ```
 
-Automated tests never call real models: `tests/fixtures/fake-claude` and
-`fake-codex` are executable stand-ins that speak each provider's exact
-stream format and support scenarios (streaming, tool events, session
-resume, consultation, failure, rate limit, malformed output, slow runs,
-child-process trees for cancellation tests). Point mix2 at them with
-`MIX2_CLAUDE_CMD` / `MIX2_CODEX_CMD` — the integration suite drives
-the full stack this way, including both consult transports, budget
-enforcement, recursion refusal, and process-tree cancellation.
+No test spends real model quota: `tests/fixtures/fake-claude` and
+`fake-codex` are executable stand-ins speaking each provider's exact
+stream format, with scenarios for streaming, tool events, session
+resume, consultations (including concurrent start/wait and per-index
+prompts), failures, rate limits, malformed output, and child-process
+trees for cancellation tests. Point mix2 at them with
+`MIX2_CLAUDE_CMD` / `MIX2_CODEX_CMD` and the integration suite drives
+the entire stack — budgets, recursion refusal, both consult transports,
+and process-tree kills included.
 
-> mix2 is a working name; branding is confined to the crate/package
-> names and the header chip, so a rename stays shallow.
+---
+
+*mix2 is a working name. The rivalry, however, is real.*

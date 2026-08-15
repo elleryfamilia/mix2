@@ -117,7 +117,7 @@ describe('consultation activity', () => {
 
   it('announces the consultation and renders parallel tiles', () => {
     const lines = text(consulting());
-    expect(lines.some((l) => l.includes('↔ codex, your take?'))).toBe(true);
+    expect(lines.some((l) => l.includes('↔ second opinion'))).toBe(true);
     expect(lines.some((l) => l.includes('○ codex — reviewing'))).toBe(true);
     expect(lines.some((l) => l.includes('╭'))).toBe(true);
   });
@@ -176,9 +176,9 @@ describe('second consultation', () => {
     s = apply(s, { type: 'consult.completed', turn_id: 't1', agent: 'codex', index: 1, duration_ms: 20_000, text: 'first answer' });
     s = apply(s, { type: 'consult.started', turn_id: 't1', agent: 'codex', index: 2, max: 2, prompt: 'challenge: are you sure?' });
     const lines = text(s);
-    const first = lines.findIndex((l) => l.includes('↔ codex, your take?') && l.includes('1 of 2'));
+    const first = lines.findIndex((l) => l.includes('↔ second opinion') && l.includes('1 of 2'));
     const conferred = lines.findIndex((l) => l.includes('⇄ conferred'));
-    const second = lines.findIndex((l) => l.includes('↔ codex, one more thing') && l.includes('2 of 2'));
+    const second = lines.findIndex((l) => l.includes('↔ one more round') && l.includes('2 of 2'));
     const live = lines.findIndex((l) => l.includes('◐ Team — consulting'));
     expect(first).toBeGreaterThan(-1);
     expect(conferred).toBeGreaterThan(first);

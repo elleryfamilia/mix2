@@ -170,12 +170,16 @@ paragraph between activity blocks.
 **Consultation announced**
 
 ```text
-  ↔ codex, your take?  · 1 of 2
+  ↔ second opinion  · 1 of 2
+  ↔ one more round  · 2 of 2
 ```
 
-muted; the `↔` and phrase never mauve (no exchange yet). Never phrase
-this as "bringing in" — the teammate is a standing member of the team,
-present from the first keystroke; we are asking, not summoning.
+muted; the `↔` and phrase never mauve (no exchange yet). Two rules:
+never "bringing in" (the teammate is a standing member, present from the
+first keystroke), and never name who is asking whom — addressing one
+agent reveals the coordinator, and the team has no visible boss. The
+lead-side tile likewise says `thinking / mulling it over`, not "waiting
+on <teammate>". Who-asked-whom lives only in the ctrl+t team panel.
 
 **Parallel tiles (both agents privately working)** — side by side, each in
 its own agent color border:

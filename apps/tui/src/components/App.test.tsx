@@ -131,7 +131,7 @@ describe('App', () => {
       prompt: 'Independently evaluate the migration.',
     });
     await tickReact();
-    expect(h.lastFrame()).toContain('↔ codex, your take?');
+    expect(h.lastFrame()).toContain('↔ second opinion');
     expect(h.lastFrame()).toContain('codex reviewing');
 
     h.emit({

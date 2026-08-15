@@ -248,13 +248,13 @@ function consultLines(turn: ActiveTurn, consult: ConsultState, ctx: RenderContex
   const lines: Line[] = [];
   const teammateName = consult.agent;
 
-  // Not "bringing in" — the teammate was in the room all along; we're
-  // just asking them. A second consultation is a follow-up or challenge,
-  // and the copy says so.
-  const ask = consult.index > 1 ? 'one more thing' : 'your take?';
+  // Direction-neutral on purpose: naming who asks whom would reveal the
+  // coordinator, and the user talks to one team with no visible boss. A
+  // second round still reads as the challenge it is.
+  const ask = consult.index > 1 ? 'one more round' : 'second opinion';
   lines.push(
     pad(
-      span(`${glyphs.consult} ${teammateName}, ${ask}`, { color: theme.text.muted }),
+      span(`${glyphs.consult} ${ask}`, { color: theme.text.muted }),
       span(
         consult.max > 1 ? `  ${glyphs.dot} ${consult.index} of ${consult.max}` : '',
         { color: theme.text.faint },
@@ -336,9 +336,9 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
       .slice(-2)
       .map((l) => [span(l, { color: theme.text.muted, italic: true })]);
   } else {
-    leadStatus = 'waiting';
+    leadStatus = 'thinking';
     leadBody = [
-      [span(`${glyphs.treeEnd} waiting on ${teammate} ${ctx.spinner}`, { color: theme.text.faint })],
+      [span(`${glyphs.treeEnd} mulling it over ${ctx.spinner}`, { color: theme.text.faint })],
     ];
   }
 
