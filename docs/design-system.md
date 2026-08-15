@@ -16,6 +16,14 @@ derived from **Design Direction #4** of the shared Claude Design exploration
 Future contributors should not need to reverse-engineer any of this from
 components; when in doubt, this file is the authority for visuals.
 
+## Voice & tone
+
+Two rival labs' agents on one team is the product's standing joke — let
+microcopy and the agents' own voice carry it dryly ("sworn competitors,
+model colleagues"), at most one wink per screen or response, and never in
+serious moments: errors, security findings, cancellations. Clarity beats
+the joke everywhere they compete.
+
 ## Principles
 
 1. The two most important things on screen are always what the user asked
@@ -156,10 +164,12 @@ paragraph between activity blocks.
 **Consultation announced**
 
 ```text
-  ↔ bringing in codex — verify the fix approach
+  ↔ codex, your take?  · 1 of 2
 ```
 
-muted; the `↔` and phrase never mauve (no exchange yet).
+muted; the `↔` and phrase never mauve (no exchange yet). Never phrase
+this as "bringing in" — the teammate is a standing member of the team,
+present from the first keystroke; we are asking, not summoning.
 
 **Parallel tiles (both agents privately working)** — side by side, each in
 its own agent color border:

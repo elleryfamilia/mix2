@@ -117,7 +117,7 @@ describe('consultation activity', () => {
 
   it('announces the consultation and renders parallel tiles', () => {
     const lines = text(consulting());
-    expect(lines.some((l) => l.includes('↔ bringing in codex'))).toBe(true);
+    expect(lines.some((l) => l.includes('↔ codex, your take?'))).toBe(true);
     expect(lines.some((l) => l.includes('○ codex — reviewing'))).toBe(true);
     expect(lines.some((l) => l.includes('╭'))).toBe(true);
   });

@@ -248,9 +248,11 @@ function consultLines(turn: ActiveTurn, consult: ConsultState, ctx: RenderContex
   const lines: Line[] = [];
   const teammateName = consult.agent;
 
+  // Not "bringing in" — the teammate was in the room all along; we're
+  // just asking them.
   lines.push(
     pad(
-      span(`${glyphs.consult} bringing in ${teammateName}`, { color: theme.text.muted }),
+      span(`${glyphs.consult} ${teammateName}, your take?`, { color: theme.text.muted }),
       span(
         consult.max > 1 ? `  ${glyphs.dot} ${consult.index} of ${consult.max}` : '',
         { color: theme.text.faint },
@@ -514,15 +516,17 @@ function welcomeLines(state: AppState, ctx: RenderContext): Line[] {
   lines.push(pad(span('How can we help?', { color: theme.text.primary })));
   lines.push(BLANK);
   const body = project
-    ? 'You are talking to Claude and Codex as one team: substantive questions ' +
-      'engage both, working in parallel with independent takes. Best for ' +
-      'brainstorming, design, code review, debugging, and tradeoffs. Asked to ' +
-      'implement, the team writes the plan to .mix2/ instead of touching your ' +
-      'code — ready to hand to claude or codex to execute.'
+    ? 'You are talking to Claude and Codex as one team — sworn competitors, ' +
+      'model colleagues. Substantive questions engage both, working in ' +
+      'parallel with independent takes. Best for brainstorming, design, code ' +
+      'review, debugging, and tradeoffs. Asked to implement, the team writes ' +
+      'the plan to .mix2/ instead of touching your code — ready to hand to ' +
+      'claude or codex to execute.'
     : 'No project detected here, so bring anything: a product idea, business ' +
-      'viability, strategy, a document. You are talking to Claude and Codex as ' +
-      'one team — substantive questions engage both, working in parallel with ' +
-      'independent takes. Notes and plans worth keeping land in .mix2/.';
+      'viability, strategy, a document. You are talking to Claude and Codex ' +
+      'as one team — sworn competitors, model colleagues — and substantive ' +
+      'questions engage both in parallel with independent takes. Notes and ' +
+      'plans worth keeping land in .mix2/.';
   for (const line of wrapText(body, width)) {
     lines.push(pad(span(line, { color: theme.text.muted })));
   }

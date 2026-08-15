@@ -19,7 +19,7 @@ $ mix2 --lead claude
     ├ read src/db/session.ts
     └ search "SessionManager" — 14 matches
 
-  ↔ bringing in codex
+  ↔ codex, your take?
 
   ⇄ conferred
   ╭─  Claude  ⇄  Codex  ─────────────────────────────────────── 0:31 ─╮
