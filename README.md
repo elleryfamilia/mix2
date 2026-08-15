@@ -9,31 +9,13 @@ hand you a single answer — signed by the team, not by either of them.
 
 Sworn competitors. Model colleagues.
 
-```text
-  mix2   ● Claude · ○ Codex                                  ~/src/acme
+<p align="center">
+  <img src="docs/assets/hero.svg" width="780" alt="A mix2 session: one question; the team investigates; Claude and Codex work in parallel tiles; they confer; one Team answer with the disagreement disclosed.">
+</p>
 
-  ❯ I'm thinking about replacing Postgres with DynamoDB. What do you think?
-
-  ◐ Team — investigating                                          0:14
-    ├ read src/db/session.ts
-    └ search "SessionManager" — 14 matches
-
-  ↔ second opinion  · 1 of 2
-
-  ╭ ● claude — researching ──── 0:31 ╮  ╭ ○ codex — reviewing ── ⠧ 0:29 ╮
-  │ └ read src/db/pool.ts            │  │ └ rg "JOIN" src/ · 41 matches  │
-  ╰──────────────────────────────────╯  ╰────────────────────────────────╯
-
-  ⇄ conferred
-  ╭  Claude  ⇄  Codex  ─────────────────────────────────────── 0:31 ─╮
-  │ ● independently evaluate DynamoDB for this repository            │
-  │ ○ your session queries lean on joins you'd have to denormalize   │
-  ╰──────────────────────────────────────────────────────────────────╯
-
-   Team  claude + codex
-
-  We wouldn't replace Postgres wholesale. …
-```
+One question in, one team answer out — with both agents' parallel work,
+the moment they confer, and any disagreement visible along the way,
+exactly as the app renders it.
 
 ## Why two agents?
 
@@ -81,6 +63,17 @@ strategy, a document.
 - **Effort-calibrated.** Every consultation brief carries a depth budget,
   defaulting to "Quick take — 2 minutes, a handful of file reads."
   Measured effect on the same question: 349s → 101s.
+- **Parallelism today.** Concurrency lives at three layers, all bounded.
+  Both agents work simultaneously on every consultation; the coordinator
+  can hold two consultations in flight at once (the same per-turn budget
+  covers them); and each agent keeps its provider's own subagent
+  machinery — a Claude coordinator can fan out Claude Code subagents for
+  parallel reads inside its own sandbox, invisible to your conversation.
+  mix2 deliberately adds no auto-spawning fleet on top: independent
+  judgment between two different models is the product, coverage fan-out
+  already belongs to the providers, and every extra agent is your money.
+  If broader fan-out earns its keep, it will arrive as an explicit,
+  budgeted verb — not a surprise.
 - **Honest attribution.** Every answer speaks as "we", but the roster
   suffix (`claude + codex`) appears only when both actually worked, and
   disagreements are disclosed, never smoothed over. No visible boss:

@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="668" viewBox="0 0 880 668" xml:space="preserve" role="img" aria-label="mix2 terminal session: one question, both agents investigate in parallel, confer, and answer as one team">
+  <style>
+    text { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-size: 13px; }
+    .b { font-weight: 700; }
+    .pri { fill: #d6d3dc; }
+    .sec { fill: #a9a5b2; }
+    .mut { fill: #8d8896; }
+    .fnt { fill: #514d59; }
+    .cla { fill: #e0a06a; }
+    .cdx { fill: #8ab8d6; }
+    .tm  { fill: #b795e6; }
+    .ital { font-style: italic; }
+  </style>
+
+  <!-- window -->
+  <rect x="8" y="8" width="864" height="652" rx="12" fill="#17161b" stroke="#2a2830"/>
+  <circle cx="30" cy="30" r="5.5" fill="#ff5f57"/>
+  <circle cx="50" cy="30" r="5.5" fill="#febc2e"/>
+  <circle cx="70" cy="30" r="5.5" fill="#28c840"/>
+
+  <!-- header bar -->
+  <rect x="9" y="46" width="862" height="28" fill="#211f27"/>
+  <rect x="24" y="52" width="50" height="17" rx="3" fill="#d6d3dc"/>
+  <text x="49" y="65" text-anchor="middle" class="b" fill="#17161b">mix2</text>
+  <text x="88" y="65"><tspan class="cla">●</tspan><tspan class="mut"> Claude · </tspan><tspan class="cdx">○</tspan><tspan class="mut"> Codex</tspan></text>
+  <text x="856" y="65" text-anchor="end" class="fnt">~/src/acme</text>
+
+  <!-- user prompt -->
+  <text x="32" y="102"><tspan class="pri b">❯</tspan><tspan class="pri"> should we move sessions from Postgres to DynamoDB?</tspan></text>
+
+  <!-- team working -->
+  <text x="32" y="134"><tspan class="tm">◐</tspan><tspan class="tm b"> Team</tspan><tspan class="mut"> — investigating</tspan></text>
+  <text x="856" y="134" text-anchor="end" class="fnt">0:14</text>
+  <text x="48" y="154" class="fnt">├ read src/db/session.ts</text>
+  <text x="48" y="174" class="fnt">└ search "SessionManager" · 14 matches</text>
+
+  <!-- consultation announced -->
+  <text x="32" y="206"><tspan class="mut">↔ second opinion</tspan><tspan class="fnt">  · 1 of 2</tspan></text>
+
+  <!-- parallel tiles -->
+  <rect x="32" y="220" width="394" height="66" rx="8" fill="none" stroke="#e0a06a" stroke-opacity="0.5"/>
+  <text x="46" y="242"><tspan class="cla">●</tspan><tspan class="cla b"> claude — researching</tspan></text>
+  <text x="412" y="242" text-anchor="end" class="fnt">0:31</text>
+  <text x="46" y="266" class="fnt">└ read src/db/pool.ts</text>
+
+  <rect x="446" y="220" width="394" height="66" rx="8" fill="none" stroke="#8ab8d6" stroke-opacity="0.5"/>
+  <text x="460" y="242"><tspan class="cdx">○</tspan><tspan class="cdx b"> codex — reviewing</tspan></text>
+  <text x="826" y="242" text-anchor="end" class="fnt">⠧ 0:29</text>
+  <text x="460" y="266" class="fnt">└ rg "JOIN" src · 41 matches</text>
+
+  <!-- conferred -->
+  <text x="32" y="318" class="tm">⇄ conferred</text>
+  <rect x="32" y="330" width="808" height="86" rx="8" fill="none" stroke="#b795e6" stroke-opacity="0.55"/>
+  <rect x="46" y="342" width="58" height="17" rx="3" fill="#e0a06a"/>
+  <text x="75" y="355" text-anchor="middle" class="b" fill="#1c1208">Claude</text>
+  <text x="112" y="355" class="tm b">⇄</text>
+  <rect x="124" y="342" width="52" height="17" rx="3" fill="#8ab8d6"/>
+  <text x="150" y="355" text-anchor="middle" class="b" fill="#0c141c">Codex</text>
+  <text x="826" y="355" text-anchor="end" class="fnt">0:31</text>
+  <text x="46" y="380"><tspan class="cla">●</tspan><tspan class="sec"> independently evaluate DynamoDB for this repository</tspan></text>
+  <text x="46" y="402"><tspan class="cdx">○</tspan><tspan class="sec"> your session reads lean on joins — denormalizing costs more than it saves</tspan></text>
+
+  <!-- team answer -->
+  <rect x="32" y="436" width="46" height="17" rx="3" fill="#b795e6"/>
+  <text x="55" y="449" text-anchor="middle" class="b" fill="#160e20">Team</text>
+  <text x="88" y="449" class="fnt">claude + codex</text>
+  <text x="32" y="480" class="pri">We wouldn't replace Postgres wholesale. Keep it as the source of truth,</text>
+  <text x="32" y="500" class="pri">cache the hot session reads, and revisit once query patterns settle.</text>
+  <text x="32" y="530"><tspan class="mut">1</tspan><tspan class="pri">  Keep Postgres as the source of truth</tspan></text>
+  <text x="32" y="550"><tspan class="mut">2</tspan><tspan class="pri">  Cache hot-path session reads</tspan></text>
+  <text x="32" y="578"><tspan class="tm">△</tspan><tspan class="mut"> we split on TTL ownership — the exchange is behind</tspan><tspan class="fnt"> ctrl+t</tspan></text>
+
+  <!-- composer -->
+  <rect x="24" y="594" width="832" height="30" rx="8" fill="none" stroke="#514d59"/>
+  <text x="40" y="614"><tspan class="pri b">❯</tspan></text>
+  <rect x="56" y="601" width="8" height="16" fill="#d6d3dc"/>
+
+  <!-- status bar -->
+  <rect x="9" y="632" width="862" height="27" fill="#211f27"/>
+  <path d="M9 632 h862 v15 a12 12 0 0 1 -12 12 H21 a12 12 0 0 1 -12 -12 z" fill="#211f27"/>
+  <text x="24" y="650"><tspan class="mut">done in 1:42 · </tspan><tspan class="tm">⇄</tspan><tspan class="mut"> 1 consultation</tspan></text>
+  <text x="856" y="650" text-anchor="end" class="fnt">ctrl+t activity</text>
+</svg>
