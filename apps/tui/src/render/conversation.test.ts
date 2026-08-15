@@ -168,6 +168,25 @@ describe('consultation activity', () => {
   });
 });
 
+describe('second consultation', () => {
+  it('renders the follow-up ask and both consult blocks in order', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'decide' }, T);
+    s = apply(s, { type: 'consult.started', turn_id: 't1', agent: 'codex', index: 1, max: 2, prompt: 'first ask' });
+    s = apply(s, { type: 'consult.completed', turn_id: 't1', agent: 'codex', index: 1, duration_ms: 20_000, text: 'first answer' });
+    s = apply(s, { type: 'consult.started', turn_id: 't1', agent: 'codex', index: 2, max: 2, prompt: 'challenge: are you sure?' });
+    const lines = text(s);
+    const first = lines.findIndex((l) => l.includes('↔ codex, your take?') && l.includes('1 of 2'));
+    const conferred = lines.findIndex((l) => l.includes('⇄ conferred'));
+    const second = lines.findIndex((l) => l.includes('↔ codex, one more thing') && l.includes('2 of 2'));
+    const live = lines.findIndex((l) => l.includes('◐ Team — consulting'));
+    expect(first).toBeGreaterThan(-1);
+    expect(conferred).toBeGreaterThan(first);
+    expect(second).toBeGreaterThan(conferred);
+    expect(live).toBeGreaterThan(second);
+  });
+});
+
 describe('synthesis stays visibly alive', () => {
   it('keeps the live team line below the conferred tile while reconciling', () => {
     let s = apply(initialState, ready);

@@ -144,7 +144,11 @@ def main():
     elif "consult" in scenarios:
         n_consults = 1
     for i in range(n_consults):
-        consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Independently evaluate the plan."
+        consult_prompt = (
+            _extract(prompt, f"CONSULT_PROMPT{i + 1}:")
+            or _extract(prompt, "CONSULT_PROMPT:")
+            or "Independently evaluate the plan."
+        )
         try:
             proc = subprocess.run(
                 ["mix2-consult"], input=consult_prompt, text=True,

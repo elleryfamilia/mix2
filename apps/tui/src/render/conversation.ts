@@ -249,10 +249,12 @@ function consultLines(turn: ActiveTurn, consult: ConsultState, ctx: RenderContex
   const teammateName = consult.agent;
 
   // Not "bringing in" — the teammate was in the room all along; we're
-  // just asking them.
+  // just asking them. A second consultation is a follow-up or challenge,
+  // and the copy says so.
+  const ask = consult.index > 1 ? 'one more thing' : 'your take?';
   lines.push(
     pad(
-      span(`${glyphs.consult} ${teammateName}, your take?`, { color: theme.text.muted }),
+      span(`${glyphs.consult} ${teammateName}, ${ask}`, { color: theme.text.muted }),
       span(
         consult.max > 1 ? `  ${glyphs.dot} ${consult.index} of ${consult.max}` : '',
         { color: theme.text.faint },
