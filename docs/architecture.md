@@ -174,6 +174,11 @@ behind the same interface.
 
 ## Failure model
 
+- Default coordinator missing or signed out → mix2 silently coordinates
+  with the other agent when it's ready (the UI shows no boss, so nothing
+  visible changes); an *explicitly* chosen coordinator that isn't ready
+  fails at startup with install/sign-in instructions, as does having
+  neither agent usable.
 - Teammate missing/rate-limited/crashed → the *lead* receives a clear
   message from `mix2-consult` and continues; the turn still completes,
   attributed to the lead alone.

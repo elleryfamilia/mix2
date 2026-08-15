@@ -159,36 +159,91 @@ impl Runtime {
             probe(Arc::clone(&teammate_agent), 6)
         );
 
-        let lead_version = match lead_version {
-            Ok(Ok(v)) => v,
-            Ok(Err(_)) | Err(_) => anyhow::bail!("{}", install_instructions(config.lead)),
+        let mut lead_installed = match lead_version {
+            Ok(Ok(v)) => Some(v.raw),
+            _ => None,
+        };
+        let mut teammate_installed = match teammate_version {
+            Ok(Ok(v)) => Some(v.raw),
+            _ => None,
         };
 
-        let (teammate_available, teammate_version_str, teammate_reason) = match teammate_version {
-            Ok(Ok(v)) => (true, Some(v.raw), None),
-            Ok(Err(_)) | Err(_) => (
-                false,
-                None,
-                Some(format!("not installed — {}", install_hint(config.teammate))),
-            ),
-        };
-
-        // Sign-in probes are local and quota-free; an unauthenticated lead
-        // is fatal with instructions, an unauthenticated teammate degrades.
-        let (lead_auth, teammate_auth) =
+        // Sign-in probes are local and quota-free.
+        let (mut lead_auth, mut teammate_auth) =
             tokio::join!(lead_agent.auth_status(), teammate_agent.auth_status());
-        if lead_auth == AuthStatus::Unauthenticated {
-            anyhow::bail!("{}", login_instructions(config.lead));
+
+        fn ready_for_duty(installed: &Option<String>, auth: AuthStatus) -> bool {
+            installed.is_some() && auth != AuthStatus::Unauthenticated
         }
-        let (teammate_available, teammate_reason, teammate_auth) =
-            if teammate_available && teammate_auth == AuthStatus::Unauthenticated {
-                (
+
+        // The coordinator is an internal mechanic the UI never reveals, so
+        // when the *default* lead isn't ready but the other agent is,
+        // coordinate with the other agent instead of failing. An explicitly
+        // chosen lead (--lead / config) still fails loudly — the user asked
+        // for that agent specifically.
+        let mut config = config;
+        let mut lead_agent = lead_agent;
+        let mut teammate_agent = teammate_agent;
+        if !ready_for_duty(&lead_installed, lead_auth)
+            && !config.lead_explicit
+            && ready_for_duty(&teammate_installed, teammate_auth)
+        {
+            std::mem::swap(&mut config.lead, &mut config.teammate);
+            std::mem::swap(&mut lead_agent, &mut teammate_agent);
+            std::mem::swap(&mut lead_installed, &mut teammate_installed);
+            std::mem::swap(&mut lead_auth, &mut teammate_auth);
+        }
+
+        if !ready_for_duty(&lead_installed, lead_auth) {
+            if config.lead_explicit {
+                if lead_installed.is_none() {
+                    anyhow::bail!("{}", install_instructions(config.lead));
+                }
+                anyhow::bail!("{}", login_instructions(config.lead));
+            }
+            // Neither agent can coordinate: say exactly what fixes each.
+            let status = |kind: AgentKind, installed: &Option<String>, auth: AuthStatus| {
+                if installed.is_none() {
+                    format!(
+                        "{} — not installed: {}",
+                        kind.display_name(),
+                        install_hint(kind)
+                    )
+                } else if auth == AuthStatus::Unauthenticated {
+                    format!(
+                        "{} — not signed in: {}",
+                        kind.display_name(),
+                        login_hint(kind)
+                    )
+                } else {
+                    format!("{} — ready", kind.display_name())
+                }
+            };
+            anyhow::bail!(
+                "mix2 needs at least one agent installed and signed in.\n{}\n{}",
+                status(config.lead, &lead_installed, lead_auth),
+                status(config.teammate, &teammate_installed, teammate_auth),
+            );
+        }
+        let lead_version = lead_installed
+            .clone()
+            .expect("lead ready implies installed");
+
+        let (teammate_available, teammate_version_str, teammate_reason) =
+            match (&teammate_installed, teammate_auth) {
+                (Some(v), auth) if auth != AuthStatus::Unauthenticated => {
+                    (true, Some(v.clone()), None)
+                }
+                (Some(v), _) => (
                     false,
+                    Some(v.clone()),
                     Some(format!("not signed in — {}", login_hint(config.teammate))),
-                    AuthStatus::Unauthenticated,
-                )
-            } else {
-                (teammate_available, teammate_reason, teammate_auth)
+                ),
+                (None, _) => (
+                    false,
+                    None,
+                    Some(format!("not installed — {}", install_hint(config.teammate))),
+                ),
             };
 
         let session = Mix2Session::new(config.lead, cwd);
@@ -226,7 +281,7 @@ impl Runtime {
         let lead_info = AgentInfo {
             kind: config.lead,
             name: config.lead.display_name().to_owned(),
-            version: Some(lead_version.raw),
+            version: Some(lead_version),
             available: true,
             reason: None,
             authenticated: auth_flag(lead_auth),

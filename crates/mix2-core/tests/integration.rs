@@ -22,7 +22,9 @@ struct Core {
 }
 
 struct CoreOptions {
-    lead: &'static str,
+    /// None omits `lead` from initialize (the built-in default, eligible
+    /// for coordinator fallback); Some is an explicit user choice.
+    lead: Option<&'static str>,
     claude_cmd: Option<String>,
     codex_cmd: Option<String>,
     max_consults: Option<u32>,
@@ -32,7 +34,7 @@ struct CoreOptions {
 impl Default for CoreOptions {
     fn default() -> Self {
         Self {
-            lead: "claude",
+            lead: Some("claude"),
             claude_cmd: Some(fixtures_dir().join("fake-claude").display().to_string()),
             codex_cmd: Some(fixtures_dir().join("fake-codex").display().to_string()),
             max_consults: None,
@@ -93,10 +95,14 @@ impl Core {
             stdin,
             events: rx,
         };
-        core.send(&serde_json::json!({
-            "type": "initialize", "protocol": 1, "lead": options.lead,
+        let mut init = serde_json::json!({
+            "type": "initialize", "protocol": 1,
             "cwd": std::env::current_dir().unwrap().display().to_string(),
-        }));
+        });
+        if let Some(lead) = options.lead {
+            init["lead"] = serde_json::json!(lead);
+        }
+        core.send(&init);
         core
     }
 
@@ -226,7 +232,7 @@ fn claude_lead_consults_codex_and_answer_is_team() {
 #[test]
 fn codex_lead_consults_claude() {
     let mut core = Core::start(CoreOptions {
-        lead: "codex",
+        lead: Some("codex"),
         ..CoreOptions::default()
     });
     let startup = core.events_until("ready", LONG);
@@ -564,6 +570,61 @@ fn set_model_applies_to_lead_and_teammate() {
         .as_str()
         .unwrap()
         .contains("[model:default]"));
+}
+
+#[test]
+fn default_coordinator_falls_back_to_the_available_agent() {
+    // No explicit lead; Claude (the default) is missing, Codex is fine.
+    // The team should quietly coordinate with Codex and still work solo.
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        claude_cmd: Some("/nonexistent/claude-binary".into()),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["lead"]["kind"], "codex");
+    assert_eq!(ready["lead"]["available"], true);
+    assert_eq!(ready["teammate"]["kind"], "claude");
+    assert_eq!(ready["teammate"]["available"], false);
+
+    core.submit("t1", "hi");
+    let events = core.events_until("turn.completed", LONG);
+    let final_msg = find(&events, "message.final").unwrap();
+    assert_eq!(final_msg["speaker"], "codex");
+    assert!(final_msg["text"]
+        .as_str()
+        .unwrap()
+        .contains("fake-codex reply"));
+}
+
+#[test]
+fn signed_out_default_coordinator_falls_back_too() {
+    let core = Core::start(CoreOptions {
+        lead: None,
+        env: vec![("FAKE_CLAUDE_LOGGED_OUT", "1")],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["lead"]["kind"], "codex");
+    let reason = ready["teammate"]["reason"].as_str().unwrap();
+    assert!(reason.contains("not signed in"), "got: {reason}");
+}
+
+#[test]
+fn neither_agent_ready_is_fatal_with_both_fixes() {
+    let core = Core::start(CoreOptions {
+        lead: None,
+        claude_cmd: Some("/nonexistent/claude-binary".into()),
+        codex_cmd: Some("/nonexistent/codex-binary".into()),
+        ..CoreOptions::default()
+    });
+    let events = core.events_until("fatal", LONG);
+    let message = find(&events, "fatal").unwrap()["message"].as_str().unwrap();
+    assert!(message.contains("at least one agent"), "got: {message}");
+    assert!(message.contains("Claude"), "got: {message}");
+    assert!(message.contains("Codex"), "got: {message}");
 }
 
 #[test]

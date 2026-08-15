@@ -113,14 +113,14 @@ the visual system is specified in
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`), logged in
 - [Codex](https://developers.openai.com/codex/cli) CLI (`codex`), logged in
 
-Only one of the two is strictly required — a missing teammate degrades
-gracefully to solo work, and the team says so rather than pretending.
-
-mix2 checks both at startup — installed *and* signed in (via each CLI's
-own quota-free status command). A missing or signed-out coordinator gets
-a clear "install this / run `codex login` / then come back" screen
-instead of a cryptic mid-turn failure; a signed-out teammate just shows
-as offline with the same fix-it hint.
+Only one of the two is required. mix2 checks both at startup — installed
+*and* signed in, via each CLI's own quota-free status command — and
+coordinates with whichever agent is ready: if only one of the two is
+usable, it runs the show solo and the other shows as offline with a
+fix-it hint ("run `codex login`, then restart mix2"). You only get a
+blocking screen in two cases: you *explicitly* picked a coordinator
+(`--lead` or config) that isn't ready, or neither agent is — and either
+way it tells you exactly what to install or sign in to, then come back.
 
 ## From source
 
