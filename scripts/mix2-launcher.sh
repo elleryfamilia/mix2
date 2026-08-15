@@ -1,9 +1,19 @@
 #!/bin/sh
 # mix2 launcher — shipped in release tarballs next to mix2.bundle.mjs,
-# mix2-core, and mix2-consult.
+# mix2-core, and mix2-consult. Resolves symlinks so `~/.local/bin/mix2 ->
+# ~/.local/share/mix2/mix2` finds its siblings.
 set -e
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE="$0"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$DIR/$SOURCE" ;;
+  esac
+done
+DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "mix2 needs Node.js >= 22 (https://nodejs.org). Install it, then run mix2 again." >&2
