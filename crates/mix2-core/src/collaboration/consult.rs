@@ -123,6 +123,8 @@ struct Shared {
     /// PATH too — so a misbehaving teammate that tries to consult receives
     /// the explicit refusal instead of a confusing "command not found".
     helper_dir: Option<PathBuf>,
+    /// Whether the cwd looks like a software project (teammate context).
+    project: bool,
     updates: mpsc::Sender<ConsultUpdate>,
     /// In-flight `start`ed consultations by ticket. Each holds a watch
     /// channel that flips from None to the final response. Cleared per turn.
@@ -148,6 +150,7 @@ impl ConsultServer {
         runtime_dir: PathBuf,
         session_id: Uuid,
         helper_dir: Option<PathBuf>,
+        project: bool,
         updates: mpsc::Sender<ConsultUpdate>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(runtime_dir.join(FILE_DIR_NAME))
@@ -163,6 +166,7 @@ impl ConsultServer {
             runtime_dir: runtime_dir.clone(),
             session_id,
             helper_dir,
+            project,
             updates,
             pending: tokio::sync::Mutex::new(HashMap::new()),
             active: RwLock::new(None),
@@ -467,7 +471,11 @@ async fn run_consultation(
         cwd: shared.cwd.clone(),
         role: AgentRole::Teammate,
         turn_id,
-        instructions: prompts::teammate_instructions(shared.lead_kind, shared.teammate_kind),
+        instructions: prompts::teammate_instructions(
+            shared.lead_kind,
+            shared.teammate_kind,
+            shared.project,
+        ),
         env,
         path_prepend: shared.helper_dir.clone(),
         runtime_dir: None,

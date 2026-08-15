@@ -28,6 +28,27 @@ work — by running the `mix2-consult` command. The runtime's job is to
 keep the collaboration *bounded* (budget, depth, cancellation), not to
 make the call.
 
+## The scratchpad model
+
+The team's durable output lives in `.mix2/` inside the working directory
+— implementation plans, design notes, review findings. It is the only
+place the team writes. For Claude leads this is enforced, not promised:
+the adapter grants `Write(.mix2/**)` / `Edit(.mix2/**)` and nothing else,
+so project files stay untouchable even if the model tried. Codex leads
+run in the workspace-write sandbox (the consult channel requires it), so
+for them the same rule is instruction-enforced and disclosed in the
+README. Teammates never write; their assessment is their reply. Asked to
+implement, the team reframes instead of refusing: it produces the plan in
+`.mix2/` and hands the user the exact `claude`/`codex` command to execute
+it interactively, where steering and approval exist.
+
+Before both agents commit to a broad request, the lead is instructed to
+qualify it once — scope, focus, deliverable, at most three questions —
+because a consultation costs real minutes. Specific requests skip the
+round trip. The core also reports whether the cwd looks like a software
+project (git or a build manifest); when it doesn't, both role prompts
+drop the code lens and treat the session as general brainstorming.
+
 The "lead" is deliberately invisible to the user: the UI shows one team
 roster, every answer carries the Team chip, and the role instructions
 require the first-person-plural voice. Which agent coordinates is a config

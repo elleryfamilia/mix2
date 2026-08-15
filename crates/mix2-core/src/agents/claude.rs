@@ -15,8 +15,9 @@ use tokio_util::sync::CancellationToken;
 ///          --append-system-prompt <role instructions> [--resume <session-id>]
 /// with the prompt on stdin. `--append-system-prompt` layers mix2's role
 /// instructions on top of Claude Code's own system prompt instead of
-/// replacing it, and `--allowedTools Bash(mix2-consult:*)` permits exactly
-/// the consult helper without widening anything else.
+/// replacing it, and `--allowedTools` permits exactly the consult helper
+/// and scratchpad-scoped writes (`.mix2/**`) without widening anything
+/// else.
 pub struct ClaudeAgent {
     pub command: String,
 }
@@ -39,11 +40,15 @@ impl ClaudeAgent {
             request.instructions.clone(),
         ];
         if request.role == AgentRole::Lead {
-            // The one targeted permission mix2 needs: the lead must be able
-            // to run the consult helper. Everything else follows the user's
-            // own Claude Code permission configuration.
+            // Targeted permissions only: the consult helper, plus writes
+            // scoped to the team scratchpad (`.mix2/`) so the lead can leave
+            // plans and notes without gaining any access to project files.
+            // Everything else follows the user's own Claude Code permission
+            // configuration.
             args.push("--allowedTools".into());
             args.push("Bash(mix2-consult:*)".into());
+            args.push("Write(.mix2/**)".into());
+            args.push("Edit(.mix2/**)".into());
         }
         if let Some(id) = resume {
             args.push("--resume".into());

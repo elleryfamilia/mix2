@@ -37,11 +37,18 @@ def main():
 
     resume_id = None
     system_prompt = ""
+    allowed = []
     for i, a in enumerate(args):
         if a == "--resume" and i + 1 < len(args):
             resume_id = args[i + 1]
         if a == "--append-system-prompt" and i + 1 < len(args):
             system_prompt = args[i + 1]
+        if a == "--allowedTools":
+            j = i + 1
+            while j < len(args) and not args[j].startswith("--"):
+                allowed.append(args[j])
+                j += 1
+    scratchpad = "rw" if any("mix2/**" in a for a in allowed) else "ro"
 
     prompt = sys.stdin.read()
     scenarios = _leading_scenarios(prompt)
@@ -160,7 +167,7 @@ def main():
     else:
         text = (
             f"fake-claude reply [session:{session_id}] [resumed:{resumed}] [role:{role}] "
-            + " ".join(consult_notes)
+            f"[scratchpad:{scratchpad}] " + " ".join(consult_notes)
         ).strip()
 
     for chunk in (text[i:i + 24] for i in range(0, len(text), 24)):

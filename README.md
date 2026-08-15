@@ -46,6 +46,20 @@ acknowledgements) and clarifying questions stay single-agent.
 
 ## How it works
 
+- **Vague asks get scoped first.** For a broad request ("check for
+  security issues") the team replies once with what it would do — scope,
+  focus, deliverable — and waits for your go-ahead before both agents
+  spend minutes and tokens. Specific or detailed requests go straight to
+  work, no back-and-forth.
+- **The team writes plans, not code.** `.mix2/` in your project is the
+  team's scratchpad — the only place it can write (for Claude leads this
+  is enforced by path-scoped permissions, not just instructions). Ask for
+  an implementation and you get a reviewed, agreed plan in
+  `.mix2/<topic>-plan.md` plus the exact handoff command to run in
+  `claude` or `codex`, where you can steer and approve the execution.
+- **No project? Still useful.** In a directory that isn't a code project,
+  the team switches to general brainstorming — product ideas, business
+  viability, strategy — and keeps notes in `.mix2/` when worth keeping.
 - One agent (your choice via `--lead`) coordinates the team and owns the
   conversation, running with its normal configuration plus appended mix2
   role instructions. This is an internal mechanic: the UI never labels

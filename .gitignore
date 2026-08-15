@@ -7,3 +7,4 @@ dist/
 .pnpm-store/
 CLAUDE.local.md
 .loadout/
+.mix2/

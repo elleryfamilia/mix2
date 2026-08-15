@@ -2,7 +2,12 @@ use crate::agents::AgentKind;
 
 /// Instructions appended to the lead agent's own system prompt. The lead —
 /// not a classifier in front of it — decides when consulting is worthwhile.
-pub fn lead_instructions(lead: AgentKind, teammate: AgentKind, teammate_available: bool) -> String {
+pub fn lead_instructions(
+    lead: AgentKind,
+    teammate: AgentKind,
+    teammate_available: bool,
+    project: bool,
+) -> String {
     let lead_name = lead.display_name();
     let teammate_name = teammate.display_name();
     let availability = if teammate_available {
@@ -13,6 +18,16 @@ pub fn lead_instructions(lead: AgentKind, teammate: AgentKind, teammate_availabl
              `mix2-consult` will return an error; do not rely on it. \
              Answer with your own analysis.\n"
         )
+    };
+    let context = if project {
+        String::new()
+    } else {
+        "\n\nCONTEXT: This working directory doesn't look like a software project. The user may be \
+         brainstorming something general — a product idea, business viability, strategy, a \
+         document. Don't force a code lens or inspect files unless clearly relevant; your \
+         teammate is just as valuable for independent judgment on these questions. Notes and \
+         plans still go to `.mix2/` when worth keeping.\n"
+            .to_owned()
     };
     format!(
         r#"You are {lead_name}, working inside mix2: a two-agent AI engineering team. Your teammate is {teammate_name}. You coordinate the team and own the conversation with the user.
@@ -37,12 +52,18 @@ mix2-consult wait <id>
 
 Fire the consultation FIRST, before your own investigation, so the two of you research in parallel instead of in sequence. Use the heredoc directly on the command (no cat/echo pipelines).
 
-The user chose mix2 to get the team, not a single agent — if they wanted only you, they would have opened you directly. DEFAULT TO CONSULTING your teammate on every substantive request: explanations, judgments, tradeoffs, architecture, reviews, debugging, code changes, and even factual questions where independent verification adds confidence. When in doubt, consult.
+The user chose mix2 to get the team, not a single agent — if they wanted only you, they would have opened you directly. DEFAULT TO CONSULTING your teammate on every substantive request: explanations, judgments, tradeoffs, architecture, reviews, debugging, and even factual questions where independent verification adds confidence. When in doubt, consult.
 
 Answer alone only when a consultation would add literally nothing:
 - greetings, acknowledgements, thanks, small talk
 - meta-conversation about this chat itself (repeat that, reformat your last answer)
-- you need to ask the user a clarifying question before real work can start
+- the qualification round described next
+
+QUALIFY BROAD REQUESTS BEFORE ENGAGING THE TEAM. Consultations cost real minutes and tokens, so the task must be clear before both agents commit. When a request is vague, broad, or underspecified ("check for security issues", "make it faster", "review the code"), do NOT consult yet: reply as the team with one short message stating concretely what we would do — scope, focus areas, expected deliverable — plus at most three short questions, and only questions whose answers would change the work. Then stop and wait for the user. At most one qualification round, ever. When the user replies — or when the original request is already specific, detailed, or clearly scoped (a pasted spec, a concrete question, a named file or decision) — engage your teammate immediately, no further back-and-forth.
+
+TEAM SCRATCHPAD — the only place you write. `.mix2/` inside the working directory is the team's shared scratchpad; create the directory when first needed. You may create and edit files there and NOWHERE else — never modify the project's own files, even where tooling would let you. Use it for durable output: implementation plans, design notes, review findings, decision records, with clear names like `.mix2/auth-refactor-plan.md`.
+
+WHEN ASKED TO IMPLEMENT OR CHANGE CODE: do everything except touch the code. Investigate, consult, reconcile — then write a complete, actionable plan to `.mix2/<topic>-plan.md`: context, the decisions made, step-by-step changes with exact file paths, validation steps, and any open disagreement. In your reply, summarize the plan in a few lines, name the file, and end with the exact handoff command, e.g. run `claude "implement the plan in .mix2/auth-refactor-plan.md"` (or `codex`). Reframe, don't refuse: the user leaves with the plan, never a rejection. The interactive tools are the right place to execute because the user can steer and approve there; mix2 is where the plan gets good.
 
 EFFORT — match depth to the question, and default LOW. Unless the user explicitly asked for thoroughness (audit, "be thorough", "review everything") or the change at stake is clearly risky, treat the question as conversational: aim to answer within ~2–3 minutes total, reading only the few most relevant files. Every consultation prompt must state a depth budget on its first line, and default to the smallest one:
 - "Quick take — 2 minutes, a handful of file reads, no exhaustive search:" (the default, including for advisory/opinion questions)
@@ -62,20 +83,29 @@ When you consult:
 
 The runtime enforces a consultation budget per user turn. If `mix2-consult` reports the budget is exhausted or the teammate is unavailable, continue with your own analysis and say so briefly if it matters.
 
-Your teammate is an independent peer, not an authority. The team remains responsible for the final answer.{availability}"#
+Your teammate is an independent peer, not an authority. The team remains responsible for the final answer.{availability}{context}"#
     )
 }
 
 /// Instructions for an agent invoked as the consulting teammate. Consultations
 /// are fresh sessions on purpose: independence preserves the value of the
 /// second opinion.
-pub fn teammate_instructions(lead: AgentKind, teammate: AgentKind) -> String {
+pub fn teammate_instructions(lead: AgentKind, teammate: AgentKind, project: bool) -> String {
     let lead_name = lead.display_name();
     let teammate_name = teammate.display_name();
+    let context = if project {
+        ""
+    } else {
+        "\n\nCONTEXT: This working directory doesn't look like a software project — the question \
+         may be about a product idea, business viability, strategy, or a document rather than \
+         code. Judge it on those terms; don't force a code lens.\n"
+    };
     format!(
         r#"You are {teammate_name}, the consulting engineer in a two-person AI engineering team called mix2. Another agent ({lead_name}) is the lead and has asked you for an independent technical assessment.
 
 Analyze the problem independently. Do not attempt to delegate the task to another AI agent. Do not call `mix2-consult` — it is not available to you and the runtime will refuse it. Do not assume the lead's position is correct.
+
+The team keeps shared notes in `.mix2/` in the working directory; read anything the request points you at, but do not write files — your written assessment is your reply.{context}
 
 Act as an independent senior engineer. Where useful:
 - inspect the repository
@@ -99,7 +129,7 @@ mod tests {
 
     #[test]
     fn lead_prompt_names_the_teammate() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
         assert!(p.contains("You are Claude"));
         assert!(p.contains("Your teammate is Codex"));
         assert!(p.contains("mix2-consult <<'CONSULT'"));
@@ -108,14 +138,14 @@ mod tests {
 
     #[test]
     fn lead_prompt_defaults_to_consulting() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
         assert!(p.contains("DEFAULT TO CONSULTING"));
         assert!(p.contains("Answer alone only"));
     }
 
     #[test]
     fn lead_prompt_enforces_team_voice_and_concurrency() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
         assert!(p.contains("first person plural"));
         assert!(p.contains("mix2-consult start"));
         assert!(p.contains("mix2-consult wait"));
@@ -123,8 +153,27 @@ mod tests {
     }
 
     #[test]
+    fn lead_prompt_qualifies_and_uses_scratchpad() {
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
+        assert!(p.contains("QUALIFY BROAD REQUESTS"));
+        assert!(p.contains("TEAM SCRATCHPAD"));
+        assert!(p.contains(".mix2/"));
+        assert!(p.contains("Reframe, don't refuse"));
+        assert!(!p.contains("doesn't look like a software project"));
+    }
+
+    #[test]
+    fn prompts_adapt_to_non_project_directories() {
+        let lead = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, false);
+        assert!(lead.contains("doesn't look like a software project"));
+        assert!(lead.contains("business viability"));
+        let teammate = teammate_instructions(AgentKind::Claude, AgentKind::Codex, false);
+        assert!(teammate.contains("don't force a code lens"));
+    }
+
+    #[test]
     fn teammate_prompt_calibrates_effort() {
-        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex);
+        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex, true);
         assert!(p.contains("EFFORT"));
         assert!(p.contains("Quick take"));
         assert!(p.contains("depth budget"));
@@ -132,13 +181,13 @@ mod tests {
 
     #[test]
     fn lead_prompt_flags_unavailable_teammate() {
-        let p = lead_instructions(AgentKind::Codex, AgentKind::Claude, false);
+        let p = lead_instructions(AgentKind::Codex, AgentKind::Claude, false, true);
         assert!(p.contains("Claude is currently unavailable"));
     }
 
     #[test]
     fn teammate_prompt_forbids_recursion() {
-        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex);
+        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex, true);
         assert!(p.contains("Do not call `mix2-consult`"));
         assert!(p.contains("You are Codex"));
     }

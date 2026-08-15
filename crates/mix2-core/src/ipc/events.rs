@@ -42,6 +42,9 @@ pub enum Event {
         lead: AgentInfo,
         teammate: AgentInfo,
         cwd: String,
+        /// Whether the cwd looks like a software project; false switches the
+        /// team into general-brainstorming framing.
+        project: bool,
     },
     /// Unrecoverable startup or runtime failure. The UI shows it and exits.
     #[serde(rename = "fatal")]

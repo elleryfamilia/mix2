@@ -179,6 +179,10 @@ fn greeting_uses_lead_only() {
         text.contains("[role:lead]"),
         "lead instructions not injected: {text}"
     );
+    assert!(
+        text.contains("[scratchpad:rw]"),
+        "lead should get scratchpad-scoped write permission: {text}"
+    );
 }
 
 #[test]
@@ -229,10 +233,12 @@ fn codex_lead_consults_claude() {
     let events = core.events_until("turn.completed", LONG);
     let completed = find(&events, "consult.completed").unwrap();
     assert_eq!(completed["agent"], "claude");
-    assert!(completed["text"]
-        .as_str()
-        .unwrap()
-        .contains("fake-claude reply"));
+    let teammate_text = completed["text"].as_str().unwrap();
+    assert!(teammate_text.contains("fake-claude reply"));
+    assert!(
+        teammate_text.contains("[scratchpad:ro]"),
+        "teammates must not get scratchpad write permission: {teammate_text}"
+    );
     let final_msg = find(&events, "message.final").unwrap();
     assert_eq!(final_msg["speaker"], "team");
     // Codex lead runs with the workspace-write sandbox for consult IPC.

@@ -28,6 +28,7 @@ export const eventSchema = z.discriminatedUnion('type', [
     lead: agentInfoSchema,
     teammate: agentInfoSchema,
     cwd: z.string(),
+    project: z.boolean().optional(),
   }),
   z.object({ type: z.literal('fatal'), message: z.string() }),
   z.object({ type: z.literal('message.user'), turn_id: z.string(), text: z.string() }),

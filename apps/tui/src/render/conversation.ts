@@ -481,8 +481,7 @@ export function renderConversationWithAnchors(
   const lines: Line[] = [];
   const anchors: PromptAnchor[] = [];
   if (state.items.length === 0 && !state.turn) {
-    lines.push(pad(span('How can we help?', { color: theme.text.primary })));
-    return { lines, anchors };
+    return { lines: welcomeLines(state, ctx), anchors };
   }
   for (const item of state.items) {
     if (lines.length > 0) lines.push(BLANK);
@@ -503,4 +502,39 @@ export function renderConversationWithAnchors(
 
 export function renderConversation(state: AppState, ctx: RenderContext): Line[] {
   return renderConversationWithAnchors(state, ctx).lines;
+}
+
+/** The startup framing: one team, what it's best at, where plans land.
+ * Adapts when the directory isn't a software project (general
+ * brainstorming — product ideas, viability, strategy). */
+function welcomeLines(state: AppState, ctx: RenderContext): Line[] {
+  const width = contentWidth(ctx);
+  const project = state.session?.project ?? true;
+  const lines: Line[] = [];
+  lines.push(pad(span('How can we help?', { color: theme.text.primary })));
+  lines.push(BLANK);
+  const body = project
+    ? 'You are talking to Claude and Codex as one team: substantive questions ' +
+      'engage both, working in parallel with independent takes. Best for ' +
+      'brainstorming, design, code review, debugging, and tradeoffs. Asked to ' +
+      'implement, the team writes the plan to .mix2/ instead of touching your ' +
+      'code — ready to hand to claude or codex to execute.'
+    : 'No project detected here, so bring anything: a product idea, business ' +
+      'viability, strategy, a document. You are talking to Claude and Codex as ' +
+      'one team — substantive questions engage both, working in parallel with ' +
+      'independent takes. Notes and plans worth keeping land in .mix2/.';
+  for (const line of wrapText(body, width)) {
+    lines.push(pad(span(line, { color: theme.text.muted })));
+  }
+  lines.push(BLANK);
+  lines.push(
+    pad(
+      span(`vague ask ${glyphs.dot} we scope it first · specific ask ${glyphs.dot} straight to work`, {
+        color: theme.text.muted,
+      }),
+    ),
+  );
+  lines.push(BLANK);
+  lines.push(pad(span('/help commands · ctrl+t team activity', { color: theme.text.faint })));
+  return lines;
 }

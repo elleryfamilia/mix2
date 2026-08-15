@@ -42,6 +42,8 @@ export interface ActiveTurn {
   toolsCompleted: number;
   consults: ConsultState[];
   leadAgent: AgentName;
+  /** Scratchpad files (.mix2/…) the coordinator wrote this turn. */
+  scratchpadPaths: string[];
 }
 
 export type ConversationItem =
@@ -86,6 +88,8 @@ export interface SessionInfo {
   lead: AgentInfo;
   teammate: AgentInfo;
   cwd: string;
+  /** False when the cwd doesn't look like a software project. */
+  project: boolean;
 }
 
 export interface AppState {
@@ -204,6 +208,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           lead: event.lead,
           teammate: event.teammate,
           cwd: event.cwd,
+          project: event.project ?? true,
         },
       };
     case 'fatal':
@@ -221,6 +226,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           toolsCompleted: 0,
           consults: [],
           leadAgent: (state.session?.lead.kind ?? 'claude') as AgentName,
+          scratchpadPaths: [],
         },
         lastSummary: undefined,
       };
@@ -248,11 +254,22 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       if (!turn || turn.id !== event.turn_id) return state;
       const tool: ToolActivity = { name: event.name, detail: event.detail, done: false };
       if (event.role === 'lead') {
+        // Track scratchpad output so the settled turn can point at it.
+        let scratchpadPaths = turn.scratchpadPaths;
+        const path = event.detail?.split(/\s+/).find((t) => t.includes('.mix2/'));
+        if (path && !scratchpadPaths.includes(path)) {
+          scratchpadPaths = [...scratchpadPaths, path];
+        }
         // Tool use interrupts speech: settle the open stream segment first.
         return {
           ...state,
           items: settleStream(state.items, turn),
-          turn: { ...turn, streamText: '', tools: [...turn.tools, tool].slice(-24) },
+          turn: {
+            ...turn,
+            streamText: '',
+            tools: [...turn.tools, tool].slice(-24),
+            scratchpadPaths,
+          },
         };
       }
       const consults = turn.consults.map((c, i) =>
@@ -370,20 +387,23 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       // The trailing stream segment is the same content as the final
       // message; drop it in favor of the authoritative final text.
       const settled = settleTurn(state.items, turn, now);
-      return {
-        ...state,
-        items: [
-          ...settled,
-          {
-            kind: 'final',
-            speaker: event.speaker,
-            lead: event.lead,
-            text: event.text,
-            consultations: event.consultations,
-          },
-        ],
-        turn,
-      };
+      const items: ConversationItem[] = [
+        ...settled,
+        {
+          kind: 'final',
+          speaker: event.speaker,
+          lead: event.lead,
+          text: event.text,
+          consultations: event.consultations,
+        },
+      ];
+      if (turn.scratchpadPaths.length > 0) {
+        items.push({
+          kind: 'notice',
+          text: `▸ ${turn.scratchpadPaths.join(', ')} updated`,
+        });
+      }
+      return { ...state, items, turn };
     }
 
     case 'turn.completed': {

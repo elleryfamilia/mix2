@@ -18,6 +18,7 @@ const ready: CoreEvent = {
   lead: { kind: 'claude', name: 'Claude', available: true },
   teammate: { kind: 'codex', name: 'Codex', available: true },
   cwd: '/repo',
+  project: true,
 };
 
 const ctx: RenderContext = { width: 100, spinner: '⠸', now: T + 48_000 };
@@ -27,9 +28,21 @@ function text(state: AppState, context: RenderContext = ctx): string[] {
 }
 
 describe('startup state', () => {
-  it('shows the greeting before any conversation', () => {
+  it('shows the project welcome with team framing', () => {
     const lines = text(apply(initialState, ready));
-    expect(lines).toEqual(['  How can we help?']);
+    expect(lines[0]).toBe('  How can we help?');
+    const joined = lines.join('\n');
+    expect(joined).toContain('one team');
+    expect(joined).toContain('.mix2/');
+    expect(joined).toContain('/help commands');
+    expect(joined).not.toContain('No project detected');
+  });
+
+  it('adapts the welcome outside a software project', () => {
+    const general = apply(initialState, { ...ready, project: false });
+    const joined = text(general).join('\n');
+    expect(joined).toContain('No project detected');
+    expect(joined).toContain('business');
   });
 });
 
@@ -192,6 +205,32 @@ describe('team response', () => {
     expect(lines.some((l) => l.includes(' Team ') && l.includes('claude + codex'))).toBe(true);
     expect(lines.some((l) => l.includes('└ trace') && l.includes('⇄ 1 consultation'))).toBe(true);
     expect(lines).toContain('  We would keep Postgres.');
+  });
+});
+
+describe('scratchpad notice', () => {
+  it('points at .mix2 files the team wrote', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'plan the refactor' }, T);
+    s = apply(s, {
+      type: 'agent.tool.started',
+      turn_id: 't1',
+      agent: 'claude',
+      role: 'lead',
+      name: 'Write',
+      detail: '.mix2/auth-refactor-plan.md',
+    });
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'team',
+      lead: 'claude',
+      text: 'Plan written.',
+      consultations: 1,
+      duration_ms: 60_000,
+    });
+    const lines = text(s);
+    expect(lines.some((l) => l.includes('▸ .mix2/auth-refactor-plan.md updated'))).toBe(true);
   });
 });
 

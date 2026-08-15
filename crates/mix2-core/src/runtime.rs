@@ -78,6 +78,29 @@ fn runtime_dir_for(session_id: Uuid) -> PathBuf {
     base.join("mix2").join(session_id.to_string())
 }
 
+/// Heuristic: does the working directory look like a software project?
+/// When it doesn't, the team adapts to general brainstorming (business
+/// ideas, viability, strategy) instead of forcing a code lens.
+fn detect_project(cwd: &std::path::Path) -> bool {
+    if cwd.join(".git").exists() {
+        return true;
+    }
+    const MANIFESTS: &[&str] = &[
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "go.mod",
+        "pom.xml",
+        "build.gradle",
+        "CMakeLists.txt",
+        "Makefile",
+        "Gemfile",
+        "composer.json",
+        "mix.exs",
+    ];
+    MANIFESTS.iter().any(|m| cwd.join(m).exists())
+}
+
 fn helper_dir() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
@@ -87,6 +110,7 @@ fn helper_dir() -> Option<PathBuf> {
 pub struct Runtime {
     config: Config,
     session: Mix2Session,
+    project: bool,
     lead_agent: Arc<dyn Agent>,
     lead_info: AgentInfo,
     teammate_info: AgentInfo,
@@ -144,6 +168,7 @@ impl Runtime {
         };
 
         let session = Mix2Session::new(config.lead, cwd);
+        let project = detect_project(&session.cwd);
         let runtime_dir = runtime_dir_for(session.id);
         tokio::fs::create_dir_all(&runtime_dir).await?;
         #[cfg(unix)]
@@ -161,6 +186,7 @@ impl Runtime {
             runtime_dir.clone(),
             session.id,
             helper_dir(),
+            project,
             consult_updates,
         )
         .await?;
@@ -183,6 +209,7 @@ impl Runtime {
         Ok(Self {
             config,
             session,
+            project,
             lead_agent,
             lead_info,
             teammate_info,
@@ -231,6 +258,7 @@ impl Runtime {
                 self.config.lead,
                 self.config.teammate,
                 self.teammate_info.available,
+                self.project,
             ),
             env: self.mix2_env(turn_uuid, AgentRole::Lead),
             path_prepend: helper_dir(),
@@ -548,6 +576,7 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         lead: runtime.lead_info.clone(),
         teammate: runtime.teammate_info.clone(),
         cwd: runtime.session.cwd.display().to_string(),
+        project: runtime.project,
     });
 
     let mut active: Option<TurnState> = None;
@@ -656,6 +685,7 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
         lead: runtime.lead_info.clone(),
         teammate: runtime.teammate_info.clone(),
         cwd: runtime.session.cwd.display().to_string(),
+        project: runtime.project,
     });
 
     let mut turn = Some(runtime.start_turn("dev-1".to_owned(), prompt).await);
