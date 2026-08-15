@@ -466,19 +466,41 @@ export function renderLiveTurn(turn: ActiveTurn, ctx: RenderContext): Line[] {
 }
 
 /** The full conversation as lines: settled items, then the live turn. */
-export function renderConversation(state: AppState, ctx: RenderContext): Line[] {
+/** Where a user prompt sits in the rendered line buffer, for the sticky
+ * prompt bar and click-to-jump. */
+export interface PromptAnchor {
+  line: number;
+  /** First line of the prompt, for the bar. */
+  text: string;
+}
+
+export function renderConversationWithAnchors(
+  state: AppState,
+  ctx: RenderContext,
+): { lines: Line[]; anchors: PromptAnchor[] } {
   const lines: Line[] = [];
+  const anchors: PromptAnchor[] = [];
   if (state.items.length === 0 && !state.turn) {
     lines.push(pad(span('How can we help?', { color: theme.text.primary })));
-    return lines;
+    return { lines, anchors };
   }
   for (const item of state.items) {
     if (lines.length > 0) lines.push(BLANK);
+    if (item.kind === 'user') {
+      anchors.push({
+        line: lines.length,
+        text: item.text.split('\n')[0]?.trim() ?? '',
+      });
+    }
     lines.push(...renderItem(item, ctx));
   }
   if (state.turn) {
     if (lines.length > 0) lines.push(BLANK);
     lines.push(...renderLiveTurn(state.turn, ctx));
   }
-  return lines;
+  return { lines, anchors };
+}
+
+export function renderConversation(state: AppState, ctx: RenderContext): Line[] {
+  return renderConversationWithAnchors(state, ctx).lines;
 }

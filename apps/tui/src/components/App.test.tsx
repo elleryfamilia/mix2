@@ -329,6 +329,49 @@ describe('App', () => {
     h.unmount();
   });
 
+  it('anchors the active prompt and jumps back on click', async () => {
+    const { EventEmitter } = await import('node:events');
+    const mouse = new EventEmitter();
+    const client = { submit: vi.fn(), cancel: vi.fn(), shutdown: vi.fn(), send: vi.fn(), start: vi.fn() };
+    let handlers: { onEvent: (e: CoreEvent) => void } = { onEvent: () => {} };
+    const instance = render(
+      <App
+        client={client as unknown as CoreClient}
+        bind={(h) => {
+          handlers = h;
+        }}
+        mouse={mouse}
+      />,
+    );
+    await tickReact();
+    handlers.onEvent(ready);
+    handlers.onEvent({ type: 'message.user', turn_id: 't1', text: 'my very important question' });
+    handlers.onEvent({
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: Array.from({ length: 60 }, (_, i) => `answer line ${i + 1}`).join('\n\n'),
+      consultations: 0,
+      duration_ms: 100,
+    });
+    handlers.onEvent({ type: 'turn.completed', turn_id: 't1', duration_ms: 100, consultations: 0 });
+    await tickReact();
+    // Stuck to the bottom of a long answer: the prompt is off-screen, so
+    // the sticky bar shows it with the jump affordance.
+    let frame = instance.lastFrame()!;
+    expect(frame).toContain('my very important question');
+    expect(frame).toContain('↑ jump');
+
+    // Clicking the bar (row 2) jumps back to the prompt.
+    mouse.emit('event', { kind: 'down', x: 5, y: 2 });
+    await tickReact();
+    frame = instance.lastFrame()!;
+    expect(frame).toContain('❯ my very important question');
+    expect(frame).not.toContain('↑ jump');
+    instance.unmount();
+  });
+
   it('drag-selecting text copies it on release', async () => {
     const { EventEmitter } = await import('node:events');
     const mouse = new EventEmitter();

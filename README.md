@@ -142,6 +142,10 @@ Precedence: CLI flags > user config > defaults.
 | `Ctrl+Y` | copy the latest answer to the clipboard |
 | `Ctrl+Q` | quit |
 
+While you read a long answer, the question it belongs to stays anchored
+under the header; it updates as you scroll through history, and clicking
+it jumps back to that prompt.
+
 Slash commands: `/exit` (also `/quit`), `/clear` (reset the visible
 conversation), `/copy` (copy the latest answer), `/team` (toggle the team
 panel), `/help`. Typing `/` shows the available commands in the status

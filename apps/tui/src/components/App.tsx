@@ -2,7 +2,7 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CoreClient } from '../ipc/client.js';
 import type { CoreEvent } from '../ipc/protocol.js';
-import { renderConversation } from '../render/conversation.js';
+import { renderConversationWithAnchors, type PromptAnchor } from '../render/conversation.js';
 import type { Line } from '../render/lines.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import type { EventEmitter } from 'node:events';
@@ -33,6 +33,7 @@ import {
 import { Header } from './Header.js';
 import { LineView } from './LineView.js';
 import { StatusBar } from './StatusBar.js';
+import { StickyPrompt } from './StickyPrompt.js';
 
 export interface AppProps {
   client: CoreClient;
@@ -97,11 +98,12 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     : glyphs.team;
   const width = size.columns;
 
-  const lines: Line[] = useMemo(() => {
+  const { lines, anchors } = useMemo((): { lines: Line[]; anchors: PromptAnchor[] } => {
     const ctx = { width, spinner, teamGlyph, now: Date.now() };
-    return state.teamPanelOpen
-      ? renderTeamPanel(state, width, ctx.now, teamGlyph)
-      : renderConversation(state, ctx);
+    if (state.teamPanelOpen) {
+      return { lines: renderTeamPanel(state, width, ctx.now, teamGlyph), anchors: [] };
+    }
+    return renderConversationWithAnchors(state, ctx);
   }, [state, width, spinner, teamGlyph]);
 
   const composerRows = composerHeight(editor, width); // includes its frame
@@ -113,9 +115,17 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const highlighted = highlightLines(lines, selection, width);
   const visible = highlighted.slice(top, top + viewportRows);
 
+  // The prompt governing what's currently on screen, when it has scrolled
+  // out of view: last anchor strictly above the viewport top.
+  let activeAnchor: PromptAnchor | null = null;
+  for (const anchor of anchors) {
+    if (anchor.line < top) activeAnchor = anchor;
+    else break;
+  }
+
   // Geometry snapshot for the mouse handler (avoids stale closures).
-  const geometry = useRef({ top, viewportRows, lines });
-  geometry.current = { top, viewportRows, lines };
+  const geometry = useRef({ top, viewportRows, lines, activeAnchor });
+  geometry.current = { top, viewportRows, lines, activeAnchor };
 
   const showFlash = (text: string) => {
     setFlash(text);
@@ -144,6 +154,13 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         line < geo.lines.length;
       const pos = { line: Math.max(0, line), col: Math.max(0, event.x - 1) };
       if (event.kind === 'down') {
+        // Clicking the sticky prompt bar jumps back to that prompt.
+        if (event.y === VIEWPORT_TOP_ROW - 1 && geo.activeAnchor) {
+          const target = geo.activeAnchor.line;
+          setSelection(null);
+          setScroll({ top: target, stick: false });
+          return;
+        }
         setSelection(inViewport ? { anchor: pos, head: pos } : null);
         return;
       }
@@ -352,7 +369,11 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   return (
     <Box flexDirection="column" width={width} height={size.rows}>
       <Header session={state.session} width={width} />
-      <Text> </Text>
+      {activeAnchor ? (
+        <StickyPrompt text={activeAnchor.text} width={width} />
+      ) : (
+        <Text> </Text>
+      )}
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {visible.map((line, i) => (
           <LineView key={top + i} line={line} />

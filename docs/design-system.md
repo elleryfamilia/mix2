@@ -86,7 +86,10 @@ Full-screen alternate-buffer app, three fixed regions:
 header      1 row   full-width bar in bgStatus: ` mix2 ` chip ·
                     ● Claude · ○ Codex roster (glyphs in agent colors,
                     no role labels) · right-aligned cwd
-spacing     1 row
+spacing     1 row   becomes the sticky prompt bar when the governing
+                    prompt scrolls out of view: `❯ <prompt…>  ↑ jump`
+                    in bgStatus (faint ❯, muted text); updates as you
+                    scroll through history, click jumps to that prompt
 conversation  *     scrollable viewport, 2-space left inset
 composer    1+ rows ❯ + multiline input
 status bar  1 row   bgStatus; left = state, right = keyboard hints
