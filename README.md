@@ -17,6 +17,19 @@ One question in, one team answer out — with both agents' parallel work,
 the moment they confer, and any disagreement visible along the way,
 exactly as the app renders it.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/feat/mvp/install.sh | sh
+```
+
+macOS and Linux. Needs Node.js ≥ 22 at runtime, plus at least one of the
+two agents installed and signed in:
+[Claude Code](https://claude.com/claude-code) (`claude`) and/or
+[Codex](https://developers.openai.com/codex/cli) (`codex`). Then run
+`mix2`. (Verifies checksums; installs to `~/.local/share/mix2`, links
+`~/.local/bin/mix2`.)
+
 ## Why two agents?
 
 Because one model agreeing with itself is not a review. Claude and Codex
@@ -109,20 +122,7 @@ a clear "install this / run `codex login` / then come back" screen
 instead of a cryptic mid-turn failure; a signed-out teammate just shows
 as offline with the same fix-it hint.
 
-## Install
-
-Quick install (macOS and Linux; needs Node.js ≥ 22 at runtime):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/feat/mvp/install.sh | sh
-```
-
-That downloads the latest release for your platform, verifies its
-checksum, installs to `~/.local/share/mix2`, and links
-`~/.local/bin/mix2`. Then install and sign in to at least one of the two
-provider CLIs above, and run `mix2`.
-
-From source:
+## From source
 
 ```bash
 pnpm install
