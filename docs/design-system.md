@@ -289,6 +289,10 @@ panel says so: `○ codex   teammate  unavailable — <reason>`.
   runs.
 - `❯` bold in primary when focused/ready; faint while a turn runs.
 - Multiline: wrapped visually plus hard newlines.
+- Recognized slash commands highlight as you type: the command token
+  renders bold in the team accent the moment it matches (/help, /team,
+  ...), so a valid command is visibly acknowledged before Enter; partial
+  or unknown tokens stay plain.
 - Mouse: drag-selection over the conversation renders inverse-video
   highlight and copies on release (status bar flashes `selection
   copied` in mauve); the wheel scrolls the viewport. Selection state

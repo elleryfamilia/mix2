@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import React from 'react';
 import { glyphs, theme } from '../theme/theme.js';
 import { splitAtCursor, type EditorState } from './editing.js';
+import { slashCommandLength, splitForHighlight } from './slash.js';
 
 /**
  * The input composer: a bold `❯` with a block cursor inside a rounded
@@ -22,6 +23,21 @@ export function Composer({
   const { before, at, after } = splitAtCursor(editor);
   const promptColor = active ? theme.text.primary : theme.text.faint;
   const textColor = active ? theme.text.primary : theme.text.muted;
+  // A recognized slash command lights up in the team accent, so valid
+  // commands are visibly acknowledged before Enter.
+  const commandLength = slashCommandLength(editor.text);
+  const segment = (text: string, offset: number): React.ReactNode => {
+    const [command, plain] = splitForHighlight(text, offset, commandLength);
+    if (command.length === 0) return <Text color={textColor}>{text}</Text>;
+    return (
+      <>
+        <Text color={theme.agent.team} bold>
+          {command}
+        </Text>
+        <Text color={textColor}>{plain}</Text>
+      </>
+    );
+  };
   return (
     <Box
       borderStyle="round"
@@ -34,15 +50,15 @@ export function Composer({
       </Text>
       <Box flexGrow={1}>
         <Text wrap="wrap">
-          <Text color={textColor}>{before}</Text>
+          {segment(before, 0)}
           {active ? (
             <Text color={theme.chip.appFg} backgroundColor={theme.chip.appBg}>
               {at === '\n' ? ' ' : at}
             </Text>
           ) : (
-            <Text color={textColor}>{at}</Text>
+            segment(at, before.length)
           )}
-          <Text color={textColor}>{after}</Text>
+          {segment(after, before.length + 1)}
         </Text>
       </Box>
     </Box>
