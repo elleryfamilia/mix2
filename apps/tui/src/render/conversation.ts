@@ -552,6 +552,6 @@ function welcomeLines(state: AppState, ctx: RenderContext): Line[] {
     ),
   );
   lines.push(BLANK);
-  lines.push(pad(span('/help commands · ctrl+t team activity', { color: theme.text.faint })));
+  lines.push(pad(span('/help commands · ctrl+t activity', { color: theme.text.faint })));
   return lines;
 }

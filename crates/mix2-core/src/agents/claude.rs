@@ -1,4 +1,4 @@
-use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion};
+use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthStatus};
 use super::{AgentEvent, AgentKind, AgentRole};
 use crate::process::child::{ChildProcess, SpawnOptions};
 use anyhow::{bail, Context, Result};
@@ -39,6 +39,10 @@ impl ClaudeAgent {
             "--append-system-prompt".into(),
             request.instructions.clone(),
         ];
+        if let Some(model) = &request.model {
+            args.push("--model".into());
+            args.push(model.clone());
+        }
         if request.role == AgentRole::Lead {
             // Targeted permissions only: the consult helper, plus writes
             // scoped to the team scratchpad (`.mix2/`) so the lead can leave
@@ -165,6 +169,7 @@ impl Agent for ClaudeAgent {
     async fn version(&self) -> Result<AgentVersion> {
         let out = tokio::process::Command::new(&self.command)
             .arg("--version")
+            .stdin(std::process::Stdio::null())
             .output()
             .await
             .with_context(|| format!("`{}` not found or not executable", self.command))?;
@@ -183,6 +188,35 @@ impl Agent for ClaudeAgent {
         Ok(AgentVersion {
             raw: line.to_owned(),
         })
+    }
+
+    async fn auth_status(&self) -> AuthStatus {
+        // `claude auth status` prints JSON with a `loggedIn` field; shell
+        // hooks may prepend banner lines, so scan from the first brace.
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new(&self.command)
+                .args(["auth", "status"])
+                .stdin(std::process::Stdio::null())
+                .output(),
+        )
+        .await;
+        let Ok(Ok(out)) = out else {
+            return AuthStatus::Unknown;
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let json_start = match stdout.find('{') {
+            Some(i) => i,
+            None => return AuthStatus::Unknown,
+        };
+        match serde_json::from_str::<Value>(&stdout[json_start..]) {
+            Ok(v) => match v.get("loggedIn").and_then(Value::as_bool) {
+                Some(true) => AuthStatus::Authenticated,
+                Some(false) => AuthStatus::Unauthenticated,
+                None => AuthStatus::Unknown,
+            },
+            Err(_) => AuthStatus::Unknown,
+        }
     }
 
     async fn start(
@@ -216,6 +250,7 @@ pub struct ClaudeStreamParser {
     pub error: Option<String>,
     delta_buf: String,
     tool_names: HashMap<String, String>,
+    model_reported: bool,
 }
 
 impl ClaudeStreamParser {
@@ -256,6 +291,17 @@ impl ClaudeStreamParser {
             }
             Some("stream_event") => {
                 let event = value.get("event").cloned().unwrap_or(Value::Null);
+                if !self.model_reported
+                    && event.get("type").and_then(Value::as_str) == Some("message_start")
+                {
+                    if let Some(model) = event.pointer("/message/model").and_then(Value::as_str) {
+                        self.model_reported = true;
+                        out.push(AgentEvent::ModelObserved {
+                            agent,
+                            model: model.to_owned(),
+                        });
+                    }
+                }
                 // Only surface top-level assistant text (not subagent output).
                 let top_level = value
                     .get("parent_tool_use_id")

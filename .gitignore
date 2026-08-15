@@ -8,3 +8,8 @@ dist/
 CLAUDE.local.md
 .loadout/
 .mix2/
+.loadout/generated/
+.loadout/cache/
+.loadout/logs/
+.loadout/local.toml
+.claude/commands/loadout/

@@ -85,12 +85,12 @@ export function statusSegments(
         : '';
     return {
       left: [{ text: `done in ${formatDuration(durationMs)}${consultNote}`, color: muted }],
-      right: [{ text: 'ctrl+t team', color: faint }],
+      right: [{ text: 'ctrl+t activity', color: faint }],
     };
   }
   return {
     left: [{ text: state.phase === 'ready' ? 'ready' : 'starting…', color: muted }],
-    right: [{ text: 'ctrl+t team · ctrl+q quit', color: faint }],
+    right: [{ text: 'ctrl+t activity · ctrl+q quit', color: faint }],
   };
 }
 
@@ -117,7 +117,7 @@ export function StatusBar({
 }): React.JSX.Element {
   let { left, right } = statusSegments(state, spinner, teamGlyph);
   if (slashOpen) {
-    left = [{ text: '/exit · /clear · /copy · /team · /help', color: theme.text.muted }];
+    left = [{ text: '/exit · /clear · /copy · /model · /activity · /help', color: theme.text.muted }];
   }
   if (flash) {
     left = [{ text: flash, color: theme.agent.team }];

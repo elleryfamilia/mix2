@@ -27,6 +27,12 @@ pub struct AgentInfo {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// None = the sign-in probe couldn't tell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authenticated: Option<bool>,
+    /// Configured/selected model; None = the provider's own default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// Events emitted by the core to the Ink UI, one JSON object per line on
@@ -111,6 +117,16 @@ pub enum Event {
         agent: AgentKind,
         index: u32,
         message: String,
+    },
+
+    /// An agent's model changed or was observed from its stream.
+    /// source: "selected" (user /model) or "observed" (provider reported).
+    #[serde(rename = "agent.model")]
+    AgentModel {
+        agent: AgentKind,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        source: String,
     },
 
     #[serde(rename = "lead.synthesizing")]

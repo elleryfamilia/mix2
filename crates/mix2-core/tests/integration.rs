@@ -26,6 +26,7 @@ struct CoreOptions {
     claude_cmd: Option<String>,
     codex_cmd: Option<String>,
     max_consults: Option<u32>,
+    env: Vec<(&'static str, &'static str)>,
 }
 
 impl Default for CoreOptions {
@@ -35,6 +36,7 @@ impl Default for CoreOptions {
             claude_cmd: Some(fixtures_dir().join("fake-claude").display().to_string()),
             codex_cmd: Some(fixtures_dir().join("fake-codex").display().to_string()),
             max_consults: None,
+            env: Vec::new(),
         }
     }
 }
@@ -67,6 +69,9 @@ impl Core {
         }
         if let Some(codex) = &options.codex_cmd {
             cmd.env("MIX2_CODEX_CMD", codex);
+        }
+        for (key, value) in &options.env {
+            cmd.env(key, value);
         }
 
         let mut child = cmd.spawn().expect("spawn mix2-core");
@@ -397,6 +402,88 @@ fn missing_teammate_degrades_gracefully() {
         text.contains("[consult1:err:Codex is unavailable"),
         "lead should get the unavailability message: {text}"
     );
+}
+
+#[test]
+fn unauthenticated_lead_is_fatal_with_instructions() {
+    let core = Core::start(CoreOptions {
+        env: vec![("FAKE_CLAUDE_LOGGED_OUT", "1")],
+        ..CoreOptions::default()
+    });
+    let events = core.events_until("fatal", LONG);
+    let message = find(&events, "fatal").unwrap()["message"].as_str().unwrap();
+    assert!(message.contains("not signed in"), "got: {message}");
+    assert!(
+        message.contains("sign in"),
+        "should tell the user how: {message}"
+    );
+}
+
+#[test]
+fn unauthenticated_teammate_degrades_with_login_hint() {
+    let mut core = Core::start(CoreOptions {
+        env: vec![("FAKE_CODEX_LOGGED_OUT", "1")],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["teammate"]["available"], false);
+    assert_eq!(ready["teammate"]["authenticated"], false);
+    let reason = ready["teammate"]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("codex login"),
+        "actionable reason: {reason}"
+    );
+    // The team still works solo.
+    core.submit("t1", "hi");
+    let events = core.events_until("turn.completed", LONG);
+    assert!(find(&events, "message.final").is_some());
+}
+
+#[test]
+fn set_model_applies_to_lead_and_teammate() {
+    let mut core = Core::start(CoreOptions::default());
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert!(ready["lead"]["model"].is_null());
+
+    core.send(&serde_json::json!({"type": "set_model", "agent": "claude", "model": "sonnet"}));
+    let events = core.events_until("agent.model", LONG);
+    let confirm = find(&events, "agent.model").unwrap();
+    assert_eq!(confirm["agent"], "claude");
+    assert_eq!(confirm["model"], "sonnet");
+    assert_eq!(confirm["source"], "selected");
+
+    core.send(&serde_json::json!({"type": "set_model", "agent": "codex", "model": "gpt-5-codex"}));
+    core.events_until("agent.model", LONG);
+
+    core.submit("t1", "SCENARIO:consult check models");
+    let events = core.events_until("turn.completed", LONG);
+    let final_text = find(&events, "message.final").unwrap()["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        final_text.contains("[model:sonnet]"),
+        "lead model: {final_text}"
+    );
+    let consult = find(&events, "consult.completed").unwrap()["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        consult.contains("[model:gpt-5-codex]"),
+        "teammate model: {consult}"
+    );
+
+    // Clearing returns to the provider default.
+    core.send(&serde_json::json!({"type": "set_model", "agent": "claude", "model": null}));
+    let events = core.events_until("agent.model", LONG);
+    assert!(find(&events, "agent.model").unwrap()["model"].is_null());
+    core.submit("t2", "plain again");
+    let events = core.events_until("turn.completed", LONG);
+    assert!(find(&events, "message.final").unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .contains("[model:default]"));
 }
 
 #[test]

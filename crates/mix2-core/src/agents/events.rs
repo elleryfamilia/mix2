@@ -34,6 +34,11 @@ pub enum AgentEvent {
         agent: AgentKind,
         name: String,
     },
+    /// The provider reported which model is actually serving this run.
+    ModelObserved {
+        agent: AgentKind,
+        model: String,
+    },
     Usage {
         agent: AgentKind,
         input_tokens: Option<u64>,

@@ -13,6 +13,7 @@ interface Harness {
     submit: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     shutdown: ReturnType<typeof vi.fn>;
+    send: ReturnType<typeof vi.fn>;
   };
   unmount: () => void;
 }
@@ -225,7 +226,7 @@ describe('App', () => {
     h.stdin.write('/help');
     await tickReact();
     // Slash hint appears while typing a command.
-    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /team · /help');
+    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /model · /activity · /help');
     h.stdin.write('\r');
     await tickReact();
     expect(h.lastFrame()).toContain('commands  /exit');
@@ -396,6 +397,33 @@ describe('App', () => {
     await tickReact();
     expect(instance.lastFrame()).toContain('selection copied');
     instance.unmount();
+  });
+
+  it('/model shows current models and sends selections to the core', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    h.stdin.write('/model');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).toContain('claude: provider default');
+    expect(h.lastFrame()).toContain('codex: provider default');
+
+    h.stdin.write('/model claude sonnet');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).toHaveBeenCalledWith({
+      type: 'set_model',
+      agent: 'claude',
+      model: 'sonnet',
+    });
+    h.emit({ type: 'agent.model', agent: 'claude', model: 'sonnet', source: 'selected' });
+    await tickReact();
+    expect(h.lastFrame()).toContain('claude model set to sonnet');
+    h.unmount();
   });
 
   it('ctrl+j inserts a newline instead of submitting', async () => {

@@ -29,6 +29,8 @@ pub struct CollaborationConfig {
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     pub command: Option<String>,
+    /// Model override passed to the CLI; None uses the provider's default.
+    pub model: Option<String>,
 }
 
 /// Fully-resolved runtime configuration.
@@ -39,6 +41,8 @@ pub struct Config {
     pub max_consults_per_turn: u32,
     pub claude_command: String,
     pub codex_command: String,
+    pub claude_model: Option<String>,
+    pub codex_model: Option<String>,
 }
 
 pub const DEFAULT_MAX_CONSULTS: u32 = 2;
@@ -77,6 +81,8 @@ impl Config {
                 .command
                 .clone()
                 .unwrap_or_else(|| "codex".to_owned()),
+            claude_model: file.claude.model.clone(),
+            codex_model: file.codex.model.clone(),
         })
     }
 }
@@ -151,6 +157,13 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.claude_command, "/custom/claude");
         assert_eq!(cfg.codex_command, "/custom/codex");
+    }
+
+    #[test]
+    fn provider_model_override() {
+        let cfg = Config::resolve(None, &parse("[claude]\nmodel = \"sonnet\"")).unwrap();
+        assert_eq!(cfg.claude_model.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.codex_model, None);
     }
 
     #[test]

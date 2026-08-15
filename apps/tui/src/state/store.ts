@@ -442,6 +442,34 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       };
     }
 
+    case 'agent.model': {
+      const session = state.session;
+      if (!session) return state;
+      const model = event.model ?? undefined;
+      const updateInfo = (info: AgentInfo): AgentInfo =>
+        info.kind === event.agent ? { ...info, model } : info;
+      const next: AppState = {
+        ...state,
+        session: {
+          ...session,
+          lead: updateInfo(session.lead),
+          teammate: updateInfo(session.teammate),
+        },
+      };
+      if (event.source === 'selected') {
+        next.items = [
+          ...next.items,
+          {
+            kind: 'notice',
+            text: model
+              ? `${event.agent} model set to ${model}`
+              : `${event.agent} model reset to provider default`,
+          },
+        ];
+      }
+      return next;
+    }
+
     case 'warning':
     case 'error':
       // Non-fatal diagnostics stay out of the conversation; surface invalid

@@ -18,6 +18,8 @@ export const agentInfoSchema = z.object({
   version: z.string().optional(),
   available: z.boolean(),
   reason: z.string().optional(),
+  authenticated: z.boolean().optional(),
+  model: z.string().optional(),
 });
 
 export const eventSchema = z.discriminatedUnion('type', [
@@ -84,6 +86,12 @@ export const eventSchema = z.discriminatedUnion('type', [
     index: z.number(),
     message: z.string(),
   }),
+  z.object({
+    type: z.literal('agent.model'),
+    agent: agentKind,
+    model: z.string().nullish(),
+    source: z.string(),
+  }),
   z.object({ type: z.literal('lead.synthesizing'), turn_id: z.string(), agent: agentKind }),
   z.object({
     type: z.literal('message.final'),
@@ -113,6 +121,7 @@ export type Command =
   | { type: 'initialize'; protocol: number; lead?: string; cwd?: string; debug?: boolean }
   | { type: 'submit'; id: string; text: string }
   | { type: 'cancel'; turn_id: string }
+  | { type: 'set_model'; agent: string; model: string | null }
   | { type: 'shutdown' };
 
 /** Parse one JSONL line from the core. Returns null for lines that are not

@@ -1,4 +1,4 @@
-use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion};
+use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthStatus};
 use super::claude::friendly_failure;
 use super::{AgentEvent, AgentKind, AgentRole};
 use crate::process::child::{ChildProcess, SpawnOptions};
@@ -45,6 +45,10 @@ impl CodexAgent {
         }
         args.push("--json".into());
         args.push("--skip-git-repo-check".into());
+        if let Some(model) = &request.model {
+            args.push("-c".into());
+            args.push(format!("model={}", toml_string(model)));
+        }
         if !request.instructions.is_empty() {
             args.push("-c".into());
             args.push(format!(
@@ -182,6 +186,7 @@ impl Agent for CodexAgent {
     async fn version(&self) -> Result<AgentVersion> {
         let out = tokio::process::Command::new(&self.command)
             .arg("--version")
+            .stdin(std::process::Stdio::null())
             .output()
             .await
             .with_context(|| format!("`{}` not found or not executable", self.command))?;
@@ -197,6 +202,23 @@ impl Agent for CodexAgent {
         Ok(AgentVersion {
             raw: line.to_owned(),
         })
+    }
+
+    async fn auth_status(&self) -> AuthStatus {
+        // `codex login status` exits 0 when signed in, non-zero otherwise.
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new(&self.command)
+                .args(["login", "status"])
+                .stdin(std::process::Stdio::null())
+                .output(),
+        )
+        .await;
+        match out {
+            Ok(Ok(out)) if out.status.success() => AuthStatus::Authenticated,
+            Ok(Ok(_)) => AuthStatus::Unauthenticated,
+            _ => AuthStatus::Unknown,
+        }
     }
 
     async fn start(

@@ -110,6 +110,12 @@ the visual system is specified in
 Only one of the two is strictly required — a missing teammate degrades
 gracefully to solo work, and the team says so rather than pretending.
 
+mix2 checks both at startup — installed *and* signed in (via each CLI's
+own quota-free status command). A missing or signed-out coordinator gets
+a clear "install this / run `codex login` / then come back" screen
+instead of a cryptic mid-turn failure; a signed-out teammate just shows
+as offline with the same fix-it hint.
+
 ## Install & run
 
 ```bash
@@ -156,14 +162,21 @@ Precedence: CLI flags > user config > defaults.
 | `Ctrl+J` (or `Shift+Enter` where supported) | newline in the composer |
 | `Esc` | cancel the running turn / close the team panel |
 | `Ctrl+C` | cancel; twice quits |
-| `Ctrl+T` | the team panel: who did what, the real exchange, timings |
+| `Ctrl+T` | the activity panel: who did what, the real exchange, timings |
 | `PageUp`/`PageDown`, mouse wheel, `↑`/`↓` (empty composer) | scroll |
 | `Ctrl+Y` | copy the latest answer |
 | `Ctrl+Q` | quit |
 
-Slash commands: `/exit` (also `/quit`), `/clear`, `/copy`, `/team`,
-`/help` — recognized commands light up as you type, and `/` surfaces the
-list in the status bar.
+Slash commands: `/exit` (also `/quit`), `/clear`, `/copy`, `/model`,
+`/activity`, `/help` — recognized commands light up as you type, and `/`
+surfaces the list in the status bar.
+
+Models: by default each agent uses its own CLI's configured default —
+mix2 doesn't second-guess your setup. `/model` shows what each agent is
+using; `/model claude sonnet` or `/model codex gpt-5-codex` overrides it
+for this session (`/model claude default` reverts), applying to
+subsequent turns and consultations. You can also pin models in
+`config.toml` (`[claude] model = "sonnet"`).
 
 Reading comfort is a feature: answers render markdown natively; the
 prompt you're reading the answer to stays anchored under the header

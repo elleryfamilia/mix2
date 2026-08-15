@@ -125,6 +125,8 @@ struct Shared {
     helper_dir: Option<PathBuf>,
     /// Whether the cwd looks like a software project (teammate context).
     project: bool,
+    /// Model override for teammate invocations (user /model selection).
+    teammate_model: RwLock<Option<String>>,
     updates: mpsc::Sender<ConsultUpdate>,
     /// In-flight `start`ed consultations by ticket. Each holds a watch
     /// channel that flips from None to the final response. Cleared per turn.
@@ -151,6 +153,7 @@ impl ConsultServer {
         session_id: Uuid,
         helper_dir: Option<PathBuf>,
         project: bool,
+        teammate_model: Option<String>,
         updates: mpsc::Sender<ConsultUpdate>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(runtime_dir.join(FILE_DIR_NAME))
@@ -167,6 +170,7 @@ impl ConsultServer {
             session_id,
             helper_dir,
             project,
+            teammate_model: RwLock::new(teammate_model),
             updates,
             pending: tokio::sync::Mutex::new(HashMap::new()),
             active: RwLock::new(None),
@@ -216,6 +220,10 @@ impl ConsultServer {
     pub async fn begin_turn(&self, turn: ActiveTurn) {
         *self.shared.active.write().await = Some(turn);
         self.shared.pending.lock().await.clear();
+    }
+
+    pub async fn set_teammate_model(&self, model: Option<String>) {
+        *self.shared.teammate_model.write().await = model;
     }
 
     pub async fn end_turn(&self) {
@@ -471,6 +479,7 @@ async fn run_consultation(
         cwd: shared.cwd.clone(),
         role: AgentRole::Teammate,
         turn_id,
+        model: shared.teammate_model.read().await.clone(),
         instructions: prompts::teammate_instructions(
             shared.lead_kind,
             shared.teammate_kind,

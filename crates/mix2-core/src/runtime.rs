@@ -1,4 +1,4 @@
-use crate::agents::agent::{Agent, AgentRequest, AgentResult, AgentSession};
+use crate::agents::agent::{Agent, AgentRequest, AgentResult, AgentSession, AuthStatus};
 use crate::agents::claude::ClaudeAgent;
 use crate::agents::codex::CodexAgent;
 use crate::agents::{AgentEvent, AgentKind, AgentRole};
@@ -111,6 +111,7 @@ pub struct Runtime {
     config: Config,
     session: Mix2Session,
     project: bool,
+    lead_model: Option<String>,
     lead_agent: Arc<dyn Agent>,
     lead_info: AgentInfo,
     teammate_info: AgentInfo,
@@ -151,21 +152,35 @@ impl Runtime {
 
         let lead_version = match lead_version {
             Ok(Ok(v)) => v,
-            Ok(Err(e)) => anyhow::bail!(
-                "{} (the selected lead) is unavailable: {e:#}",
-                config.lead.display_name()
-            ),
-            Err(_) => anyhow::bail!(
-                "{} (the selected lead) did not respond to --version",
-                config.lead.display_name()
-            ),
+            Ok(Err(_)) | Err(_) => anyhow::bail!("{}", install_instructions(config.lead)),
         };
 
         let (teammate_available, teammate_version_str, teammate_reason) = match teammate_version {
             Ok(Ok(v)) => (true, Some(v.raw), None),
-            Ok(Err(e)) => (false, None, Some(format!("{e:#}"))),
-            Err(_) => (false, None, Some("did not respond to --version".to_owned())),
+            Ok(Err(_)) | Err(_) => (
+                false,
+                None,
+                Some(format!("not installed — {}", install_hint(config.teammate))),
+            ),
         };
+
+        // Sign-in probes are local and quota-free; an unauthenticated lead
+        // is fatal with instructions, an unauthenticated teammate degrades.
+        let (lead_auth, teammate_auth) =
+            tokio::join!(lead_agent.auth_status(), teammate_agent.auth_status());
+        if lead_auth == AuthStatus::Unauthenticated {
+            anyhow::bail!("{}", login_instructions(config.lead));
+        }
+        let (teammate_available, teammate_reason, teammate_auth) =
+            if teammate_available && teammate_auth == AuthStatus::Unauthenticated {
+                (
+                    false,
+                    Some(format!("not signed in — {}", login_hint(config.teammate))),
+                    AuthStatus::Unauthenticated,
+                )
+            } else {
+                (teammate_available, teammate_reason, teammate_auth)
+            };
 
         let session = Mix2Session::new(config.lead, cwd);
         let project = detect_project(&session.cwd);
@@ -177,6 +192,13 @@ impl Runtime {
             let _ = std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700));
         }
 
+        let model_for = |kind: AgentKind| match kind {
+            AgentKind::Claude => config.claude_model.clone(),
+            AgentKind::Codex => config.codex_model.clone(),
+        };
+        let lead_model = model_for(config.lead);
+        let teammate_model = model_for(config.teammate);
+
         let consult_server = ConsultServer::start(
             teammate_available.then(|| Arc::clone(&teammate_agent)),
             config.teammate,
@@ -187,6 +209,7 @@ impl Runtime {
             session.id,
             helper_dir(),
             project,
+            teammate_model.clone(),
             consult_updates,
         )
         .await?;
@@ -197,6 +220,8 @@ impl Runtime {
             version: Some(lead_version.raw),
             available: true,
             reason: None,
+            authenticated: auth_flag(lead_auth),
+            model: lead_model.clone(),
         };
         let teammate_info = AgentInfo {
             kind: config.teammate,
@@ -204,12 +229,15 @@ impl Runtime {
             version: teammate_version_str,
             available: teammate_available,
             reason: teammate_reason,
+            authenticated: auth_flag(teammate_auth),
+            model: teammate_model.clone(),
         };
 
         Ok(Self {
             config,
             session,
             project,
+            lead_model,
             lead_agent,
             lead_info,
             teammate_info,
@@ -254,6 +282,7 @@ impl Runtime {
             cwd: self.session.cwd.clone(),
             role: AgentRole::Lead,
             turn_id: turn_uuid,
+            model: self.lead_model.clone(),
             instructions: crate::collaboration::prompts::lead_instructions(
                 self.config.lead,
                 self.config.teammate,
@@ -349,6 +378,11 @@ impl Runtime {
                 agent,
                 role,
                 name,
+            }),
+            AgentEvent::ModelObserved { agent, model } => emit(&Event::AgentModel {
+                agent,
+                model: Some(model),
+                source: "observed".to_owned(),
             }),
             AgentEvent::ParserWarning { agent, message } => {
                 tracing::warn!("{agent} parser: {message}");
@@ -483,9 +517,73 @@ impl Runtime {
         }
     }
 
+    /// Apply a /model selection: store the override for future invocations
+    /// (lead resumes and teammate consults both honor it) and confirm.
+    async fn set_model(&mut self, agent: &str, model: Option<String>) {
+        let Ok(kind) = agent.parse::<AgentKind>() else {
+            emit(&Event::Error {
+                message: format!("unknown agent '{agent}' (expected claude or codex)"),
+            });
+            return;
+        };
+        let model = model.filter(|m| !m.trim().is_empty() && m != "default");
+        if kind == self.config.lead {
+            self.lead_model = model.clone();
+        } else {
+            self.consult_server.set_teammate_model(model.clone()).await;
+        }
+        emit(&Event::AgentModel {
+            agent: kind,
+            model,
+            source: "selected".to_owned(),
+        });
+    }
+
     async fn cleanup(&self) {
         let _ = tokio::fs::remove_dir_all(&self.runtime_dir).await;
     }
+}
+
+fn auth_flag(status: AuthStatus) -> Option<bool> {
+    match status {
+        AuthStatus::Authenticated => Some(true),
+        AuthStatus::Unauthenticated => Some(false),
+        AuthStatus::Unknown => None,
+    }
+}
+
+fn install_hint(kind: AgentKind) -> String {
+    match kind {
+        AgentKind::Claude => "install Claude Code from https://claude.com/claude-code, run `claude` once to sign in, then restart mix2"
+            .to_owned(),
+        AgentKind::Codex => "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), run `codex login`, then restart mix2"
+            .to_owned(),
+    }
+}
+
+fn install_instructions(kind: AgentKind) -> String {
+    format!(
+        "{} isn't installed (command not found). To get the full team: {}.",
+        kind.display_name(),
+        install_hint(kind)
+    )
+}
+
+fn login_hint(kind: AgentKind) -> String {
+    match kind {
+        AgentKind::Claude => {
+            "run `claude` once (or `claude auth login`) to sign in, then restart mix2".to_owned()
+        }
+        AgentKind::Codex => "run `codex login`, then restart mix2".to_owned(),
+    }
+}
+
+fn login_instructions(kind: AgentKind) -> String {
+    format!(
+        "{} is installed but not signed in. {}.",
+        kind.display_name(),
+        login_hint(kind)
+    )
 }
 
 /// Serve the JSONL protocol over stdin/stdout until shutdown or EOF.
@@ -614,6 +712,9 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
                                 message: format!("cancel for unknown turn {turn_id}"),
                             }),
                         }
+                    }
+                    Ok(Command::SetModel { agent, model }) => {
+                        runtime.set_model(&agent, model).await;
                     }
                     Ok(Command::Shutdown) => {
                         if let Some(turn) = active.take() {

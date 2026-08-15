@@ -25,6 +25,13 @@ pub enum Command {
     Cancel {
         turn_id: String,
     },
+    /// Override (or clear, with model=None) the model an agent uses for
+    /// subsequent invocations this session.
+    SetModel {
+        agent: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
     Shutdown,
 }
 

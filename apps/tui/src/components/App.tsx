@@ -230,12 +230,37 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       case 'copy':
         copyLastAnswer();
         return;
+      case 'model': {
+        const [, agent, ...modelParts] = text.slice(1).split(/\s+/);
+        const model = modelParts.join(' ').trim();
+        if (!agent) {
+          const describe = (info?: { kind: string; model?: string }) =>
+            info ? `${info.kind}: ${info.model ?? 'provider default'}` : '';
+          dispatch({
+            type: 'local-notice',
+            text:
+              `models  ${describe(state.session?.lead)} · ${describe(state.session?.teammate)}\n` +
+              'usage   /model claude <name>  ·  /model codex <name>  ·  /model <agent> default',
+          });
+          return;
+        }
+        if (agent !== 'claude' && agent !== 'codex') {
+          dispatch({ type: 'local-notice', text: `unknown agent '${agent}' — /model claude <name> or /model codex <name>` });
+          return;
+        }
+        client.send({
+          type: 'set_model',
+          agent,
+          model: !model || model === 'default' ? null : model,
+        });
+        return;
+      }
       case 'help':
         dispatch({
           type: 'local-notice',
           text:
-            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /team toggle the team panel · /help this list\n' +
-            'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t team panel · ctrl+y copy answer · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
+            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /model show or set models · /activity toggle the activity panel · /help this list\n' +
+            'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t activity · ctrl+y copy answer · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
         });
         return;
       case 'clear':
@@ -245,7 +270,8 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           dispatch({ type: 'clear-conversation' });
         }
         return;
-      case 'team':
+      case 'activity':
+      case 'team': // legacy alias
         dispatch({ type: 'toggle-team-panel' });
         return;
       default:

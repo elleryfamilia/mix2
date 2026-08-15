@@ -2,7 +2,7 @@
  * Slash-command vocabulary, shared by the composer's syntax highlighting
  * and the status-bar hint. Keep in sync with `runSlashCommand` in App.tsx.
  */
-export const SLASH_COMMANDS = ['exit', 'quit', 'q', 'help', 'clear', 'copy', 'team'] as const;
+export const SLASH_COMMANDS = ['exit', 'quit', 'q', 'help', 'clear', 'copy', 'model', 'activity', 'team'] as const;
 
 /**
  * If the composer text begins with a recognized slash command, return the

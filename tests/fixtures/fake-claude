@@ -35,12 +35,20 @@ def main():
         print("9.9.9-fake (Claude Code)")
         return 0
 
+    if args[:2] == ["auth", "status"]:
+        logged_in = os.environ.get("FAKE_CLAUDE_LOGGED_OUT") != "1"
+        print(json.dumps({"loggedIn": logged_in}))
+        return 0
+
     resume_id = None
     system_prompt = ""
+    model = "default"
     allowed = []
     for i, a in enumerate(args):
         if a == "--resume" and i + 1 < len(args):
             resume_id = args[i + 1]
+        if a == "--model" and i + 1 < len(args):
+            model = args[i + 1]
         if a == "--append-system-prompt" and i + 1 < len(args):
             system_prompt = args[i + 1]
         if a == "--allowedTools":
@@ -171,7 +179,7 @@ def main():
     else:
         text = (
             f"fake-claude reply [session:{session_id}] [resumed:{resumed}] [role:{role}] "
-            f"[scratchpad:{scratchpad}] " + " ".join(consult_notes)
+            f"[scratchpad:{scratchpad}] [model:{model}] " + " ".join(consult_notes)
         ).strip()
 
     for chunk in (text[i:i + 24] for i in range(0, len(text), 24)):

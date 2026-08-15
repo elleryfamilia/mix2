@@ -12,6 +12,15 @@ pub struct AgentVersion {
     pub raw: String,
 }
 
+/// Result of a cheap, quota-free sign-in probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthStatus {
+    Authenticated,
+    Unauthenticated,
+    /// The probe failed or the CLI has no status command; don't block on it.
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentSession {
     pub agent: AgentKind,
@@ -24,6 +33,8 @@ pub struct AgentRequest {
     pub cwd: PathBuf,
     pub role: AgentRole,
     pub turn_id: Uuid,
+    /// Model override; None uses the provider's own default.
+    pub model: Option<String>,
     /// Role instructions appended to the provider's own system prompt.
     pub instructions: String,
     /// Extra environment for the spawned CLI (MIX2_* markers).
@@ -54,6 +65,11 @@ pub trait Agent: Send + Sync {
 
     /// Resolve and report the installed CLI version, or fail if missing.
     async fn version(&self) -> Result<AgentVersion>;
+
+    /// Cheap sign-in probe (no model quota). Defaults to Unknown.
+    async fn auth_status(&self) -> AuthStatus {
+        AuthStatus::Unknown
+    }
 
     /// Start a fresh provider session.
     async fn start(

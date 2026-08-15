@@ -24,6 +24,13 @@ def main():
         print("codex-cli 9.9.9-fake")
         return 0
 
+    if args[:2] == ["login", "status"]:
+        if os.environ.get("FAKE_CODEX_LOGGED_OUT") == "1":
+            print("Not logged in")
+            return 1
+        print("Logged in using ChatGPT")
+        return 0
+
     if not args or args[0] != "exec":
         sys.stderr.write("fake-codex: expected `exec` subcommand\n")
         return 2
@@ -36,6 +43,7 @@ def main():
 
     dev_instructions = ""
     sandbox_mode = ""
+    model = "default"
     for i, a in enumerate(rest):
         if a == "-c" and i + 1 < len(rest):
             kv = rest[i + 1]
@@ -43,6 +51,8 @@ def main():
                 dev_instructions = kv.split("=", 1)[1]
             if kv.startswith("sandbox_mode="):
                 sandbox_mode = kv.split("=", 1)[1]
+            if kv.startswith("model="):
+                model = kv.split("=", 1)[1].strip('"')
 
     prompt = sys.stdin.read()
     scenarios = _leading_scenarios(prompt)
@@ -143,7 +153,7 @@ def main():
 
     text = (
         f"fake-codex reply [session:{thread_id}] [resumed:{resumed}] [role:{role}] "
-        f"[sandbox:{sandbox_mode or 'default'}] " + " ".join(consult_notes)
+        f"[sandbox:{sandbox_mode or 'default'}] [model:{model}] " + " ".join(consult_notes)
     ).strip()
 
     out({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": text}})
