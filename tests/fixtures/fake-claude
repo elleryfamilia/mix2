@@ -117,6 +117,18 @@ def main():
     })
 
     consult_notes = []
+    if "consult_abandon" in scenarios:
+        consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Quick take: evaluate."
+        try:
+            proc = subprocess.run(
+                ["mix2-consult", "start"], input=consult_prompt, text=True,
+                capture_output=True, timeout=60,
+            )
+            ok = "ok" if proc.returncode == 0 and "ticket:" in proc.stdout else "err"
+            consult_notes.append(f"[consult_started:{ok}]")
+        except Exception as e:  # noqa: BLE001
+            consult_notes.append(f"[consult_started:exc:{e}]")
+
     if "consult_async" in scenarios:
         consult_prompt = _extract(prompt, "CONSULT_PROMPT:") or "Quick take: evaluate the plan."
         try:

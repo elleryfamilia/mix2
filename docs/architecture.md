@@ -32,12 +32,15 @@ make the call.
 
 The team's durable output lives in `.mix2/` inside the working directory
 — implementation plans, design notes, review findings. It is the only
-place the team writes. For Claude leads this is enforced, not promised:
-the adapter grants `Write(.mix2/**)` / `Edit(.mix2/**)` and nothing else,
-so project files stay untouchable even if the model tried. Codex leads
+place the team is told to write, and permissions back that up as far as
+each provider allows — no further. Be precise about what that means:
+mix2 only *adds* allowances (`Bash(mix2-consult:*)`, `Write(.mix2/**)`,
+`Edit(.mix2/**)`); it cannot subtract permissions the user's own Claude
+configuration already grants. With stock Claude settings, non-interactive
+writes outside `.mix2/` are denied, so the boundary holds; with a
+permissive user allowlist, the boundary is instruction-level. Codex leads
 run in the workspace-write sandbox (the consult channel requires it), so
-for them the same rule is instruction-enforced and disclosed in the
-README. Teammates never write; their assessment is their reply. Asked to
+for them the rule is always instruction-enforced. Teammates never write; their assessment is their reply. Asked to
 implement, the team reframes instead of refusing: it produces the plan in
 `.mix2/` and hands the user the exact `claude`/`codex` command to execute
 it interactively, where steering and approval exist.
@@ -102,16 +105,22 @@ continues normally.
 
 ## Recursion prevention
 
-Enforced in code, twice:
+Enforced in code, in layers:
 
+- **Capability token (the real authorization):** each turn mints a token
+  injected only into the coordinator's environment
+  (`MIX2_CONSULT_TOKEN`). Every consult request — sync, start, and wait —
+  must present it; a teammate (or any other process) forging
+  `role=lead, depth=0` is refused because it never received the token.
 - `mix2-consult` refuses immediately when `MIX2_ROLE=teammate` or
-  `MIX2_DEPTH` ≥ 1 (both are set by the runtime when spawning agents).
-- The runtime's consult server independently rejects requests whose role
-  is `teammate` or whose depth exceeds the maximum, and refuses anything
-  outside an active turn.
+  `MIX2_DEPTH` ≥ 1 — a fast, friendly refusal before any transport.
+- The consult server independently rejects teammate-role requests,
+  excessive depth, and anything outside an active turn, and every
+  consultation event is scoped to its originating turn's UUID, so a late
+  result from an abandoned consultation can never credit a later turn.
 
-Prompts additionally tell the teammate not to delegate, but the guarantee
-does not depend on the model behaving.
+Prompts additionally tell the teammate not to delegate, but the
+authorization does not rest on the model honoring them.
 
 ## Provider adapters
 
@@ -119,15 +128,19 @@ does not depend on the model behaving.
 invocation behavior: flags, prompt transport (stdin in both cases), role
 instruction injection (`--append-system-prompt` / `-c
 developer_instructions=…`), session resume, and stream parsing. Parsers
-are tolerant by contract — unknown event types, unknown item types, and
-malformed lines produce warnings, never panics; the shapes were verified
+are tolerant by contract — malformed lines produce parser warnings, and
+unknown event or item types are ignored by design (never panics); the
+shapes were verified
 against claude 2.1.x and codex-cli 0.146.x. Reasoning/thinking deltas are
 consumed and discarded: hidden chain-of-thought never leaves the adapter.
 
-Adding an agent later means one new adapter plus an `AgentKind` variant;
-the collaboration machinery and the UI are provider-neutral (the protocol
-already speaks in `lead`/`teammate` roles and semantic events like
-`consult`, leaving room for future verbs such as `review` or `challenge`).
+Honest scope note: today the system is a fixed Claude/Codex pair. Adding
+a third provider means a new adapter *and* touching the `AgentKind` enum,
+its `other()` pairing, the config fields, and the TUI's protocol schema —
+the collaboration machinery and events are provider-neutral, but there is
+no provider registry yet. The `lead`/`teammate` roles and semantic events
+(`consult`, room for `review`/`challenge`) are the parts deliberately
+built not to need rework.
 
 ## IPC
 

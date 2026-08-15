@@ -33,6 +33,15 @@ struct TurnState {
     cancelled: bool,
 }
 
+fn update_turn_id(update: &ConsultUpdate) -> Uuid {
+    match update {
+        ConsultUpdate::Started { turn_id, .. }
+        | ConsultUpdate::AgentEvent { turn_id, .. }
+        | ConsultUpdate::Completed { turn_id, .. }
+        | ConsultUpdate::Failed { turn_id, .. } => *turn_id,
+    }
+}
+
 pub struct RuntimeOptions {
     pub lead: Option<String>,
     pub cwd: Option<PathBuf>,
@@ -250,7 +259,12 @@ impl Runtime {
         })
     }
 
-    fn mix2_env(&self, turn_uuid: Uuid, role: AgentRole) -> HashMap<String, String> {
+    fn mix2_env(
+        &self,
+        turn_uuid: Uuid,
+        role: AgentRole,
+        consult_token: Option<&str>,
+    ) -> HashMap<String, String> {
         let mut env = HashMap::new();
         env.insert("MIX2_ROLE".to_owned(), role.to_string());
         env.insert(
@@ -263,6 +277,9 @@ impl Runtime {
             "MIX2_RUNTIME_DIR".to_owned(),
             self.runtime_dir.display().to_string(),
         );
+        if let Some(token) = consult_token {
+            env.insert("MIX2_CONSULT_TOKEN".to_owned(), token.to_owned());
+        }
         env
     }
 
@@ -270,6 +287,7 @@ impl Runtime {
         let turn_uuid = Uuid::new_v4();
         let cancel = CancellationToken::new();
         let budget = Arc::new(ConsultBudget::new(self.config.max_consults_per_turn));
+        let consult_token = Uuid::new_v4().to_string();
 
         emit(&Event::MessageUser {
             turn_id: ui_id.clone(),
@@ -291,7 +309,7 @@ impl Runtime {
                 self.teammate_info.available,
                 self.project,
             ),
-            env: self.mix2_env(turn_uuid, AgentRole::Lead),
+            env: self.mix2_env(turn_uuid, AgentRole::Lead, Some(&consult_token)),
             path_prepend: helper_dir(),
             runtime_dir: Some(self.runtime_dir.clone()),
         };
@@ -309,6 +327,17 @@ impl Runtime {
         let token = cancel.clone();
         let budget_for_server = Arc::clone(&budget);
 
+        // Register with the consult server BEFORE the lead exists: a fast
+        // lead must never find "no active turn".
+        self.consult_server
+            .begin_turn(ActiveTurn {
+                turn_id: turn_uuid,
+                budget: budget_for_server,
+                cancel: cancel.clone(),
+                token: consult_token,
+            })
+            .await;
+
         tokio::spawn(async move {
             let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
             let forward_msgs = msgs.clone();
@@ -325,25 +354,14 @@ impl Runtime {
             let _ = msgs.send(LeadMsg::Done(turn_uuid, result)).await;
         });
 
-        let state = TurnState {
+        TurnState {
             ui_id,
             uuid: turn_uuid,
             cancel: cancel.clone(),
             successful_consults: 0,
             started: Instant::now(),
             cancelled: false,
-        };
-
-        // Register the turn with the consult server (budget + cancellation).
-        self.consult_server
-            .begin_turn(ActiveTurn {
-                turn_id: turn_uuid,
-                budget: budget_for_server,
-                cancel,
-            })
-            .await;
-
-        state
+        }
     }
 
     fn handle_lead_event(&mut self, ui_id: &str, event: AgentEvent) {
@@ -479,6 +497,10 @@ impl Runtime {
     }
 
     async fn finish_turn(&mut self, turn: TurnState, result: Result<AgentResult>) {
+        // Kill anything still attached to this turn — in particular a
+        // `start`ed consultation the lead never waited for. Its result
+        // belongs to no one, and it must not bleed into the next turn.
+        turn.cancel.cancel();
         self.consult_server.end_turn().await;
         let duration_ms = turn.started.elapsed().as_millis() as u64;
         match result {
@@ -737,8 +759,13 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
                 }
             }
             Some(update) = consult_rx.recv() => {
+                // Scope strictly to the originating turn: a late update
+                // from an earlier turn must never relabel itself onto the
+                // current one.
                 if let Some(turn) = active.as_mut() {
-                    runtime.handle_consult_update(turn, update);
+                    if update_turn_id(&update) == turn.uuid {
+                        runtime.handle_consult_update(turn, update);
+                    }
                 }
             }
             Some(msg) = lead_rx.recv() => {
@@ -763,6 +790,9 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         }
     }
 
+    // Give in-flight kill_tree sequences a beat to finish before the
+    // runtime tears down; kill_on_drop only reaps direct children.
+    tokio::time::sleep(Duration::from_millis(400)).await;
     runtime.cleanup().await;
     Ok(())
 }
@@ -795,7 +825,9 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
     while let Some(state) = turn.as_mut() {
         tokio::select! {
             Some(update) = consult_rx.recv() => {
-                runtime.handle_consult_update(state, update);
+                if update_turn_id(&update) == state.uuid {
+                    runtime.handle_consult_update(state, update);
+                }
             }
             Some(msg) = lead_rx.recv() => {
                 match msg {

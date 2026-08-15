@@ -183,16 +183,21 @@ team thinks, its `◐` mark rotates — when the mark stops, the team has.
 
 - Your existing provider logins are used untouched; auth failures surface
   the provider's own message. No permission bypass flags, ever.
-- The team's only write access is the `.mix2/` scratchpad. For Claude
-  coordinators that's *enforced* — the adapter grants exactly
-  `Bash(mix2-consult:*)`, `Write(.mix2/**)`, `Edit(.mix2/**)` on top of
-  your own Claude settings. Codex coordinators run Codex's standard
-  workspace-write sandbox (its read-only sandbox blocks the consult
-  channel entirely); there the rule is instruction-enforced, and this is
-  the one deliberate elevation.
+- The team's only write target is the `.mix2/` scratchpad. mix2 adds
+  exactly three allowances for Claude coordinators
+  (`Bash(mix2-consult:*)`, `Write(.mix2/**)`, `Edit(.mix2/**)`) and
+  subtracts nothing: with stock Claude settings, writes outside `.mix2/`
+  are denied in non-interactive mode; if your own allowlist is broader,
+  your rules win and the boundary is instruction-level. Codex
+  coordinators run Codex's standard workspace-write sandbox (its
+  read-only sandbox blocks the consult channel entirely) — the one
+  deliberate elevation, instruction-enforced.
 - Consulted agents are read-only reviewers: default Codex sandbox, no
   added Claude permissions, no scratchpad pen.
-- Recursive consultation is refused by the runtime, in code.
+- Consultation requests are authorized by a per-turn capability token
+  that only the coordinator's environment receives — recursion and forged
+  requests are refused by the runtime, in code, regardless of what the
+  caller claims to be.
 - Runtime state lives in `/tmp/mix2/<session>/` (socket + consult
   mailbox, never credentials) and is removed on exit. Debug logs never
   include prompts, file contents, or agent responses. Hidden model

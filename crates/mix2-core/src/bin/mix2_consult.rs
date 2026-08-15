@@ -122,11 +122,13 @@ fn run() -> Result<String, String> {
         }
     };
 
+    let consult_token = std::env::var("MIX2_CONSULT_TOKEN").ok();
     let request = serde_json::json!({
         "v": 1,
         "prompt": prompt,
         "role": if role.is_empty() { "lead" } else { &role },
         "depth": depth,
+        "token": consult_token,
         "mode": match &mode { Mode::Sync => "sync", Mode::Start => "start", Mode::Wait(_) => "wait" },
         "ticket": match &mode { Mode::Wait(t) => Some(t.clone()), _ => None },
     })

@@ -301,6 +301,86 @@ fn async_consultations_share_the_budget() {
 }
 
 #[test]
+fn abandoned_consultation_never_bleeds_into_the_next_turn() {
+    let mut core = Core::start(CoreOptions::default());
+    core.events_until("ready", LONG);
+
+    // Turn 1 starts a consultation (slow teammate) and finishes without
+    // ever collecting it: solo attribution, and the orphan dies with the
+    // turn instead of crediting the next one.
+    core.submit(
+        "t1",
+        "SCENARIO:consult_abandon CONSULT_PROMPT:SCENARIO:slow fire and forget",
+    );
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(count(&events, "consult.started"), 1);
+    assert_eq!(count(&events, "consult.completed"), 0);
+    let final_msg = find(&events, "message.final").unwrap();
+    assert_eq!(final_msg["speaker"], "claude");
+    assert!(final_msg["text"]
+        .as_str()
+        .unwrap()
+        .contains("[consult_started:ok]"));
+
+    core.submit("t2", "hi again");
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(count(&events, "consult.started"), 0);
+    assert_eq!(count(&events, "consult.completed"), 0);
+    assert_eq!(count(&events, "consult.failed"), 0);
+    let final_msg = find(&events, "message.final").unwrap();
+    assert_eq!(final_msg["speaker"], "claude");
+    assert_eq!(final_msg["consultations"], 0);
+}
+
+#[test]
+fn consult_requests_without_the_turn_token_are_refused() {
+    use std::io::{BufRead as _, Write as _};
+
+    let mut core = Core::start(CoreOptions::default());
+    let startup = core.events_until("ready", LONG);
+    let session_id = find(&startup, "ready").unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Hold a turn open so the server has an active turn to protect.
+    core.submit("t1", "SCENARIO:slow long think");
+    core.events_until("agent.started", LONG);
+
+    let sock = std::path::PathBuf::from("/tmp/mix2")
+        .join(&session_id)
+        .join("consult.sock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !sock.exists() {
+        assert!(Instant::now() < deadline, "socket never appeared");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // A forged request claiming lead role and depth 0 — but without the
+    // capability token only the coordinator's environment carries.
+    let mut stream = std::os::unix::net::UnixStream::connect(&sock).expect("connect");
+    stream
+        .write_all(b"{\"v\":1,\"prompt\":\"evil\",\"role\":\"lead\",\"depth\":0}\n")
+        .expect("write");
+    let mut line = String::new();
+    std::io::BufReader::new(stream)
+        .read_line(&mut line)
+        .expect("read");
+    let response: serde_json::Value = serde_json::from_str(&line).expect("json");
+    assert_eq!(response["ok"], false);
+    assert!(
+        response["error"]
+            .as_str()
+            .unwrap()
+            .contains("not authorized"),
+        "got: {line}"
+    );
+
+    core.send(&serde_json::json!({"type": "cancel", "turn_id": "t1"}));
+    core.events_until("turn.cancelled", LONG);
+}
+
+#[test]
 fn consultation_budget_is_enforced() {
     let mut core = Core::start(CoreOptions::default());
     core.events_until("ready", LONG);

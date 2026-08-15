@@ -61,6 +61,10 @@ pub struct ConsultRequest {
     pub mode: Option<String>,
     #[serde(default)]
     pub ticket: Option<String>,
+    /// Per-turn capability token. Injected only into the coordinator's
+    /// environment, so role/depth claims are not the authorization.
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +109,8 @@ pub struct ActiveTurn {
     pub turn_id: Uuid,
     pub budget: Arc<ConsultBudget>,
     pub cancel: CancellationToken,
+    /// Capability required in every consult request this turn.
+    pub token: String,
 }
 
 pub struct ConsultServer {
@@ -229,6 +235,18 @@ impl ConsultServer {
     pub async fn end_turn(&self) {
         *self.shared.active.write().await = None;
         self.shared.pending.lock().await.clear();
+        // Sweep the mailbox: stale req/res/done files from this turn are
+        // dead weight and could confuse a future reader.
+        let dir = self.shared.runtime_dir.join(FILE_DIR_NAME);
+        if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("req-") || name.starts_with("res-") || name.starts_with("done-")
+                {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+        }
     }
 }
 
@@ -316,6 +334,12 @@ async fn await_result(
 }
 
 async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> ConsultResponse {
+    if request.v != 1 {
+        return refuse(format!(
+            "unsupported consult protocol version {}",
+            request.v
+        ));
+    }
     // Recursion prevention is enforced here in code, not only in prompts.
     if request.role == "teammate" {
         return refuse(REFUSAL_TEAMMATE.to_owned());
@@ -329,6 +353,17 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
     let mode = request.mode.as_deref().unwrap_or("sync");
 
     if mode == "wait" {
+        let authorized = {
+            let active = shared.active.read().await;
+            active
+                .as_ref()
+                .is_some_and(|turn| request.token.as_deref() == Some(turn.token.as_str()))
+        };
+        if !authorized {
+            return refuse(
+                "Consultation unavailable: this process is not authorized to consult.".to_owned(),
+            );
+        }
         let Some(ticket) = request.ticket else {
             return refuse("wait requires a consultation ticket.".to_owned());
         };
@@ -347,13 +382,25 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
         return refuse("Consultation failed: empty prompt.".to_owned());
     }
 
-    let (turn_id, budget, cancel) = {
+    let (turn_id, budget, cancel, expected_token) = {
         let active = shared.active.read().await;
         match active.as_ref() {
-            Some(turn) => (turn.turn_id, Arc::clone(&turn.budget), turn.cancel.clone()),
+            Some(turn) => (
+                turn.turn_id,
+                Arc::clone(&turn.budget),
+                turn.cancel.clone(),
+                turn.token.clone(),
+            ),
             None => return refuse("Consultation unavailable: no active mix2 turn.".to_owned()),
         }
     };
+    // Authorization is the capability token, not the caller's role/depth
+    // claims: only the coordinator's environment carries it.
+    if request.token.as_deref() != Some(expected_token.as_str()) {
+        return refuse(
+            "Consultation unavailable: this process is not authorized to consult.".to_owned(),
+        );
+    }
 
     let Some(teammate) = shared.teammate.clone() else {
         let reason = shared
@@ -501,14 +548,25 @@ async fn run_consultation(
     });
 
     // Consultations are fresh sessions on purpose: independence preserves
-    // the value of the second opinion.
-    let result =
-        tokio::time::timeout(shared.consult_timeout, teammate.start(request, tx, cancel)).await;
+    // the value of the second opinion. On timeout, cancel a child token
+    // and await the adapter so its process TREE is killed — dropping the
+    // future would only reap the direct child and could leak descendants.
+    let consult_cancel = cancel.child_token();
+    let start = teammate.start(request, tx, consult_cancel.clone());
+    tokio::pin!(start);
+    let result = match tokio::time::timeout(shared.consult_timeout, &mut start).await {
+        Ok(result) => result,
+        Err(_) => {
+            consult_cancel.cancel();
+            let _ = start.await;
+            let _ = forward.await;
+            anyhow::bail!("consultation timed out");
+        }
+    };
     let _ = forward.await;
 
     match result {
-        Ok(Ok(result)) => Ok(result.text),
-        Ok(Err(e)) => Err(e),
-        Err(_) => anyhow::bail!("consultation timed out"),
+        Ok(result) => Ok(result.text),
+        Err(e) => Err(e),
     }
 }
