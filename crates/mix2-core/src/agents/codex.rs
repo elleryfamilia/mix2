@@ -204,6 +204,15 @@ impl Agent for CodexAgent {
         })
     }
 
+    fn known_models(&self) -> Vec<String> {
+        // Curated: the models codex's `-m` commonly accepts. Replace with a
+        // provider listing when the CLI grows one.
+        ["gpt-5.3-codex", "gpt-5-codex", "gpt-5", "gpt-5-codex-mini"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
     async fn auth_status(&self) -> AuthStatus {
         // `codex login status` exits 0 when signed in, non-zero otherwise.
         let out = tokio::time::timeout(

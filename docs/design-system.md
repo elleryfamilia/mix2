@@ -295,6 +295,15 @@ duration, and each teammate consultation's **final response** (scrollable).
 Hidden reasoning is never shown here. When the teammate is unavailable the
 panel says so: `○ codex   teammate  unavailable — <reason>`.
 
+## Model picker (/model)
+
+An overlay in the panel pattern: `◐ models` header, the two agents as
+side-by-side columns (stacked under 88 cols) in their identity colors,
+"provider default" always first, `›` inverse cursor on the focused entry,
+`●` in the agent color marking the active choice. `↑↓` choose, `←→`/tab
+switch agent, enter applies (panel stays open so both agents can be set),
+esc closes. Selections confirm via a conversation notice.
+
 ## Composer
 
 ```text

@@ -190,6 +190,15 @@ impl Agent for ClaudeAgent {
         })
     }
 
+    fn known_models(&self) -> Vec<String> {
+        // The documented `--model` aliases (each resolves to the latest in
+        // its family), plus explicit latest names.
+        ["fable", "opus", "sonnet", "haiku"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
     async fn auth_status(&self) -> AuthStatus {
         // `claude auth status` prints JSON with a `loggedIn` field; shell
         // hooks may prepend banner lines, so scan from the first brace.

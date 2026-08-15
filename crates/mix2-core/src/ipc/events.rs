@@ -33,6 +33,9 @@ pub struct AgentInfo {
     /// Configured/selected model; None = the provider's own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Models the CLI accepts, for the /model picker (may be empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 /// Events emitted by the core to the Ink UI, one JSON object per line on

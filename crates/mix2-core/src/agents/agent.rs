@@ -71,6 +71,13 @@ pub trait Agent: Send + Sync {
         AuthStatus::Unknown
     }
 
+    /// Models this provider's CLI accepts, for the /model picker. Curated
+    /// per adapter today; swap for a provider discovery call when one
+    /// exists. Empty means "unknown — provider default only".
+    fn known_models(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Start a fresh provider session.
     async fn start(
         &self,

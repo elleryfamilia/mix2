@@ -4,6 +4,12 @@ import type { CoreClient } from '../ipc/client.js';
 import type { CoreEvent } from '../ipc/protocol.js';
 import { renderConversationWithAnchors, type PromptAnchor } from '../render/conversation.js';
 import type { Line } from '../render/lines.js';
+import {
+  modelEntries,
+  renderModelPanel,
+  PROVIDER_DEFAULT,
+  type ModelCursor,
+} from '../render/modelPanel.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import type { EventEmitter } from 'node:events';
 import type { MouseEvent } from '../mouse/sgr.js';
@@ -57,6 +63,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const [scroll, setScroll] = useState<{ top: number; stick: boolean }>({ top: 0, stick: true });
   const [selection, setSelection] = useState<Selection | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  const [modelPanel, setModelPanel] = useState<ModelCursor | null>(null);
   const turnCounter = useRef(0);
   const ctrlCArmed = useRef(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -100,11 +107,14 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
 
   const { lines, anchors } = useMemo((): { lines: Line[]; anchors: PromptAnchor[] } => {
     const ctx = { width, spinner, teamGlyph, now: Date.now() };
+    if (modelPanel && state.session) {
+      return { lines: renderModelPanel(state.session, modelPanel, width), anchors: [] };
+    }
     if (state.teamPanelOpen) {
       return { lines: renderTeamPanel(state, width, ctx.now, teamGlyph), anchors: [] };
     }
     return renderConversationWithAnchors(state, ctx);
-  }, [state, width, spinner, teamGlyph]);
+  }, [state, width, spinner, teamGlyph, modelPanel]);
 
   const composerRows = composerHeight(editor, width); // includes its frame
   const chromeRows = 2 /* header + spacing */ + 1 /* status */;
@@ -234,14 +244,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         const [, agent, ...modelParts] = text.slice(1).split(/\s+/);
         const model = modelParts.join(' ').trim();
         if (!agent) {
-          const describe = (info?: { kind: string; model?: string }) =>
-            info ? `${info.kind}: ${info.model ?? 'provider default'}` : '';
-          dispatch({
-            type: 'local-notice',
-            text:
-              `models  ${describe(state.session?.lead)} · ${describe(state.session?.teammate)}\n` +
-              'usage   /model claude <name>  ·  /model codex <name>  ·  /model <agent> default',
-          });
+          setModelPanel({ column: 0, index: 0 });
           return;
         }
         if (agent !== 'claude' && agent !== 'codex') {
@@ -321,7 +324,8 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       return;
     }
     if (key.escape) {
-      if (state.teamPanelOpen) dispatch({ type: 'close-team-panel' });
+      if (modelPanel) setModelPanel(null);
+      else if (state.teamPanelOpen) dispatch({ type: 'close-team-panel' });
       else if (state.turn) cancel();
       return;
     }
@@ -332,6 +336,44 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     if (key.pageDown) {
       const next = top + (viewportRows - 1);
       setScroll({ top: Math.min(next, maxTop), stick: next >= maxTop });
+      return;
+    }
+
+    if (modelPanel && state.session) {
+      const session = state.session;
+      const infoFor = (column: 0 | 1) => (column === 0 ? session.lead : session.teammate);
+      const entryCount = (column: 0 | 1) => modelEntries(infoFor(column).models ?? []).length;
+      // Functional updates: batched key events must each see the latest
+      // cursor, not the snapshot from this render.
+      if (key.upArrow) {
+        setModelPanel((prev) => prev && { ...prev, index: Math.max(0, prev.index - 1) });
+      } else if (key.downArrow) {
+        setModelPanel(
+          (prev) =>
+            prev && { ...prev, index: Math.min(entryCount(prev.column) - 1, prev.index + 1) },
+        );
+      } else if (key.leftArrow || key.rightArrow || key.tab) {
+        setModelPanel((prev) => {
+          if (!prev) return prev;
+          const column: 0 | 1 = prev.column === 0 ? 1 : 0;
+          return { column, index: Math.min(prev.index, entryCount(column) - 1) };
+        });
+      } else if (key.return) {
+        setModelPanel((prev) => {
+          if (prev) {
+            const info = infoFor(prev.column);
+            const entry = modelEntries(info.models ?? [])[prev.index];
+            if (entry) {
+              client.send({
+                type: 'set_model',
+                agent: info.kind,
+                model: entry === PROVIDER_DEFAULT ? null : entry,
+              });
+            }
+          }
+          return prev;
+        });
+      }
       return;
     }
 
@@ -414,6 +456,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         scrolledUp={top < maxTop}
         slashOpen={editor.text.startsWith('/')}
         flash={flash}
+        modelPanelOpen={modelPanel !== null}
       />
     </Box>
   );

@@ -20,6 +20,7 @@ export const agentInfoSchema = z.object({
   reason: z.string().optional(),
   authenticated: z.boolean().optional(),
   model: z.string().optional(),
+  models: z.array(z.string()).optional(),
 });
 
 export const eventSchema = z.discriminatedUnion('type', [

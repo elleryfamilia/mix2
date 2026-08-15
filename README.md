@@ -172,11 +172,13 @@ Slash commands: `/exit` (also `/quit`), `/clear`, `/copy`, `/model`,
 surfaces the list in the status bar.
 
 Models: by default each agent uses its own CLI's configured default —
-mix2 doesn't second-guess your setup. `/model` shows what each agent is
-using; `/model claude sonnet` or `/model codex gpt-5-codex` overrides it
-for this session (`/model claude default` reverts), applying to
-subsequent turns and consultations. You can also pin models in
-`config.toml` (`[claude] model = "sonnet"`).
+mix2 doesn't second-guess your setup. `/model` opens a picker showing
+each agent's available models side by side (`↑↓` choose, `←→` switch
+agent, `Enter` apply, `Esc` close), with the active choice marked;
+selections apply to subsequent turns and consultations for this session.
+Power users can skip the picker: `/model claude sonnet`,
+`/model codex gpt-5-codex`, `/model claude default`. Models can also be
+pinned in `config.toml` (`[claude] model = "sonnet"`).
 
 Reading comfort is a feature: answers render markdown natively; the
 prompt you're reading the answer to stays anchored under the header

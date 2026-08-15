@@ -102,6 +102,7 @@ export function StatusBar({
   scrolledUp = false,
   slashOpen = false,
   flash = null,
+  modelPanelOpen = false,
 }: {
   state: AppState;
   spinner: string;
@@ -114,8 +115,14 @@ export function StatusBar({
   slashOpen?: boolean;
   /** Transient confirmation ("selection copied"), shown briefly. */
   flash?: string | null;
+  /** The /model picker is open. */
+  modelPanelOpen?: boolean;
 }): React.JSX.Element {
   let { left, right } = statusSegments(state, spinner, teamGlyph);
+  if (modelPanelOpen) {
+    left = [{ text: '◐ models', color: theme.agent.team }];
+    right = [{ text: '↑↓ ←→ enter · esc close', color: theme.text.faint }];
+  }
   if (slashOpen) {
     left = [{ text: '/exit · /clear · /copy · /model · /activity · /help', color: theme.text.muted }];
   }

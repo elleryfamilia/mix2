@@ -22,8 +22,20 @@ const ready: CoreEvent = {
   type: 'ready',
   protocol: 1,
   session_id: 's1',
-  lead: { kind: 'claude', name: 'Claude', version: '2.1.232', available: true },
-  teammate: { kind: 'codex', name: 'Codex', version: '0.146.0', available: true },
+  lead: {
+    kind: 'claude',
+    name: 'Claude',
+    version: '2.1.232',
+    available: true,
+    models: ['fable', 'opus', 'sonnet', 'haiku'],
+  },
+  teammate: {
+    kind: 'codex',
+    name: 'Codex',
+    version: '0.146.0',
+    available: true,
+    models: ['gpt-5.3-codex', 'gpt-5-codex'],
+  },
   cwd: '/home/dev/src/acme',
 };
 
@@ -399,7 +411,7 @@ describe('App', () => {
     instance.unmount();
   });
 
-  it('/model shows current models and sends selections to the core', async () => {
+  it('/model opens the picker; arrows and enter select a model', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -408,9 +420,47 @@ describe('App', () => {
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
-    expect(h.lastFrame()).toContain('claude: provider default');
-    expect(h.lastFrame()).toContain('codex: provider default');
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('◐ models');
+    expect(frame).toContain('provider default');
+    expect(frame).toContain('sonnet');
+    expect(frame).toContain('gpt-5.3-codex');
 
+    // ↓↓↓ to "sonnet" (default, fable, opus, sonnet), enter applies.
+    h.stdin.write('\x1b[B\x1b[B\x1b[B');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).toHaveBeenCalledWith({
+      type: 'set_model',
+      agent: 'claude',
+      model: 'sonnet',
+    });
+
+    // → switches to the codex column (cursor clamps to its last entry,
+    // gpt-5-codex); enter applies it.
+    h.stdin.write('\x1b[C');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).toHaveBeenCalledWith({
+      type: 'set_model',
+      agent: 'codex',
+      model: 'gpt-5-codex',
+    });
+
+    // Esc closes the picker back to the conversation.
+    h.stdin.write('\x1b');
+    await tickReact();
+    expect(h.lastFrame()).not.toContain('◐ models');
+    h.unmount();
+  });
+
+  it('/model <agent> <name> still sets directly', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
     h.stdin.write('/model claude sonnet');
     await tickReact();
     h.stdin.write('\r');

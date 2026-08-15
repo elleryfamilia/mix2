@@ -222,6 +222,7 @@ impl Runtime {
             reason: None,
             authenticated: auth_flag(lead_auth),
             model: lead_model.clone(),
+            models: lead_agent.known_models(),
         };
         let teammate_info = AgentInfo {
             kind: config.teammate,
@@ -231,6 +232,7 @@ impl Runtime {
             reason: teammate_reason,
             authenticated: auth_flag(teammate_auth),
             model: teammate_model.clone(),
+            models: teammate_agent.known_models(),
         };
 
         Ok(Self {
