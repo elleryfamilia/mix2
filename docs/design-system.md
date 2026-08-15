@@ -26,8 +26,9 @@ components; when in doubt, this file is the authority for visuals.
    team attribution, disagreement). Collaboration has one unambiguous signal.
 4. Never communicate state by color alone: every colored state also has a
    glyph (`●` / `○` / `◐` / `⇄` / `↔` / `△`).
-5. No boxes around everything. Borders exist in exactly two places: the
-   consultation tiles and the merged confer tile. Everything else uses
+5. No boxes around everything. Borders exist in exactly three places: the
+   consultation tiles, the merged confer tile, and the composer frame
+   (input must read unmistakably apart from output). Everything else uses
    indentation, whitespace, and hairlines.
 
 ## Color roles
