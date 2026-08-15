@@ -132,8 +132,9 @@ pub struct Runtime {
 
 impl Runtime {
     /// Probe providers, start the consult server, and report readiness.
-    /// Fails (with a `fatal` event emitted by the caller) if the lead is
-    /// unavailable; a missing teammate only degrades collaboration.
+    /// Both agents are required: if either is missing or signed out, this
+    /// fails (with a `fatal` event emitted by the caller) listing the exact
+    /// fix for each agent.
     async fn initialize(
         config: Config,
         cwd: PathBuf,
@@ -148,60 +149,38 @@ impl Runtime {
         let lead_agent = build_agent(config.lead, &config);
         let teammate_agent = build_agent(config.teammate, &config);
 
-        // The lead probe gates readiness, so it gets a generous timeout; a
-        // hung teammate probe must not hold the whole UI hostage (a missing
-        // teammate is explicitly nonfatal), so it gets a short one.
-        let probe = |agent: Arc<dyn Agent>, secs: u64| async move {
-            tokio::time::timeout(Duration::from_secs(secs), agent.version()).await
+        // Both probes gate readiness, so both get the generous timeout.
+        let probe = |agent: Arc<dyn Agent>| async move {
+            tokio::time::timeout(Duration::from_secs(20), agent.version()).await
         };
         let (lead_version, teammate_version) = tokio::join!(
-            probe(Arc::clone(&lead_agent), 20),
-            probe(Arc::clone(&teammate_agent), 6)
+            probe(Arc::clone(&lead_agent)),
+            probe(Arc::clone(&teammate_agent))
         );
 
-        let mut lead_installed = match lead_version {
+        let lead_installed = match lead_version {
             Ok(Ok(v)) => Some(v.raw),
             _ => None,
         };
-        let mut teammate_installed = match teammate_version {
+        let teammate_installed = match teammate_version {
             Ok(Ok(v)) => Some(v.raw),
             _ => None,
         };
 
         // Sign-in probes are local and quota-free.
-        let (mut lead_auth, mut teammate_auth) =
+        let (lead_auth, teammate_auth) =
             tokio::join!(lead_agent.auth_status(), teammate_agent.auth_status());
 
         fn ready_for_duty(installed: &Option<String>, auth: AuthStatus) -> bool {
             installed.is_some() && auth != AuthStatus::Unauthenticated
         }
 
-        // The coordinator is an internal mechanic the UI never reveals, so
-        // when the *default* lead isn't ready but the other agent is,
-        // coordinate with the other agent instead of failing. An explicitly
-        // chosen lead (--lead / config) still fails loudly — the user asked
-        // for that agent specifically.
-        let mut config = config;
-        let mut lead_agent = lead_agent;
-        let mut teammate_agent = teammate_agent;
+        // mix2 is the two-agent team — there is no solo mode. If either
+        // agent is missing or signed out, refuse to start and say exactly
+        // what fixes each one.
         if !ready_for_duty(&lead_installed, lead_auth)
-            && !config.lead_explicit
-            && ready_for_duty(&teammate_installed, teammate_auth)
+            || !ready_for_duty(&teammate_installed, teammate_auth)
         {
-            std::mem::swap(&mut config.lead, &mut config.teammate);
-            std::mem::swap(&mut lead_agent, &mut teammate_agent);
-            std::mem::swap(&mut lead_installed, &mut teammate_installed);
-            std::mem::swap(&mut lead_auth, &mut teammate_auth);
-        }
-
-        if !ready_for_duty(&lead_installed, lead_auth) {
-            if config.lead_explicit {
-                if lead_installed.is_none() {
-                    anyhow::bail!("{}", install_instructions(config.lead));
-                }
-                anyhow::bail!("{}", login_instructions(config.lead));
-            }
-            // Neither agent can coordinate: say exactly what fixes each.
             let status = |kind: AgentKind, installed: &Option<String>, auth: AuthStatus| {
                 if installed.is_none() {
                     format!(
@@ -219,32 +198,28 @@ impl Runtime {
                     format!("{} — ready", kind.display_name())
                 }
             };
+            let (first, second) = if config.lead == AgentKind::Claude {
+                (config.lead, config.teammate)
+            } else {
+                (config.teammate, config.lead)
+            };
+            let for_kind = |kind: AgentKind| {
+                if kind == config.lead {
+                    (&lead_installed, lead_auth)
+                } else {
+                    (&teammate_installed, teammate_auth)
+                }
+            };
+            let (fi, fa) = for_kind(first);
+            let (si, sa) = for_kind(second);
             anyhow::bail!(
-                "mix2 needs at least one agent installed and signed in.\n{}\n{}",
-                status(config.lead, &lead_installed, lead_auth),
-                status(config.teammate, &teammate_installed, teammate_auth),
+                "mix2 needs both agents installed and signed in.\n{}\n{}\nFix the above, then restart mix2.",
+                status(first, fi, fa),
+                status(second, si, sa),
             );
         }
-        let lead_version = lead_installed
-            .clone()
-            .expect("lead ready implies installed");
-
-        let (teammate_available, teammate_version_str, teammate_reason) =
-            match (&teammate_installed, teammate_auth) {
-                (Some(v), auth) if auth != AuthStatus::Unauthenticated => {
-                    (true, Some(v.clone()), None)
-                }
-                (Some(v), _) => (
-                    false,
-                    Some(v.clone()),
-                    Some(format!("not signed in — {}", login_hint(config.teammate))),
-                ),
-                (None, _) => (
-                    false,
-                    None,
-                    Some(format!("not installed — {}", install_hint(config.teammate))),
-                ),
-            };
+        let lead_version = lead_installed.expect("lead ready implies installed");
+        let teammate_version_str = teammate_installed.expect("teammate ready implies installed");
 
         let session = Mix2Session::new(config.lead, cwd);
         let project = detect_project(&session.cwd);
@@ -264,9 +239,8 @@ impl Runtime {
         let teammate_model = model_for(config.teammate);
 
         let consult_server = ConsultServer::start(
-            teammate_available.then(|| Arc::clone(&teammate_agent)),
+            Arc::clone(&teammate_agent),
             config.teammate,
-            teammate_reason.clone(),
             config.lead,
             session.cwd.clone(),
             runtime_dir.clone(),
@@ -291,9 +265,9 @@ impl Runtime {
         let teammate_info = AgentInfo {
             kind: config.teammate,
             name: config.teammate.display_name().to_owned(),
-            version: teammate_version_str,
-            available: teammate_available,
-            reason: teammate_reason,
+            version: Some(teammate_version_str),
+            available: true,
+            reason: None,
             authenticated: auth_flag(teammate_auth),
             model: teammate_model.clone(),
             models: teammate_agent.known_models(),
@@ -361,7 +335,6 @@ impl Runtime {
             instructions: crate::collaboration::prompts::lead_instructions(
                 self.config.lead,
                 self.config.teammate,
-                self.teammate_info.available,
                 self.project,
             ),
             env: self.mix2_env(turn_uuid, AgentRole::Lead, Some(&consult_token)),
@@ -633,36 +606,20 @@ fn auth_flag(status: AuthStatus) -> Option<bool> {
 
 fn install_hint(kind: AgentKind) -> String {
     match kind {
-        AgentKind::Claude => "install Claude Code from https://claude.com/claude-code, run `claude` once to sign in, then restart mix2"
-            .to_owned(),
-        AgentKind::Codex => "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), run `codex login`, then restart mix2"
+        AgentKind::Claude => {
+            "install Claude Code from https://claude.com/claude-code, then run `claude` once to sign in"
+                .to_owned()
+        }
+        AgentKind::Codex => "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), then run `codex login`"
             .to_owned(),
     }
-}
-
-fn install_instructions(kind: AgentKind) -> String {
-    format!(
-        "{} isn't installed (command not found). To get the full team: {}.",
-        kind.display_name(),
-        install_hint(kind)
-    )
 }
 
 fn login_hint(kind: AgentKind) -> String {
     match kind {
-        AgentKind::Claude => {
-            "run `claude` once (or `claude auth login`) to sign in, then restart mix2".to_owned()
-        }
-        AgentKind::Codex => "run `codex login`, then restart mix2".to_owned(),
+        AgentKind::Claude => "run `claude` once (or `claude auth login`) to sign in".to_owned(),
+        AgentKind::Codex => "run `codex login`".to_owned(),
     }
-}
-
-fn login_instructions(kind: AgentKind) -> String {
-    format!(
-        "{} is installed but not signed in. {}.",
-        kind.display_name(),
-        login_hint(kind)
-    )
 }
 
 /// Serve the JSONL protocol over stdin/stdout until shutdown or EOF.

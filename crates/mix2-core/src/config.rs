@@ -37,9 +37,6 @@ pub struct ProviderConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub lead: AgentKind,
-    /// True when the user chose the lead (CLI flag or config file); false
-    /// when it's the built-in default and may auto-fall-back.
-    pub lead_explicit: bool,
     pub teammate: AgentKind,
     pub max_consults_per_turn: u32,
     pub claude_command: String,
@@ -60,15 +57,15 @@ impl Config {
 
     /// Resolve from an optional CLI lead override plus a parsed config file.
     pub fn resolve(cli_lead: Option<&str>, file: &FileConfig) -> Result<Self> {
-        let explicit = cli_lead.map(str::to_owned).or_else(|| file.lead.clone());
-        let lead_explicit = explicit.is_some();
-        let lead_str = explicit.unwrap_or_else(|| "claude".to_owned());
+        let lead_str = cli_lead
+            .map(str::to_owned)
+            .or_else(|| file.lead.clone())
+            .unwrap_or_else(|| "claude".to_owned());
         let lead: AgentKind = lead_str
             .parse()
             .map_err(|e: String| anyhow::anyhow!("invalid lead: {e}"))?;
         Ok(Self {
             lead,
-            lead_explicit,
             teammate: lead.other(),
             max_consults_per_turn: file
                 .collaboration
@@ -126,7 +123,6 @@ mod tests {
     fn default_lead_is_claude() {
         let cfg = Config::resolve(None, &FileConfig::default()).unwrap();
         assert_eq!(cfg.lead, AgentKind::Claude);
-        assert!(!cfg.lead_explicit, "the built-in default is not explicit");
         assert_eq!(cfg.teammate, AgentKind::Codex);
         assert_eq!(cfg.max_consults_per_turn, DEFAULT_MAX_CONSULTS);
         assert_eq!(cfg.claude_command, "claude");
@@ -144,7 +140,6 @@ mod tests {
     fn cli_overrides_file() {
         let cfg = Config::resolve(Some("claude"), &parse("lead = \"codex\"")).unwrap();
         assert_eq!(cfg.lead, AgentKind::Claude);
-        assert!(cfg.lead_explicit);
     }
 
     #[test]

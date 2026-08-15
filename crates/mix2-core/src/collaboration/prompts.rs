@@ -2,23 +2,9 @@ use crate::agents::AgentKind;
 
 /// Instructions appended to the lead agent's own system prompt. The lead —
 /// not a classifier in front of it — decides when consulting is worthwhile.
-pub fn lead_instructions(
-    lead: AgentKind,
-    teammate: AgentKind,
-    teammate_available: bool,
-    project: bool,
-) -> String {
+pub fn lead_instructions(lead: AgentKind, teammate: AgentKind, project: bool) -> String {
     let lead_name = lead.display_name();
     let teammate_name = teammate.display_name();
-    let availability = if teammate_available {
-        String::new()
-    } else {
-        format!(
-            "\n\nNOTE: {teammate_name} is currently unavailable on this machine. \
-             `mix2-consult` will return an error; do not rely on it. \
-             Answer with your own analysis.\n"
-        )
-    };
     let context = if project {
         String::new()
     } else {
@@ -85,7 +71,7 @@ When you consult:
 
 The runtime enforces a consultation budget per user turn. If `mix2-consult` reports the budget is exhausted or the teammate is unavailable, continue with your own analysis and say so briefly if it matters.
 
-Your teammate is an independent peer, not an authority. The team remains responsible for the final answer.{availability}{context}"#
+Your teammate is an independent peer, not an authority. The team remains responsible for the final answer.{context}"#
     )
 }
 
@@ -131,23 +117,22 @@ mod tests {
 
     #[test]
     fn lead_prompt_names_the_teammate() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
         assert!(p.contains("You are Claude"));
         assert!(p.contains("Your teammate is Codex"));
         assert!(p.contains("mix2-consult <<'CONSULT'"));
-        assert!(!p.contains("currently unavailable"));
     }
 
     #[test]
     fn lead_prompt_defaults_to_consulting() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
         assert!(p.contains("DEFAULT TO CONSULTING"));
         assert!(p.contains("Answer alone only"));
     }
 
     #[test]
     fn lead_prompt_enforces_team_voice_and_concurrency() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
         assert!(p.contains("first person plural"));
         assert!(p.contains("mix2-consult start"));
         assert!(p.contains("mix2-consult wait"));
@@ -156,7 +141,7 @@ mod tests {
 
     #[test]
     fn lead_prompt_qualifies_and_uses_scratchpad() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, true);
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
         assert!(p.contains("QUALIFY BROAD REQUESTS"));
         assert!(p.contains("TEAM SCRATCHPAD"));
         assert!(p.contains(".mix2/"));
@@ -166,7 +151,7 @@ mod tests {
 
     #[test]
     fn prompts_adapt_to_non_project_directories() {
-        let lead = lead_instructions(AgentKind::Claude, AgentKind::Codex, true, false);
+        let lead = lead_instructions(AgentKind::Claude, AgentKind::Codex, false);
         assert!(lead.contains("doesn't look like a software project"));
         assert!(lead.contains("business viability"));
         let teammate = teammate_instructions(AgentKind::Claude, AgentKind::Codex, false);
@@ -179,12 +164,6 @@ mod tests {
         assert!(p.contains("EFFORT"));
         assert!(p.contains("Quick take"));
         assert!(p.contains("depth budget"));
-    }
-
-    #[test]
-    fn lead_prompt_flags_unavailable_teammate() {
-        let p = lead_instructions(AgentKind::Codex, AgentKind::Claude, false, true);
-        assert!(p.contains("Claude is currently unavailable"));
     }
 
     #[test]

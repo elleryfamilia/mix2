@@ -468,25 +468,21 @@ fn failed_consultation_does_not_fail_the_lead() {
 }
 
 #[test]
-fn missing_teammate_degrades_gracefully() {
-    let mut core = Core::start(CoreOptions {
+fn missing_teammate_is_fatal_with_install_hint() {
+    // mix2 is the two-agent team — no solo mode. A missing teammate blocks
+    // startup just as hard as a missing lead.
+    let core = Core::start(CoreOptions {
         codex_cmd: Some("/nonexistent/codex-binary".into()),
         ..CoreOptions::default()
     });
-    let startup = core.events_until("ready", LONG);
-    let ready = find(&startup, "ready").unwrap();
-    assert_eq!(ready["teammate"]["available"], false);
-    assert!(ready["teammate"]["reason"].is_string());
-
-    core.submit("t1", "SCENARIO:consult still try");
-    let events = core.events_until("turn.completed", LONG);
-    assert_eq!(count(&events, "consult.completed"), 0);
-    let final_msg = find(&events, "message.final").unwrap();
-    assert_eq!(final_msg["speaker"], "claude");
-    let text = final_msg["text"].as_str().unwrap();
+    let events = core.events_until("fatal", LONG);
+    let message = find(&events, "fatal").unwrap()["message"].as_str().unwrap();
+    assert!(message.contains("both agents"), "got: {message}");
+    assert!(message.contains("Claude — ready"), "got: {message}");
+    assert!(message.contains("Codex — not installed"), "got: {message}");
     assert!(
-        text.contains("[consult1:err:Codex is unavailable"),
-        "lead should get the unavailability message: {text}"
+        message.contains("npm i -g @openai/codex"),
+        "actionable fix: {message}"
     );
 }
 
@@ -498,32 +494,25 @@ fn unauthenticated_lead_is_fatal_with_instructions() {
     });
     let events = core.events_until("fatal", LONG);
     let message = find(&events, "fatal").unwrap()["message"].as_str().unwrap();
-    assert!(message.contains("not signed in"), "got: {message}");
+    assert!(message.contains("Claude — not signed in"), "got: {message}");
     assert!(
         message.contains("sign in"),
         "should tell the user how: {message}"
     );
+    assert!(message.contains("Codex — ready"), "got: {message}");
 }
 
 #[test]
-fn unauthenticated_teammate_degrades_with_login_hint() {
-    let mut core = Core::start(CoreOptions {
+fn unauthenticated_teammate_is_fatal_with_login_hint() {
+    let core = Core::start(CoreOptions {
         env: vec![("FAKE_CODEX_LOGGED_OUT", "1")],
         ..CoreOptions::default()
     });
-    let startup = core.events_until("ready", LONG);
-    let ready = find(&startup, "ready").unwrap();
-    assert_eq!(ready["teammate"]["available"], false);
-    assert_eq!(ready["teammate"]["authenticated"], false);
-    let reason = ready["teammate"]["reason"].as_str().unwrap();
-    assert!(
-        reason.contains("codex login"),
-        "actionable reason: {reason}"
-    );
-    // The team still works solo.
-    core.submit("t1", "hi");
-    let events = core.events_until("turn.completed", LONG);
-    assert!(find(&events, "message.final").is_some());
+    let events = core.events_until("fatal", LONG);
+    let message = find(&events, "fatal").unwrap()["message"].as_str().unwrap();
+    assert!(message.contains("Codex — not signed in"), "got: {message}");
+    assert!(message.contains("codex login"), "actionable fix: {message}");
+    assert!(message.contains("Claude — ready"), "got: {message}");
 }
 
 #[test]
@@ -573,46 +562,6 @@ fn set_model_applies_to_lead_and_teammate() {
 }
 
 #[test]
-fn default_coordinator_falls_back_to_the_available_agent() {
-    // No explicit lead; Claude (the default) is missing, Codex is fine.
-    // The team should quietly coordinate with Codex and still work solo.
-    let mut core = Core::start(CoreOptions {
-        lead: None,
-        claude_cmd: Some("/nonexistent/claude-binary".into()),
-        ..CoreOptions::default()
-    });
-    let startup = core.events_until("ready", LONG);
-    let ready = find(&startup, "ready").unwrap();
-    assert_eq!(ready["lead"]["kind"], "codex");
-    assert_eq!(ready["lead"]["available"], true);
-    assert_eq!(ready["teammate"]["kind"], "claude");
-    assert_eq!(ready["teammate"]["available"], false);
-
-    core.submit("t1", "hi");
-    let events = core.events_until("turn.completed", LONG);
-    let final_msg = find(&events, "message.final").unwrap();
-    assert_eq!(final_msg["speaker"], "codex");
-    assert!(final_msg["text"]
-        .as_str()
-        .unwrap()
-        .contains("fake-codex reply"));
-}
-
-#[test]
-fn signed_out_default_coordinator_falls_back_too() {
-    let core = Core::start(CoreOptions {
-        lead: None,
-        env: vec![("FAKE_CLAUDE_LOGGED_OUT", "1")],
-        ..CoreOptions::default()
-    });
-    let startup = core.events_until("ready", LONG);
-    let ready = find(&startup, "ready").unwrap();
-    assert_eq!(ready["lead"]["kind"], "codex");
-    let reason = ready["teammate"]["reason"].as_str().unwrap();
-    assert!(reason.contains("not signed in"), "got: {reason}");
-}
-
-#[test]
 fn neither_agent_ready_is_fatal_with_both_fixes() {
     let core = Core::start(CoreOptions {
         lead: None,
@@ -622,9 +571,9 @@ fn neither_agent_ready_is_fatal_with_both_fixes() {
     });
     let events = core.events_until("fatal", LONG);
     let message = find(&events, "fatal").unwrap()["message"].as_str().unwrap();
-    assert!(message.contains("at least one agent"), "got: {message}");
-    assert!(message.contains("Claude"), "got: {message}");
-    assert!(message.contains("Codex"), "got: {message}");
+    assert!(message.contains("both agents"), "got: {message}");
+    assert!(message.contains("Claude — not installed"), "got: {message}");
+    assert!(message.contains("Codex — not installed"), "got: {message}");
 }
 
 #[test]

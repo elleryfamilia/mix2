@@ -23,9 +23,9 @@ exactly as the app renders it.
 curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/feat/mvp/install.sh | sh
 ```
 
-macOS and Linux. Needs Node.js ≥ 22 at runtime, plus at least one of the
-two agents installed and signed in:
-[Claude Code](https://claude.com/claude-code) (`claude`) and/or
+macOS and Linux. Needs Node.js ≥ 22 at runtime, plus both agents
+installed and signed in:
+[Claude Code](https://claude.com/claude-code) (`claude`) and
 [Codex](https://developers.openai.com/codex/cli) (`codex`). Then run
 `mix2`. (Verifies checksums; installs to `~/.local/share/mix2`, links
 `~/.local/bin/mix2`.)
@@ -113,14 +113,12 @@ the visual system is specified in
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`), logged in
 - [Codex](https://developers.openai.com/codex/cli) CLI (`codex`), logged in
 
-Only one of the two is required. mix2 checks both at startup — installed
-*and* signed in, via each CLI's own quota-free status command — and
-coordinates with whichever agent is ready: if only one of the two is
-usable, it runs the show solo and the other shows as offline with a
-fix-it hint ("run `codex login`, then restart mix2"). You only get a
-blocking screen in two cases: you *explicitly* picked a coordinator
-(`--lead` or config) that isn't ready, or neither agent is — and either
-way it tells you exactly what to install or sign in to, then come back.
+Both agents are required — the whole point is the team, and one model
+agreeing with itself is not a review. mix2 checks both at startup
+(installed *and* signed in, via each CLI's own quota-free status
+command); if either one is missing or signed out, it refuses to start
+and tells you exactly what to install or sign in to, per agent. No solo
+mode — if you want a single agent, run `claude` or `codex` directly.
 
 ## From source
 

@@ -118,9 +118,8 @@ pub struct ConsultServer {
 }
 
 struct Shared {
-    teammate: Option<Arc<dyn Agent>>,
+    teammate: Arc<dyn Agent>,
     teammate_kind: AgentKind,
-    teammate_unavailable_reason: Option<String>,
     lead_kind: AgentKind,
     cwd: PathBuf,
     runtime_dir: PathBuf,
@@ -150,9 +149,8 @@ impl ConsultServer {
     ///   Codex's workspace-write sandbox, which blocks sockets).
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
-        teammate: Option<Arc<dyn Agent>>,
+        teammate: Arc<dyn Agent>,
         teammate_kind: AgentKind,
-        teammate_unavailable_reason: Option<String>,
         lead_kind: AgentKind,
         cwd: PathBuf,
         runtime_dir: PathBuf,
@@ -169,7 +167,6 @@ impl ConsultServer {
         let shared = Arc::new(Shared {
             teammate,
             teammate_kind,
-            teammate_unavailable_reason,
             lead_kind,
             cwd,
             runtime_dir: runtime_dir.clone(),
@@ -402,22 +399,7 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
         );
     }
 
-    let Some(teammate) = shared.teammate.clone() else {
-        let reason = shared
-            .teammate_unavailable_reason
-            .clone()
-            .unwrap_or_else(|| "not installed".to_owned());
-        let msg = teammate_unavailable_message(shared.teammate_kind, &reason);
-        let _ = shared
-            .updates
-            .send(ConsultUpdate::Failed {
-                turn_id,
-                index: budget.used() + 1,
-                message: msg.clone(),
-            })
-            .await;
-        return refuse(msg);
-    };
+    let teammate = Arc::clone(&shared.teammate);
 
     let Some(index) = budget.try_acquire() else {
         return refuse(budget_exhausted_message());

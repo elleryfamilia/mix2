@@ -421,10 +421,13 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   });
 
   if (state.phase === 'fatal') {
+    // Preflight refusals (agent not installed / signed out) are setup
+    // problems, not crashes — don't greet a new user with "fatal error".
+    const isPreflight = state.fatalMessage?.startsWith('mix2 needs');
     return (
       <Box flexDirection="column" width={width} height={size.rows} paddingX={2} paddingY={1}>
         <Text color={theme.status.error} bold>
-          mix2 hit a fatal error
+          {isPreflight ? 'mix2 is not ready to start' : 'mix2 hit a fatal error'}
         </Text>
         <Text> </Text>
         <Text color={theme.text.primary}>{state.fatalMessage}</Text>

@@ -59,7 +59,7 @@ ln -sf "$INSTALL_DIR/mix2" "$BIN_DIR/mix2"
 if ! command -v node >/dev/null 2>&1; then
   say "⚠ mix2 needs Node.js >= 22 at runtime — install it from https://nodejs.org"
 fi
-say "⚠ mix2 talks to the Claude Code and Codex CLIs — install and sign in to at least one:"
+say "⚠ mix2 needs both the Claude Code and Codex CLIs installed and signed in:"
 say "    claude   https://claude.com/claude-code"
 say "    codex    https://developers.openai.com/codex/cli"
 

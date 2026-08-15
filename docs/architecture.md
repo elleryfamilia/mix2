@@ -174,14 +174,15 @@ behind the same interface.
 
 ## Failure model
 
-- Default coordinator missing or signed out → mix2 silently coordinates
-  with the other agent when it's ready (the UI shows no boss, so nothing
-  visible changes); an *explicitly* chosen coordinator that isn't ready
-  fails at startup with install/sign-in instructions, as does having
-  neither agent usable.
-- Teammate missing/rate-limited/crashed → the *lead* receives a clear
+- Either agent missing or signed out at startup → fatal. There is no
+  solo mode — mix2 *is* the two-agent team. The startup check probes
+  both CLIs (version + each CLI's quota-free auth status command) and
+  the fatal screen lists per-agent status with the exact install or
+  sign-in fix.
+- Teammate rate-limited/crashed *mid-turn* → the *lead* receives a clear
   message from `mix2-consult` and continues; the turn still completes,
-  attributed to the lead alone.
+  attributed to the lead alone. (Runtime failures degrade a turn;
+  only startup readiness is a hard gate.)
 - Lead crash → `turn.failed` with the provider's useful stderr; the
   session and composer stay usable.
 - Core crash → the UI shows a fatal screen and restores the terminal.
