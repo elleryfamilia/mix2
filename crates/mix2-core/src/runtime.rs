@@ -673,8 +673,8 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,
         session_id: runtime.session.id.to_string(),
-        lead: runtime.lead_info.clone(),
-        teammate: runtime.teammate_info.clone(),
+        lead: Box::new(runtime.lead_info.clone()),
+        teammate: Box::new(runtime.teammate_info.clone()),
         cwd: runtime.session.cwd.display().to_string(),
         project: runtime.project,
     });
@@ -785,8 +785,8 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,
         session_id: runtime.session.id.to_string(),
-        lead: runtime.lead_info.clone(),
-        teammate: runtime.teammate_info.clone(),
+        lead: Box::new(runtime.lead_info.clone()),
+        teammate: Box::new(runtime.teammate_info.clone()),
         cwd: runtime.session.cwd.display().to_string(),
         project: runtime.project,
     });

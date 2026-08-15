@@ -48,8 +48,8 @@ pub enum Event {
     Ready {
         protocol: u32,
         session_id: String,
-        lead: AgentInfo,
-        teammate: AgentInfo,
+        lead: Box<AgentInfo>,
+        teammate: Box<AgentInfo>,
         cwd: String,
         /// Whether the cwd looks like a software project; false switches the
         /// team into general-brainstorming framing.
