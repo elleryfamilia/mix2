@@ -26,6 +26,9 @@ importers:
       '@types/react':
         specifier: ^19.2.0
         version: 19.2.18
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       ink-testing-library:
         specifier: ^4.0.0
         version: 4.0.0(@types/react@19.2.18)

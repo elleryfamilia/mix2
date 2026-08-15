@@ -1,0 +1,83 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14
+            target: macos-arm64
+          - runner: macos-13
+            target: macos-x64
+          - runner: ubuntu-24.04
+            target: linux-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build core (release)
+        run: cargo build --release
+
+      - name: Bundle TUI
+        run: |
+          pnpm install --frozen-lockfile
+          cd apps/tui
+          node scripts/bundle.mjs
+
+      - name: Assemble tarball
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          stage="mix2-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$stage"
+          cp target/release/mix2-core "dist/$stage/"
+          cp target/release/mix2-consult "dist/$stage/"
+          cp apps/tui/dist/mix2.bundle.mjs "dist/$stage/"
+          cp scripts/mix2-launcher.sh "dist/$stage/mix2"
+          chmod +x "dist/$stage/mix2" "dist/$stage/mix2-core" "dist/$stage/mix2-consult"
+          cp LICENSE README.md "dist/$stage/"
+          tar -czf "dist/mix2-${{ matrix.target }}.tar.gz" -C dist "$stage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mix2-${{ matrix.target }}
+          path: dist/mix2-${{ matrix.target }}.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum mix2-*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/mix2-*.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true

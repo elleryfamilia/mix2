@@ -14,7 +14,8 @@
     "dev": "tsx src/cli.tsx",
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bundle": "node scripts/bundle.mjs"
   },
   "dependencies": {
     "ink": "^7.1.1",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.0",
+    "esbuild": "^0.28.2",
     "ink-testing-library": "^4.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.7.0",

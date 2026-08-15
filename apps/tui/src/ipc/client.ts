@@ -27,18 +27,22 @@ export interface CoreClientHandlers {
 }
 
 /** Locate the mix2-core binary: explicit option, then $MIX2_CORE_BIN,
- * then dev target dirs relative to this package, then PATH. */
+ * then alongside this file (release installs ship the core next to the
+ * bundled TUI), then dev target dirs walking up from here, then PATH. */
 export function locateCore(explicit?: string): string {
   const env = process.env['MIX2_CORE_BIN'];
   if (explicit) return explicit;
   if (env) return env;
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    path.resolve(here, '../../../../target/release/mix2-core'),
-    path.resolve(here, '../../../../target/debug/mix2-core'),
-    path.resolve(here, '../../../../../target/release/mix2-core'),
-    path.resolve(here, '../../../../../target/debug/mix2-core'),
-  ];
+  const candidates: string[] = [path.join(here, 'mix2-core')];
+  let dir = here;
+  for (let i = 0; i < 6; i++) {
+    candidates.push(path.join(dir, 'target', 'release', 'mix2-core'));
+    candidates.push(path.join(dir, 'target', 'debug', 'mix2-core'));
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }

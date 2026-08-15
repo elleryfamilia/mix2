@@ -109,7 +109,20 @@ a clear "install this / run `codex login` / then come back" screen
 instead of a cryptic mid-turn failure; a signed-out teammate just shows
 as offline with the same fix-it hint.
 
-## Install & run
+## Install
+
+Quick install (macOS and Linux; needs Node.js ≥ 22 at runtime):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/feat/mvp/install.sh | sh
+```
+
+That downloads the latest release for your platform, verifies its
+checksum, installs to `~/.local/share/mix2`, and links
+`~/.local/bin/mix2`. Then install and sign in to at least one of the two
+provider CLIs above, and run `mix2`.
+
+From source:
 
 ```bash
 pnpm install
