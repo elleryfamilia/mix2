@@ -11,6 +11,7 @@ import React from 'react';
 import { App } from './components/App.js';
 import { CoreClient } from './ipc/client.js';
 import type { CoreEvent } from './ipc/protocol.js';
+import { FilteredStdin } from './mouse/filteredStdin.js';
 
 const HELP = `mix2 — talk to an AI engineering team in your terminal
 
@@ -80,11 +81,14 @@ function parseArgs(argv: string[]): CliArgs {
 const args = parseArgs(process.argv.slice(2));
 const cwd = args.cwd ? path.resolve(args.cwd) : process.cwd();
 
-// 1049: alternate screen buffer. 1007: alternate scroll — the terminal
-// translates mouse-wheel ticks into arrow keys while in the alt screen,
-// which the app maps to conversation scrolling.
-const ALT_SCREEN_ON = '\x1b[?1049h\x1b[?1007h\x1b[H';
-const ALT_SCREEN_OFF = '\x1b[?1007l\x1b[?1049l';
+// 1049: alternate screen buffer.
+// 1002/1006: SGR mouse reporting — drag-selection with copy-on-release and
+//            wheel scrolling are handled in-app (hold Shift, or Option on
+//            iTerm2, for the terminal's native selection instead).
+// 1007: alternate scroll — wheel-as-arrows fallback for terminals without
+//       mouse reporting; inert while 1002 is active.
+const ALT_SCREEN_ON = '\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?1007h\x1b[H';
+const ALT_SCREEN_OFF = '\x1b[?1006l\x1b[?1002l\x1b[?1007l\x1b[?1049l';
 let altScreen = false;
 
 function enterAltScreen(): void {
@@ -136,17 +140,26 @@ const client = new CoreClient(
 enterAltScreen();
 client.start();
 
+// Mouse events are filtered out of stdin before Ink parses keyboard input;
+// the App receives them on a side channel for selection + wheel scrolling.
+const filteredStdin = process.stdin.isTTY ? new FilteredStdin(process.stdin) : undefined;
+
 const app = render(
   <App
     client={client}
     bind={(h) => {
       handlers = h;
     }}
+    mouse={filteredStdin?.mouse}
   />,
-  { exitOnCtrlC: false },
+  {
+    exitOnCtrlC: false,
+    ...(filteredStdin ? { stdin: filteredStdin as unknown as NodeJS.ReadStream } : {}),
+  },
 );
 
 app.waitUntilExit().then(() => {
+  filteredStdin?.detach();
   leaveAltScreen();
   client.shutdown();
 });

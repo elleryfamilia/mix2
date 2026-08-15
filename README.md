@@ -147,12 +147,14 @@ conversation), `/copy` (copy the latest answer), `/team` (toggle the team
 panel), `/help`. Typing `/` shows the available commands in the status
 bar. When you're scrolled up, the status bar shows `↓ pgdn latest`.
 
-Copying: `Ctrl+Y` / `/copy` write the latest answer to your clipboard via
-OSC 52 (works over SSH) plus the platform clipboard tool. mix2 never
-captures the mouse, so your terminal's native drag-selection also works
-as usual — enable your terminal's "copy on select" setting (iTerm2,
-kitty, Ghostty, WezTerm, and alacritty all have one) if you want
-selections copied automatically.
+Copying: **drag-select any conversation text with the mouse and it is
+copied the moment you release** — mix2 renders its own selection
+highlight and writes the text via OSC 52 (works over SSH) plus the
+platform clipboard tool, with a "selection copied" confirmation in the
+status bar. `Ctrl+Y` / `/copy` grab the whole latest answer without
+touching the mouse. The wheel scrolls the conversation. For your
+terminal's *native* selection instead, hold Shift (Option in iTerm2)
+while dragging — the standard bypass for mouse-reporting apps.
 
 Answers render markdown natively: headings, bold/italic/inline code,
 numbered and bulleted lists with hanging indents, fenced code blocks with

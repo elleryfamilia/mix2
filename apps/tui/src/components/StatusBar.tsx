@@ -101,6 +101,7 @@ export function StatusBar({
   width,
   scrolledUp = false,
   slashOpen = false,
+  flash = null,
 }: {
   state: AppState;
   spinner: string;
@@ -111,10 +112,15 @@ export function StatusBar({
   scrolledUp?: boolean;
   /** The composer starts with '/': surface the available commands. */
   slashOpen?: boolean;
+  /** Transient confirmation ("selection copied"), shown briefly. */
+  flash?: string | null;
 }): React.JSX.Element {
   let { left, right } = statusSegments(state, spinner, teamGlyph);
   if (slashOpen) {
     left = [{ text: '/exit · /clear · /copy · /team · /help', color: theme.text.muted }];
+  }
+  if (flash) {
+    left = [{ text: flash, color: theme.agent.team }];
   }
   if (scrolledUp) {
     right = [{ text: '↓ pgdn latest · ', color: theme.text.faint }, ...right];

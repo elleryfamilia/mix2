@@ -5,6 +5,14 @@ import type { CoreEvent } from '../ipc/protocol.js';
 import { renderConversation } from '../render/conversation.js';
 import type { Line } from '../render/lines.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
+import type { EventEmitter } from 'node:events';
+import type { MouseEvent } from '../mouse/sgr.js';
+import {
+  extractSelection,
+  highlightLines,
+  isEmptySelection,
+  type Selection,
+} from '../render/selection.js';
 import { initialState, reduce, type AppState } from '../state/store.js';
 import { glyphs, spinnerFrames, teamSpinnerFrames, theme } from '../theme/theme.js';
 import { copyToClipboard } from '../util/clipboard.js';
@@ -30,9 +38,15 @@ export interface AppProps {
   client: CoreClient;
   /** Registers the App's event dispatcher with the client owner. */
   bind: (handlers: { onEvent: (e: CoreEvent) => void; onExit: (code: number | null) => void }) => void;
+  /** Mouse events from the stdin filter (absent in tests / non-TTY). */
+  mouse?: EventEmitter;
 }
 
-export function App({ client, bind }: AppProps): React.JSX.Element {
+/** Screen row (1-based) where the conversation viewport starts:
+ * row 1 = header bar, row 2 = spacing. */
+const VIEWPORT_TOP_ROW = 3;
+
+export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(reduce, initialState);
@@ -40,8 +54,11 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
   const [size, setSize] = useState({ columns: stdout.columns || 100, rows: stdout.rows || 30 });
   const [spinnerIndex, setSpinnerIndex] = useState(0);
   const [scroll, setScroll] = useState<{ top: number; stick: boolean }>({ top: 0, stick: true });
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
   const turnCounter = useRef(0);
   const ctrlCArmed = useRef(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     bind({
@@ -93,7 +110,70 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
 
   const maxTop = Math.max(0, lines.length - viewportRows);
   const top = scroll.stick ? maxTop : Math.min(scroll.top, maxTop);
-  const visible = lines.slice(top, top + viewportRows);
+  const highlighted = highlightLines(lines, selection, width);
+  const visible = highlighted.slice(top, top + viewportRows);
+
+  // Geometry snapshot for the mouse handler (avoids stale closures).
+  const geometry = useRef({ top, viewportRows, lines });
+  geometry.current = { top, viewportRows, lines };
+
+  const showFlash = (text: string) => {
+    setFlash(text);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), 1800);
+  };
+
+  useEffect(() => {
+    if (!mouse) return;
+    const onMouse = (event: MouseEvent) => {
+      const geo = geometry.current;
+      if (event.kind === 'wheel-up' || event.kind === 'wheel-down') {
+        const delta = event.kind === 'wheel-up' ? -3 : 3;
+        setScroll((s) => {
+          const max = Math.max(0, geo.lines.length - geo.viewportRows);
+          const current = s.stick ? max : Math.min(s.top, max);
+          const next = Math.max(0, Math.min(current + delta, max));
+          return { top: next, stick: next >= max };
+        });
+        return;
+      }
+      const line = geo.top + (event.y - VIEWPORT_TOP_ROW);
+      const inViewport =
+        event.y >= VIEWPORT_TOP_ROW &&
+        event.y < VIEWPORT_TOP_ROW + geo.viewportRows &&
+        line < geo.lines.length;
+      const pos = { line: Math.max(0, line), col: Math.max(0, event.x - 1) };
+      if (event.kind === 'down') {
+        setSelection(inViewport ? { anchor: pos, head: pos } : null);
+        return;
+      }
+      if (event.kind === 'drag') {
+        setSelection((sel) => {
+          if (!sel) return sel;
+          const clampedLine = Math.max(0, Math.min(pos.line, geo.lines.length - 1));
+          return { ...sel, head: { line: clampedLine, col: pos.col } };
+        });
+        return;
+      }
+      // Release: copy a non-empty selection, exactly like copy-on-select.
+      setSelection((sel) => {
+        if (!sel) return null;
+        if (isEmptySelection(sel)) return null;
+        const text = extractSelection(geometry.current.lines, sel);
+        if (text.trim().length > 0) {
+          copyToClipboard(text);
+          showFlash('selection copied');
+          return sel; // keep the highlight until the next click
+        }
+        return null;
+      });
+    };
+    mouse.on('event', onMouse);
+    return () => {
+      mouse.off('event', onMouse);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mouse]);
 
   const submit = () => {
     const text = editor.text.trim();
@@ -286,6 +366,7 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
         width={width}
         scrolledUp={top < maxTop}
         slashOpen={editor.text.startsWith('/')}
+        flash={flash}
       />
     </Box>
   );

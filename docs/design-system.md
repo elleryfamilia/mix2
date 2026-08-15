@@ -286,6 +286,10 @@ panel says so: `○ codex   teammate  unavailable — <reason>`.
   runs.
 - `❯` bold in primary when focused/ready; faint while a turn runs.
 - Multiline: wrapped visually plus hard newlines.
+- Mouse: drag-selection over the conversation renders inverse-video
+  highlight and copies on release (status bar flashes `selection
+  copied` in mauve); the wheel scrolls the viewport. Selection state
+  clears on the next click.
 - Keys: `Enter` submit · `ctrl+j` (and `alt+enter` where the terminal sends
   ESC+CR) insert newline · pasted newlines are preserved · `esc` cancels the
   active turn · `ctrl+c` cancels, twice quits · `ctrl+q` quits ·

@@ -329,6 +329,32 @@ describe('App', () => {
     h.unmount();
   });
 
+  it('drag-selecting text copies it on release', async () => {
+    const { EventEmitter } = await import('node:events');
+    const mouse = new EventEmitter();
+    const client = { submit: vi.fn(), cancel: vi.fn(), shutdown: vi.fn(), send: vi.fn(), start: vi.fn() };
+    let handlers: { onEvent: (e: CoreEvent) => void } = { onEvent: () => {} };
+    const instance = render(
+      <App
+        client={client as unknown as CoreClient}
+        bind={(h) => {
+          handlers = h;
+        }}
+        mouse={mouse}
+      />,
+    );
+    await tickReact();
+    handlers.onEvent(ready);
+    await tickReact();
+    // Drag across "How can we help?" (viewport starts at screen row 3).
+    mouse.emit('event', { kind: 'down', x: 3, y: 3 });
+    mouse.emit('event', { kind: 'drag', x: 10, y: 3 });
+    mouse.emit('event', { kind: 'up', x: 10, y: 3 });
+    await tickReact();
+    expect(instance.lastFrame()).toContain('selection copied');
+    instance.unmount();
+  });
+
   it('ctrl+j inserts a newline instead of submitting', async () => {
     const h = mount();
     await tickReact();
