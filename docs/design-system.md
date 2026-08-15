@@ -288,11 +288,20 @@ panel says so: `○ codex   teammate  unavailable — <reason>`.
 
 ## Animation rules
 
-- Exactly one braille spinner animates per visual region (status bar, active
-  tile header, working line); frames at 10 fps merged into one interval.
+- **The living team mark**: while the team is working, the `◐` mark rotates
+  clockwise through `◐ ◓ ◑ ◒` (~3 fps, one full turn ≈ 1.3s) wherever a
+  team state shows — the working line, the status bar's team states, and
+  the live team panel header. When work completes it settles back to the
+  static `◐`. This is the product's signature motion, the terminal
+  equivalent of a pulsing logo: same width every frame, constant mauve,
+  alive without demanding attention.
+- Exactly one animation per visual region: regions led by the rotating
+  team mark carry no braille spinner (their elapsed time stands still);
+  agent-owned regions (tiles, `codex reviewing`, the parallel state's
+  paired spinners) use braille frames at 10 fps.
 - No pulsing, no decorative motion. State transitions swap glyph + color.
 - Completed items must not shift layout when they settle (tool tree collapse
-  replaces lines in place).
+  replaces lines in place; every team-mark frame is one cell wide).
 
 ## Degraded terminals
 

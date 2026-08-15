@@ -6,7 +6,7 @@ import { renderConversation } from '../render/conversation.js';
 import type { Line } from '../render/lines.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import { initialState, reduce, type AppState } from '../state/store.js';
-import { spinnerFrames, theme } from '../theme/theme.js';
+import { glyphs, spinnerFrames, teamSpinnerFrames, theme } from '../theme/theme.js';
 import { Composer, composerHeight } from './Composer.js';
 import {
   backspace,
@@ -72,14 +72,19 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
   }, [busy]);
 
   const spinner = spinnerFrames[spinnerIndex] ?? '⠋';
+  // The team mark rotates at a calmer pace than the braille spinner
+  // (~3 frames per second, full turn ~1.3s) and only while busy.
+  const teamGlyph = busy
+    ? (teamSpinnerFrames[Math.floor(spinnerIndex / 3) % teamSpinnerFrames.length] ?? glyphs.team)
+    : glyphs.team;
   const width = size.columns;
 
   const lines: Line[] = useMemo(() => {
-    const ctx = { width, spinner, now: Date.now() };
+    const ctx = { width, spinner, teamGlyph, now: Date.now() };
     return state.teamPanelOpen
-      ? renderTeamPanel(state, width, ctx.now)
+      ? renderTeamPanel(state, width, ctx.now, teamGlyph)
       : renderConversation(state, ctx);
-  }, [state, width, spinner]);
+  }, [state, width, spinner, teamGlyph]);
 
   const composerRows = composerHeight(editor, width);
   const chromeRows = 2 /* header */ + 1 /* status */ + 1 /* composer separator */;
@@ -258,6 +263,7 @@ export function App({ client, bind }: AppProps): React.JSX.Element {
       <StatusBar
         state={state}
         spinner={spinner}
+        teamGlyph={teamGlyph}
         width={width}
         scrolledUp={top < maxTop}
         slashOpen={editor.text.startsWith('/')}

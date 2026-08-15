@@ -72,8 +72,18 @@ describe('live activity', () => {
     expect(working).toContain('investigating');
     // Solo work is the team's, never a named agent's.
     expect(lines.some((l) => l.includes('● Claude'))).toBe(false);
-    expect(working).toContain('⠸ 0:48');
+    expect(working).toContain('0:48');
     expect(lines.some((l) => l.includes('└ read src/db/session.ts'))).toBe(true);
+  });
+
+  it('animates the team mark while busy', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'go' }, T);
+    const rotating = { ...ctx, teamGlyph: '◓' };
+    const lines = text(s, rotating);
+    expect(lines.some((l) => l.includes('◓ Team'))).toBe(true);
+    // Without a frame supplied, the mark stays the static ◐.
+    expect(text(s).some((l) => l.includes('◐ Team'))).toBe(true);
   });
 });
 

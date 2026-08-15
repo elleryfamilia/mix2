@@ -58,6 +58,13 @@ export const glyphs = {
 
 export const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 
+/**
+ * The team mark comes alive while the team is thinking: the ◐ half-circle
+ * rotates clockwise, then settles back to static ◐ when work completes.
+ * Every frame is the same width, so animation never causes layout jitter.
+ */
+export const teamSpinnerFrames = ['◐', '◓', '◑', '◒'] as const;
+
 export function agentColor(agent: SpeakerName): string {
   return theme.agent[agent];
 }

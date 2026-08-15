@@ -21,7 +21,12 @@ function pad(...spans: Line): Line {
   return [span(' '.repeat(INDENT)), ...spans];
 }
 
-export function renderTeamPanel(state: AppState, width: number, now: number): Line[] {
+export function renderTeamPanel(
+  state: AppState,
+  width: number,
+  now: number,
+  teamGlyph: string = glyphs.team,
+): Line[] {
   const w = Math.min(width, MAX_CONTENT_WIDTH);
   const contentW = w - INDENT;
   const lines: Line[] = [];
@@ -29,7 +34,10 @@ export function renderTeamPanel(state: AppState, width: number, now: number): Li
   lines.push(
     spread(
       pad(
-        span(`${glyphs.team} team`, { color: theme.agent.team, bold: true }),
+        span(`${state.turn ? teamGlyph : glyphs.team} team`, {
+          color: theme.agent.team,
+          bold: true,
+        }),
         span(state.turn ? ' — live' : ' — this run', { color: theme.text.faint }),
       ),
       [span('esc close ', { color: theme.text.faint })],

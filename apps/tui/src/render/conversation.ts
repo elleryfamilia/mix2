@@ -26,6 +26,8 @@ export interface RenderContext {
   width: number;
   /** Current spinner frame glyph. */
   spinner: string;
+  /** Current team-mark frame (rotating ◐ while busy); static ◐ if absent. */
+  teamGlyph?: string;
   /** Current timestamp for elapsed displays. */
   now: number;
 }
@@ -150,13 +152,15 @@ function leadWorkingLines(turn: ActiveTurn, ctx: RenderContext): Line[] {
   const color = theme.agent.team;
   const width = Math.min(ctx.width, MAX_CONTENT_WIDTH);
   const elapsed = formatElapsed(ctx.now - turn.startedAt);
+  // The rotating team mark is this region's one animation; the elapsed
+  // time on the right stays still.
   const head = spread(
     pad(
-      span(glyphs.team, { color }),
+      span(ctx.teamGlyph ?? glyphs.team, { color }),
       span(' Team', { color, bold: true }),
       span(` — ${statusWord(turn)}`, { color: theme.text.muted }),
     ),
-    [span(`${ctx.spinner} ${elapsed}`, { color: theme.text.faint })],
+    [span(elapsed, { color: theme.text.faint })],
     width,
   );
   const lines: Line[] = [head];

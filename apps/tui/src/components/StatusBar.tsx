@@ -17,8 +17,13 @@ function segmentLength(segment: Segment): number {
 
 /** Derive the status-bar state per the design's state table. The user talks
  * to one team, so solo work reads as the team; individual agent names show
- * only when the work has visibly split (parallel state, consult). */
-export function statusSegments(state: AppState, spinner: string): { left: Segment; right: Segment } {
+ * only when the work has visibly split (parallel state, consult). Team
+ * states animate the rotating team mark; agent states use braille. */
+export function statusSegments(
+  state: AppState,
+  spinner: string,
+  teamGlyph: string = glyphs.team,
+): { left: Segment; right: Segment } {
   const faint = theme.text.faint;
   const muted = theme.text.muted;
   // A second spinner frame, deliberately out of phase (design 3a shows the
@@ -63,12 +68,12 @@ export function statusSegments(state: AppState, spinner: string): { left: Segmen
     }
     if (turn.phase === 'synthesizing') {
       return {
-        left: [{ text: `${spinner} team reconciling`, color: theme.agent.team }],
+        left: [{ text: `${teamGlyph} team reconciling`, color: theme.agent.team }],
         right,
       };
     }
     return {
-      left: [{ text: `${spinner} team working`, color: theme.agent.team }],
+      left: [{ text: `${teamGlyph} team working`, color: theme.agent.team }],
       right,
     };
   }
@@ -92,19 +97,22 @@ export function statusSegments(state: AppState, spinner: string): { left: Segmen
 export function StatusBar({
   state,
   spinner,
+  teamGlyph,
   width,
   scrolledUp = false,
   slashOpen = false,
 }: {
   state: AppState;
   spinner: string;
+  /** Rotating team-mark frame while busy; static ◐ otherwise. */
+  teamGlyph?: string;
   width: number;
   /** The viewport is not at the bottom: newer content exists below. */
   scrolledUp?: boolean;
   /** The composer starts with '/': surface the available commands. */
   slashOpen?: boolean;
 }): React.JSX.Element {
-  let { left, right } = statusSegments(state, spinner);
+  let { left, right } = statusSegments(state, spinner, teamGlyph);
   if (slashOpen) {
     left = [{ text: '/exit · /clear · /team · /help', color: theme.text.muted }];
   }
