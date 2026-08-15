@@ -65,6 +65,10 @@ export class CoreClient {
     });
     this.child = child;
 
+    // A dying core can EPIPE our writes asynchronously; swallow stream
+    // errors so they never become uncaught exceptions.
+    child.stdin.on('error', () => {});
+
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
       this.buffer += chunk;
@@ -104,7 +108,15 @@ export class CoreClient {
   send(command: Command): void {
     const line = JSON.stringify(command);
     this.log('>>', line);
-    this.child?.stdin.write(line + '\n');
+    // The core can die or its stdin close at any moment; failing to send
+    // must never crash the UI.
+    try {
+      if (this.child?.stdin.writable) {
+        this.child.stdin.write(line + '\n');
+      }
+    } catch {
+      // child gone — nothing to deliver to
+    }
   }
 
   submit(id: string, text: string): void {
@@ -116,6 +128,9 @@ export class CoreClient {
   }
 
   shutdown(): void {
+    // Idempotent: both the quit keybinding and the waitUntilExit cleanup
+    // call this; only the first does the work.
+    if (this.shuttingDown) return;
     this.shuttingDown = true;
     try {
       this.send({ type: 'shutdown' });
