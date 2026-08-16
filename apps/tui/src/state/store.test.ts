@@ -274,6 +274,17 @@ describe('disagreement', () => {
     });
     expect(s.turn?.disagreement?.revision).toBe(2);
     expect(s.turn?.disagreement?.resolution).toBe('rev 2 resolution');
+
+    // Boundary: an equal revision with different content is also stale.
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: 'rev 2 resolution (duplicate, different content)',
+      revision: 2,
+    });
+    expect(s.turn?.disagreement?.revision).toBe(2);
+    expect(s.turn?.disagreement?.resolution).toBe('rev 2 resolution');
   });
 
   it('message.final payload lands on the final item and overwrites live state', () => {
@@ -298,6 +309,33 @@ describe('disagreement', () => {
     const final = s.items.at(-1);
     expect(final).toMatchObject({ kind: 'final', disagreement: finalDisagreement });
     expect(s.turn?.disagreement).toEqual({ ...finalDisagreement, revision: 1 });
+  });
+
+  it('message.final without a payload clears live disagreement state', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: liveDisagreement.resolution,
+      revision: 1,
+    });
+    expect(s.turn?.disagreement).toBeDefined();
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: 'Never mind, no disagreement after all.',
+      consultations: 0,
+      duration_ms: 1000,
+    });
+    expect(s.turn?.disagreement).toBeUndefined();
+    const final = s.items.at(-1);
+    expect(final).toMatchObject({ kind: 'final' });
+    expect((final as { disagreement?: Disagreement }).disagreement).toBeUndefined();
+    s = apply(s, { type: 'turn.completed', turn_id: 't1', duration_ms: 1000, consultations: 0 });
+    expect(s.lastSummary?.disagreements).toBe(0);
   });
 
   it('turn.completed carries it into lastTurn and lastSummary.disagreements === 1', () => {
