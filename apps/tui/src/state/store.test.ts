@@ -48,6 +48,15 @@ describe('startup', () => {
     expect(s.phase).toBe('fatal');
     expect(s.fatalMessage).toContain('exited unexpectedly');
   });
+
+  it('core exit surfaces the stderr tail', () => {
+    const s = reduce(apply(initialState, ready), {
+      type: 'core-exited',
+      code: 1,
+      stderr: "/lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found",
+    });
+    expect(s.fatalMessage).toContain('GLIBC_2.39');
+  });
 });
 
 describe('single-agent turn', () => {

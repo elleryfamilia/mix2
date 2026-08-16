@@ -22,8 +22,10 @@ export interface CoreClientOptions {
 
 export interface CoreClientHandlers {
   onEvent: (event: CoreEvent) => void;
-  /** Called when the core exits before shutdown was requested. */
-  onExit: (code: number | null) => void;
+  /** Called when the core exits before shutdown was requested; `stderr`
+   * is the tail of the core's stderr (the loader/panic message when the
+   * binary can't run at all). */
+  onExit: (code: number | null, stderr: string) => void;
 }
 
 /** Locate the mix2-core binary: explicit option, then $MIX2_CORE_BIN,
@@ -52,6 +54,7 @@ export function locateCore(explicit?: string): string {
 export class CoreClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private buffer = '';
+  private stderrTail: string[] = [];
   private shuttingDown = false;
   private readonly options: CoreClientOptions;
   private readonly handlers: CoreClientHandlers;
@@ -86,7 +89,14 @@ export class CoreClient {
       }
     });
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => this.log('!!', chunk.trimEnd()));
+    child.stderr.on('data', (chunk: string) => {
+      this.log('!!', chunk.trimEnd());
+      for (const line of chunk.split('\n')) {
+        if (!line.trim()) continue;
+        this.stderrTail.push(line.slice(0, 300));
+        if (this.stderrTail.length > 8) this.stderrTail.shift();
+      }
+    });
 
     child.on('error', () => {
       this.handlers.onEvent({
@@ -97,7 +107,7 @@ export class CoreClient {
       });
     });
     child.on('exit', (code) => {
-      if (!this.shuttingDown) this.handlers.onExit(code);
+      if (!this.shuttingDown) this.handlers.onExit(code, this.stderrTail.join('\n'));
     });
 
     this.send({

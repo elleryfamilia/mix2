@@ -111,7 +111,7 @@ export const initialState: AppState = {
 
 export type Action =
   | { type: 'core-event'; event: CoreEvent; now: number }
-  | { type: 'core-exited'; code: number | null }
+  | { type: 'core-exited'; code: number | null; stderr?: string }
   | { type: 'toggle-team-panel' }
   | { type: 'close-team-panel' }
   /** Local notice from the UI itself (slash command feedback, /help). */
@@ -185,13 +185,17 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, items: [...state.items, { kind: 'notice', text: action.text }] };
     case 'clear-conversation':
       return { ...state, items: [], lastSummary: undefined };
-    case 'core-exited':
+    case 'core-exited': {
       if (state.phase === 'fatal') return state;
+      // Surface the core's stderr tail — for a binary that can't run at
+      // all (missing libc symbols, wrong arch), it's the only clue.
+      const detail = action.stderr?.trim() ? `\n\n${action.stderr.trim()}` : '';
       return {
         ...state,
         phase: 'fatal',
-        fatalMessage: `the mix2 runtime exited unexpectedly (code ${action.code ?? 'unknown'})`,
+        fatalMessage: `the mix2 runtime exited unexpectedly (code ${action.code ?? 'unknown'})${detail}`,
       };
+    }
     case 'core-event':
       return applyEvent(state, action.event, action.now);
   }

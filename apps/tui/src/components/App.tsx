@@ -44,7 +44,7 @@ import { StickyPrompt } from './StickyPrompt.js';
 export interface AppProps {
   client: CoreClient;
   /** Registers the App's event dispatcher with the client owner. */
-  bind: (handlers: { onEvent: (e: CoreEvent) => void; onExit: (code: number | null) => void }) => void;
+  bind: (handlers: { onEvent: (e: CoreEvent) => void; onExit: (code: number | null, stderr: string) => void }) => void;
   /** Mouse events from the stdin filter (absent in tests / non-TTY). */
   mouse?: EventEmitter;
 }
@@ -71,7 +71,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   useEffect(() => {
     bind({
       onEvent: (event) => dispatch({ type: 'core-event', event, now: Date.now() }),
-      onExit: (code) => dispatch({ type: 'core-exited', code }),
+      onExit: (code, stderr) => dispatch({ type: 'core-exited', code, stderr }),
     });
   }, [bind]);
 

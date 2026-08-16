@@ -63,7 +63,7 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '-V':
       case '--version':
-        process.stdout.write('mix2 0.2.0\n');
+        process.stdout.write('mix2 0.2.1\n');
         process.exit(0);
         break;
       default:
@@ -118,7 +118,7 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-let handlers: { onEvent: (e: CoreEvent) => void; onExit: (code: number | null) => void } = {
+let handlers: { onEvent: (e: CoreEvent) => void; onExit: (code: number | null, stderr: string) => void } = {
   onEvent: () => {},
   onExit: () => {},
 };
@@ -133,7 +133,7 @@ const client = new CoreClient(
   },
   {
     onEvent: (event) => handlers.onEvent(event),
-    onExit: (code) => handlers.onExit(code),
+    onExit: (code, stderr) => handlers.onExit(code, stderr),
   },
 );
 

@@ -18,6 +18,9 @@ jobs:
             target: macos-x64
           - runner: ubuntu-24.04
             target: linux-x64
+            # Static musl build: a glibc build only runs on distros at
+            # least as new as the runner (Proxmox/Debian 12 is not).
+            rust_target: x86_64-unknown-linux-musl
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +34,16 @@ jobs:
           node-version: 22
 
       - name: Build core (release)
-        run: cargo build --release
+        run: |
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+            rustup target add ${{ matrix.rust_target }}
+            cargo build --release --target ${{ matrix.rust_target }}
+            echo "CORE_DIR=target/${{ matrix.rust_target }}/release" >> "$GITHUB_ENV"
+          else
+            cargo build --release
+            echo "CORE_DIR=target/release" >> "$GITHUB_ENV"
+          fi
 
       - name: Bundle TUI
         run: |
@@ -45,8 +57,8 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           stage="mix2-${version}-${{ matrix.target }}"
           mkdir -p "dist/$stage"
-          cp target/release/mix2-core "dist/$stage/"
-          cp target/release/mix2-consult "dist/$stage/"
+          cp "${CORE_DIR}/mix2-core" "dist/$stage/"
+          cp "${CORE_DIR}/mix2-consult" "dist/$stage/"
           cp apps/tui/dist/mix2.bundle.mjs "dist/$stage/"
           cp scripts/mix2-launcher.sh "dist/$stage/mix2"
           chmod +x "dist/$stage/mix2" "dist/$stage/mix2-core" "dist/$stage/mix2-consult"
