@@ -177,6 +177,72 @@ describe('App', () => {
     h.unmount();
   });
 
+  it('done summary shows disagreement count when disagreements > 0', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    h.emit({ type: 'message.user', turn_id: 't1', text: 'should we use X?' });
+    h.emit({
+      type: 'consult.started',
+      turn_id: 't1',
+      agent: 'codex',
+      index: 1,
+      max: 1,
+      prompt: 'Evaluate X.',
+    });
+    h.emit({
+      type: 'consult.completed',
+      turn_id: 't1',
+      agent: 'codex',
+      index: 1,
+      duration_ms: 5_000,
+      text: 'Use X.',
+    });
+    h.emit({ type: 'lead.synthesizing', turn_id: 't1', agent: 'claude' });
+    h.emit({
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'team',
+      lead: 'claude',
+      text: "I recommend against X.",
+      consultations: 1,
+      duration_ms: 15_000,
+      disagreement: {
+        stances: [{ agent: 'claude', position: 'Do not use X', outcome: 'chosen' }],
+        resolution: 'We decided against X.',
+      },
+    });
+    h.emit({ type: 'turn.completed', turn_id: 't1', duration_ms: 15_000, consultations: 1 });
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('1 consultation');
+    expect(frame).toContain('△ 1 disagreement');
+    h.unmount();
+  });
+
+  it('done summary shows nothing extra when disagreements === 0', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    h.emit({ type: 'message.user', turn_id: 't1', text: 'hi' });
+    h.emit({
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: 'answer',
+      consultations: 0,
+      duration_ms: 500,
+    });
+    h.emit({ type: 'turn.completed', turn_id: 't1', duration_ms: 500, consultations: 0 });
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('done in');
+    expect(frame).not.toContain('△');
+    expect(frame).not.toContain('disagreement');
+    h.unmount();
+  });
+
   it('ctrl+t toggles the team panel', async () => {
     const h = mount();
     await tickReact();
