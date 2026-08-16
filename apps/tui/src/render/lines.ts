@@ -3,6 +3,7 @@
  * arrays of styled spans, which makes viewport scrolling exact (slice of
  * lines) and snapshot tests trivial (join the span texts).
  */
+import stringWidth from 'string-width';
 
 export interface Span {
   text: string;
@@ -53,6 +54,30 @@ export function truncate(text: string, width: number): string {
   if (text.length <= width) return text;
   if (width <= 1) return text.slice(0, Math.max(0, width));
   return text.slice(0, width - 1) + '…';
+}
+
+/** Terminal display width of `text`: fullwidth/CJK characters count as 2
+ * columns, unlike `.length` which counts UTF-16 code units. Every other
+ * measurement in this module uses `.length` — reach for this only where
+ * content may contain wide characters (see conversation.ts's stance
+ * renderer, its one caller). */
+export function displayWidth(text: string): number {
+  return stringWidth(text);
+}
+
+/** Truncate `text` to at most `max` display columns, appending `…` when it
+ * doesn't fit. Measures by `displayWidth`, so wide characters never push
+ * the result past `max` columns the way `truncate`'s length-based cut
+ * would. */
+export function truncateDisplay(text: string, max: number): string {
+  if (max <= 0) return '';
+  if (displayWidth(text) <= max) return text;
+  if (max === 1) return '…';
+  let result = text;
+  while (result.length > 0 && displayWidth(result) > max - 1) {
+    result = result.slice(0, -1);
+  }
+  return result + '…';
 }
 
 /** Pad a line with a spacer span so `right` lands on the right edge. */

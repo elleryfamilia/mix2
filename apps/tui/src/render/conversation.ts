@@ -4,6 +4,7 @@
  * that merge into mauve when the agents actually exchange, and a collapsed
  * trace pill once collaboration finishes.
  */
+import type { Disagreement, Stance } from '../ipc/protocol.js';
 import type { ActiveTurn, AppState, ConsultState, ConversationItem } from '../state/store.js';
 import { formatElapsed } from '../state/store.js';
 import {
@@ -16,7 +17,7 @@ import {
   glyphs,
   theme,
 } from '../theme/theme.js';
-import { BLANK, Line, Span, span, spread, truncate, wrapText } from './lines.js';
+import { BLANK, Line, Span, displayWidth, span, spread, truncate, truncateDisplay, wrapText } from './lines.js';
 import { markdownLines } from './markdown.js';
 
 const INDENT = 2;
@@ -101,6 +102,71 @@ function chip(label: string, bg: string, fg: string): Span {
   return span(` ${label} `, { bgColor: bg, color: fg, bold: true });
 }
 
+// ----------------------------------------------------------- stance block
+
+// Width of the glyph+name field a stance row shares with the team row
+// below it, so their positions line up: "claude"/"codex"/"team" all fit
+// with room to spare.
+const STANCE_NAME_WIDTH = 9;
+// Columns spent before a row's position text starts: 2-space indent, the
+// glyph, and the padded name field (its own leading space + the field).
+const STANCE_PREFIX_WIDTH = INDENT + 1 + 1 + STANCE_NAME_WIDTH;
+// Minimum columns always kept between a truncated position and its arrow.
+const STANCE_MIN_GAP = 2;
+
+const STANCE_ARROWS: Record<Stance['outcome'], string> = {
+  chosen: '← shipped',
+  deferred: '→ follow-up',
+  dropped: '→ set aside',
+};
+
+function stanceNameField(name: string): string {
+  return ' ' + name.padEnd(STANCE_NAME_WIDTH);
+}
+
+/** Right-aligns `right` against `left` like `spread`, but measures both by
+ * terminal display width instead of `.length`. `spread` (lines.ts) would
+ * undercount a CJK/fullwidth position's true width and overpad the gap,
+ * pushing the row past the frame — this is the one place that can't use
+ * it. Callers must pre-truncate `left`'s content so `gap` never has to
+ * degrade below `STANCE_MIN_GAP`. */
+function stanceSpread(left: Line, right: Line, width: number): Line {
+  const leftWidth = left.reduce((n, s) => n + displayWidth(s.text), 0);
+  const rightWidth = right.reduce((n, s) => n + displayWidth(s.text), 0);
+  const gap = Math.max(1, width - leftWidth - rightWidth);
+  return [...left, span(' '.repeat(gap)), ...right];
+}
+
+/** The `△ where we split` block: one row per stance (position truncated,
+ * outcome arrow right-aligned) plus the team's resolution. Only rendered
+ * when the model actually recorded a split — see the honesty rule in
+ * docs/superpowers/plans/2026-08-15-disagreement-layer-spec.md. */
+function stanceLines(d: Disagreement, ctx: RenderContext): Line[] {
+  const width = Math.min(ctx.width, MAX_CONTENT_WIDTH);
+  const lines: Line[] = [
+    pad(span(`${glyphs.disagree} where we split`, { color: theme.agent.team, bold: true })),
+  ];
+  for (const stance of d.stances) {
+    const arrow = STANCE_ARROWS[stance.outcome];
+    const room = Math.max(0, width - STANCE_PREFIX_WIDTH - displayWidth(arrow) - STANCE_MIN_GAP);
+    const left = pad(
+      span(agentGlyph(stance.agent), { color: agentColor(stance.agent) }),
+      span(stanceNameField(stance.agent), { color: agentColor(stance.agent), bold: true }),
+      span(truncateDisplay(stance.position, room), { color: theme.text.secondary }),
+    );
+    lines.push(stanceSpread(left, [span(arrow, { color: theme.text.faint })], width));
+  }
+  const teamRoom = Math.max(0, width - STANCE_PREFIX_WIDTH);
+  lines.push(
+    pad(
+      span(agentGlyph('team'), { color: agentColor('team') }),
+      span(stanceNameField('team'), { color: agentColor('team'), bold: true }),
+      span(truncateDisplay(d.resolution, teamRoom), { color: theme.text.secondary }),
+    ),
+  );
+  return lines;
+}
+
 function finalLines(item: Extract<ConversationItem, { kind: 'final' }>, ctx: RenderContext): Line[] {
   const lines: Line[] = [];
   // One team, one voice: every answer carries the Team chip. The roster
@@ -121,6 +187,10 @@ function finalLines(item: Extract<ConversationItem, { kind: 'final' }>, ctx: Ren
   lines.push(BLANK);
   for (const line of markdownLines(item.text, contentWidth(ctx))) {
     lines.push([span(' '.repeat(INDENT)), ...line]);
+  }
+  if (item.disagreement) {
+    lines.push(BLANK);
+    lines.push(...stanceLines(item.disagreement, ctx));
   }
   return lines;
 }

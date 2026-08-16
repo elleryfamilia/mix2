@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { CoreEvent } from '../ipc/protocol.js';
+import type { CoreEvent, Stance } from '../ipc/protocol.js';
 import { initialState, reduce, type AppState } from '../state/store.js';
 import { renderConversation, type RenderContext } from './conversation.js';
-import { lineText } from './lines.js';
+import { displayWidth, lineText } from './lines.js';
 import { renderTeamPanel } from './teamPanel.js';
 
 const T = 1_000_000;
@@ -349,6 +349,97 @@ describe('long responses and narrow terminals', () => {
     for (const line of text(s, narrow)) {
       expect(line.length).toBeLessThanOrEqual(80);
     }
+  });
+});
+
+describe('stance block', () => {
+  const resolution = "lead's call — ship now, file the rework";
+  const stances: Stance[] = [
+    { agent: 'claude', position: 'cache compiled schema in-process', outcome: 'chosen' },
+    { agent: 'codex', position: 'move validation off the hot path', outcome: 'deferred' },
+  ];
+
+  function withDisagreement(width: number, overrideStances: Stance[]): string[] {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'decide!' }, T);
+    s = apply(
+      s,
+      {
+        type: 'message.final',
+        turn_id: 't1',
+        speaker: 'team',
+        lead: 'claude',
+        text: 'Shipping the cache now.',
+        consultations: 1,
+        duration_ms: 60_000,
+        disagreement: { stances: overrideStances, resolution },
+      },
+      T + 60_000,
+    );
+    return text(s, { ...ctx, width });
+  }
+
+  it('renders a row per stance plus the team row after the answer body', () => {
+    const lines = withDisagreement(100, stances);
+    expect(lines.some((l) => l.includes('△ where we split'))).toBe(true);
+    expect(
+      lines.some(
+        (l) => l.includes('● claude') && l.includes('cache compiled schema in-process') && l.includes('← shipped'),
+      ),
+    ).toBe(true);
+    expect(
+      lines.some(
+        (l) => l.includes('○ codex') && l.includes('move validation off the hot path') && l.includes('→ follow-up'),
+      ),
+    ).toBe(true);
+    expect(lines.some((l) => l.includes('◐ team') && l.includes(resolution))).toBe(true);
+  });
+
+  it('right-aligns the outcome arrow at the content edge', () => {
+    const lines = withDisagreement(100, stances);
+    const row = lines.find((l) => l.includes('← shipped'));
+    expect(row).toBeDefined();
+    // width 100 caps to MAX_CONTENT_WIDTH (92).
+    expect(row).toHaveLength(92);
+    expect(row!.endsWith('shipped')).toBe(true);
+  });
+
+  it('truncates a long position with an ellipsis and never exceeds the frame', () => {
+    const longPosition =
+      'this stance position rambles on at great length about tradeoffs, benchmarks, and edge cases far past what any row could hold '.repeat(
+        2,
+      ).trim();
+    for (const width of [80, 50]) {
+      const lines = withDisagreement(width, [{ agent: 'claude', position: longPosition, outcome: 'chosen' }]);
+      const row = lines.find((l) => l.includes('claude') && l.includes('…'));
+      expect(row).toBeDefined();
+      expect(row!.length).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it('fits a CJK position within the frame at 50 columns using display width, not .length', () => {
+    const lines = withDisagreement(50, [
+      { agent: 'claude', position: 'キャッシュを使う', outcome: 'chosen' },
+    ]);
+    const row = lines.find((l) => l.includes('● claude'));
+    expect(row).toBeDefined();
+    expect(displayWidth(row!)).toBeLessThanOrEqual(50);
+  });
+
+  it('renders no stance block when the final item has no disagreement', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'ok' }, T);
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: 'Sure thing.',
+      consultations: 0,
+      duration_ms: 100,
+    });
+    const lines = text(s);
+    expect(lines.some((l) => l.includes('where we split'))).toBe(false);
   });
 });
 
