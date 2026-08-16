@@ -519,8 +519,14 @@ impl Runtime {
                     agent: self.config.lead,
                 });
             }
-            // TODO: emit `disagreement.recorded` for the live team-panel ledger.
-            ConsultUpdate::DisagreementRecorded { .. } => {}
+            ConsultUpdate::DisagreementRecorded {
+                record, revision, ..
+            } => emit(&Event::DisagreementRecorded {
+                turn_id: turn.ui_id.clone(),
+                stances: record.stances,
+                resolution: record.resolution,
+                revision,
+            }),
             ConsultUpdate::Failed { index, message, .. } => emit(&Event::ConsultFailed {
                 turn_id: turn.ui_id.clone(),
                 agent: teammate,
@@ -535,8 +541,7 @@ impl Runtime {
         // `start`ed consultation the lead never waited for. Its result
         // belongs to no one, and it must not bleed into the next turn.
         turn.cancel.cancel();
-        // TODO: attach the settled record to the `message.final` payload.
-        let _ = self.consult_server.end_turn().await;
+        let disagreement = self.consult_server.end_turn().await;
         let duration_ms = turn.started.elapsed().as_millis() as u64;
         match result {
             _ if turn.cancelled => {
@@ -560,6 +565,7 @@ impl Runtime {
                     text: result.text,
                     consultations: turn.successful_consults,
                     duration_ms,
+                    disagreement,
                 });
                 emit(&Event::TurnCompleted {
                     turn_id: turn.ui_id,

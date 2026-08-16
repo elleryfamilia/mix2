@@ -11,6 +11,8 @@ Scenario markers in the prompt select behavior:
   SCENARIO:spawn_child  spawn a `sleep` child; PIDFILE:<path> records pids
   SCENARIO:consult      invoke mix2-consult once and fold in the reply
   SCENARIO:consult_twice / SCENARIO:consult_thrice  repeat consultations
+  SCENARIO:disagree     consult once, then mix2-consult disagree
+  SCENARIO:disagree_solo  mix2-consult disagree with no prior consult
 
 The final text always includes bracketed markers so tests can assert on
 session identity, resume behavior, and role:
@@ -179,6 +181,40 @@ def main():
             consult_notes.append(f"[consult{i + 1}:{status}:{reply}]")
         except Exception as e:  # noqa: BLE001 - fixture reports all failures
             consult_notes.append(f"[consult{i + 1}:exc:{e}]")
+
+    disagree_input = (
+        "claude: cache in-process | chosen\n"
+        "codex: move validation off the hot path | deferred\n"
+        "team: ship the cache; file the rework\n"
+    )
+
+    if "disagree" in scenarios:
+        try:
+            subprocess.run(
+                ["mix2-consult"], input="Independently evaluate the plan.", text=True,
+                capture_output=True, timeout=300,
+            )
+        except Exception:  # noqa: BLE001 - the disagree call below reports failure
+            pass
+        try:
+            proc = subprocess.run(
+                ["mix2-consult", "disagree"], input=disagree_input, text=True,
+                capture_output=True, timeout=60,
+            )
+            consult_notes.append(f"[disagree:{proc.returncode}]")
+        except Exception as e:  # noqa: BLE001 - fixture reports all failures
+            consult_notes.append(f"[disagree:exc:{e}]")
+
+    if "disagree_solo" in scenarios:
+        try:
+            proc = subprocess.run(
+                ["mix2-consult", "disagree"], input=disagree_input, text=True,
+                capture_output=True, timeout=60,
+            )
+            first_line = proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else ""
+            consult_notes.append(f"[disagree:{proc.returncode}:{first_line}]")
+        except Exception as e:  # noqa: BLE001 - fixture reports all failures
+            consult_notes.append(f"[disagree:exc:{e}]")
 
     if "markdown" in scenarios:
         text = (

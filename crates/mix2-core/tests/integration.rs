@@ -756,6 +756,34 @@ fn protocol_mismatch_is_fatal() {
     assert!(text.contains("protocol mismatch"), "got: {text}");
 }
 
+#[test]
+fn disagreement_flows_to_message_final() {
+    let mut core = Core::start(CoreOptions::default());
+    core.events_until("ready", LONG);
+
+    core.submit("t1", "SCENARIO:disagree p99 question");
+    let events = core.events_until("turn.completed", LONG);
+
+    assert!(find(&events, "disagreement.recorded").is_some());
+    let fin = find(&events, "message.final").unwrap();
+    assert_eq!(fin["disagreement"]["stances"].as_array().unwrap().len(), 2);
+    assert!(fin["text"].as_str().unwrap().contains("[disagree:0]"));
+}
+
+#[test]
+fn disagree_without_consult_is_refused() {
+    let mut core = Core::start(CoreOptions::default());
+    core.events_until("ready", LONG);
+
+    core.submit("t1", "SCENARIO:disagree_solo attempt");
+    let events = core.events_until("turn.completed", LONG);
+
+    assert!(find(&events, "disagreement.recorded").is_none());
+    let fin = find(&events, "message.final").unwrap();
+    assert!(fin.get("disagreement").is_none());
+    assert!(fin["text"].as_str().unwrap().contains("[disagree:2:"));
+}
+
 fn extract_marker(text: &str, key: &str) -> String {
     let tag = format!("[{key}:");
     let start = text
