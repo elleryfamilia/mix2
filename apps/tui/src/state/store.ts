@@ -379,6 +379,10 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       return { ...state, turn: { ...turn, phase: 'synthesizing', consults } };
     }
 
+    // Replaced by the disagreement reducer in the next commit.
+    case 'disagreement.recorded':
+      return state;
+
     case 'lead.synthesizing': {
       const turn = state.turn;
       if (!turn || turn.id !== event.turn_id) return state;
