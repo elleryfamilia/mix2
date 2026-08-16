@@ -12,6 +12,19 @@ const agentKind = z.enum(['claude', 'codex']);
 const agentRole = z.enum(['lead', 'teammate']);
 const speaker = z.enum(['claude', 'codex', 'team']);
 
+const stanceOutcome = z.enum(['chosen', 'deferred', 'dropped']);
+
+export const stanceSchema = z.object({
+  agent: agentKind,
+  position: z.string(),
+  outcome: stanceOutcome,
+});
+
+export const disagreementSchema = z.object({
+  stances: z.array(stanceSchema),
+  resolution: z.string(),
+});
+
 export const agentInfoSchema = z.object({
   kind: agentKind,
   name: z.string(),
@@ -88,6 +101,13 @@ export const eventSchema = z.discriminatedUnion('type', [
     message: z.string(),
   }),
   z.object({
+    type: z.literal('disagreement.recorded'),
+    turn_id: z.string(),
+    stances: z.array(stanceSchema),
+    resolution: z.string(),
+    revision: z.number(),
+  }),
+  z.object({
     type: z.literal('agent.model'),
     agent: agentKind,
     model: z.string().nullish(),
@@ -102,6 +122,7 @@ export const eventSchema = z.discriminatedUnion('type', [
     text: z.string(),
     consultations: z.number(),
     duration_ms: z.number(),
+    disagreement: disagreementSchema.optional(),
   }),
   z.object({
     type: z.literal('turn.completed'),
@@ -117,6 +138,9 @@ export const eventSchema = z.discriminatedUnion('type', [
 
 export type CoreEvent = z.infer<typeof eventSchema>;
 export type AgentInfo = z.infer<typeof agentInfoSchema>;
+export type StanceOutcome = z.infer<typeof stanceOutcome>;
+export type Stance = z.infer<typeof stanceSchema>;
+export type Disagreement = z.infer<typeof disagreementSchema>;
 
 export type Command =
   | { type: 'initialize'; protocol: number; lead?: string; cwd?: string; debug?: boolean }
