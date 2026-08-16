@@ -3,6 +3,7 @@
  * consultation exchange, and each teammate consultation's final response.
  * Hidden model reasoning is never available here — only written output.
  */
+import type { Stance } from '../ipc/protocol.js';
 import type { AppState, ConsultState } from '../state/store.js';
 import { formatElapsed } from '../state/store.js';
 import {
@@ -13,6 +14,7 @@ import {
   glyphs,
   theme,
 } from '../theme/theme.js';
+import { STANCE_ARROWS } from './conversation.js';
 import { BLANK, Line, span, spread, truncate, wrapText } from './lines.js';
 
 const INDENT = 2;
@@ -54,6 +56,7 @@ export function renderTeamPanel(
         consults: state.turn.consults,
         durationMs: now - state.turn.startedAt,
         toolsCompleted: state.turn.toolsCompleted,
+        disagreement: state.turn.disagreement,
       }
     : state.lastTurn;
 
@@ -115,6 +118,10 @@ export function renderTeamPanel(
     ),
   );
 
+  if (record?.disagreement) {
+    lines.push(...ledgerLines(record.disagreement, contentW));
+  }
+
   if (consults.length === 0) {
     lines.push(BLANK);
     lines.push(pad(span('no consultations this run', { color: theme.text.faint })));
@@ -150,6 +157,41 @@ export function renderTeamPanel(
         lines.push(pad(span('  '), span(line, { color: theme.text.secondary })));
       }
     }
+  }
+  return lines;
+}
+
+/** The `△ disagreement` ledger: full stance positions (never truncated,
+ * unlike the conversation view's stance block) plus the team's resolution.
+ * Renders whenever a disagreement was recorded, live or settled, even when
+ * this turn had no consultations to show above it. */
+function ledgerLines(d: { stances: Stance[]; resolution: string }, contentW: number): Line[] {
+  const lines: Line[] = [
+    BLANK,
+    pad(span(`${glyphs.disagree} disagreement`, { color: theme.agent.team, bold: true })),
+  ];
+  for (const stance of d.stances) {
+    lines.push(BLANK);
+    lines.push(
+      pad(
+        span(agentGlyph(stance.agent), { color: agentColor(stance.agent) }),
+        span(` ${stance.agent}`, { color: agentColor(stance.agent), bold: true }),
+      ),
+    );
+    for (const line of wrapText(stance.position, contentW - 2)) {
+      lines.push(pad(span('  '), span(line, { color: theme.text.secondary })));
+    }
+    lines.push(pad(span('  '), span(STANCE_ARROWS[stance.outcome], { color: theme.text.faint })));
+  }
+  lines.push(BLANK);
+  lines.push(
+    pad(
+      span(agentGlyph('team'), { color: agentColor('team') }),
+      span(' team', { color: agentColor('team'), bold: true }),
+    ),
+  );
+  for (const line of wrapText(d.resolution, contentW - 2)) {
+    lines.push(pad(span('  '), span(line, { color: theme.text.secondary })));
   }
   return lines;
 }

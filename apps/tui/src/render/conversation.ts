@@ -114,7 +114,7 @@ const STANCE_PREFIX_WIDTH = INDENT + 1 + 1 + STANCE_NAME_WIDTH;
 // Minimum columns always kept between a truncated position and its arrow.
 const STANCE_MIN_GAP = 2;
 
-const STANCE_ARROWS: Record<Stance['outcome'], string> = {
+export const STANCE_ARROWS: Record<Stance['outcome'], string> = {
   chosen: '← shipped',
   deferred: '→ follow-up',
   dropped: '→ set aside',
