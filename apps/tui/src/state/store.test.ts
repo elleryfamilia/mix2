@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CoreEvent } from '../ipc/protocol.js';
+import type { CoreEvent, Disagreement } from '../ipc/protocol.js';
 import {
   formatDuration,
   formatElapsed,
@@ -105,7 +105,7 @@ describe('single-agent turn', () => {
     expect(s.turn).toBeUndefined();
     const final = s.items.at(-1);
     expect(final).toMatchObject({ kind: 'final', speaker: 'claude', consultations: 0 });
-    expect(s.lastSummary).toEqual({ durationMs: 900, consultations: 0 });
+    expect(s.lastSummary).toEqual({ durationMs: 900, consultations: 0, disagreements: 0 });
   });
 });
 
@@ -227,6 +227,136 @@ describe('failure and cancellation', () => {
     let s = startedTurn();
     s = apply(s, { type: 'agent.text_delta', turn_id: 'OLD', agent: 'claude', role: 'lead', text: 'x' });
     expect(s.turn?.streamText).toBe('');
+  });
+});
+
+describe('disagreement', () => {
+  const liveDisagreement = {
+    stances: [{ agent: 'claude' as const, position: 'Use Postgres (live)', outcome: 'chosen' as const }],
+    resolution: 'Leaning Postgres.',
+  };
+
+  const finalDisagreement: Disagreement = {
+    stances: [
+      { agent: 'claude', position: 'Use Postgres', outcome: 'chosen' },
+      { agent: 'codex', position: 'Use DynamoDB', outcome: 'dropped' },
+    ],
+    resolution: 'Went with Postgres for join support.',
+  };
+
+  it('disagreement.recorded attaches to the live turn', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: liveDisagreement.resolution,
+      revision: 1,
+    });
+    expect(s.turn?.disagreement).toEqual({ ...liveDisagreement, revision: 1 });
+  });
+
+  it('stale revision is ignored', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: 'rev 2 resolution',
+      revision: 2,
+    });
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: 'rev 1 resolution (stale)',
+      revision: 1,
+    });
+    expect(s.turn?.disagreement?.revision).toBe(2);
+    expect(s.turn?.disagreement?.resolution).toBe('rev 2 resolution');
+  });
+
+  it('message.final payload lands on the final item and overwrites live state', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: liveDisagreement.resolution,
+      revision: 1,
+    });
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'team',
+      lead: 'claude',
+      text: 'Final answer.',
+      consultations: 1,
+      duration_ms: 5000,
+      disagreement: finalDisagreement,
+    });
+    const final = s.items.at(-1);
+    expect(final).toMatchObject({ kind: 'final', disagreement: finalDisagreement });
+    expect(s.turn?.disagreement).toEqual({ ...finalDisagreement, revision: 1 });
+  });
+
+  it('turn.completed carries it into lastTurn and lastSummary.disagreements === 1', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: 'Final.',
+      consultations: 0,
+      duration_ms: 1000,
+      disagreement: finalDisagreement,
+    });
+    s = apply(s, { type: 'turn.completed', turn_id: 't1', duration_ms: 1000, consultations: 0 });
+    expect(s.lastTurn?.disagreement).toEqual(finalDisagreement);
+    expect(s.lastSummary?.disagreements).toBe(1);
+  });
+
+  it('absent payload yields disagreements === 0', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'claude',
+      lead: 'claude',
+      text: 'No disagreement here.',
+      consultations: 0,
+      duration_ms: 900,
+    });
+    s = apply(s, { type: 'turn.completed', turn_id: 't1', duration_ms: 900, consultations: 0 });
+    expect(s.lastTurn?.disagreement).toBeUndefined();
+    expect(s.lastSummary?.disagreements).toBe(0);
+  });
+
+  it('turn.cancelled clears it and lastTurn carries none', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: liveDisagreement.resolution,
+      revision: 1,
+    });
+    s = apply(s, { type: 'turn.cancelled', turn_id: 't1' });
+    expect(s.lastTurn?.disagreement).toBeUndefined();
+  });
+
+  it('turn.failed clears it and lastTurn carries none', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'disagreement.recorded',
+      turn_id: 't1',
+      stances: liveDisagreement.stances,
+      resolution: liveDisagreement.resolution,
+      revision: 1,
+    });
+    s = apply(s, { type: 'turn.failed', turn_id: 't1', message: 'usage limit reached' });
+    expect(s.lastTurn?.disagreement).toBeUndefined();
   });
 });
 
