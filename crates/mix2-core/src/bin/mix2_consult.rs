@@ -104,11 +104,9 @@ fn run() -> Result<String, String> {
                 .map_err(|e| format!("Consultation failed: could not read stdin: {e}"))?;
             let text = text.trim().to_owned();
             if text.is_empty() {
-                return Err(
-                    "Nothing to record. Pipe the split on stdin, e.g.\n\
+                return Err("Nothing to record. Pipe the split on stdin, e.g.\n\
                      mix2-consult disagree <<'SPLIT'\n...\nSPLIT"
-                        .to_owned(),
-                );
+                    .to_owned());
             }
             (String::new(), Some(text))
         }
