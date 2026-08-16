@@ -155,10 +155,10 @@ helper behavior).
   Ink; becomes a direct dependency — needs user approval) is used for stance
   truncation/right-alignment so CJK/emoji in model-written positions can't
   break the block. TUI-wide adoption stays a follow-up.
-- teamPanel.ts: `△ disagreement` ledger after the exchange section, from live
-  turn or settled record; restructured so the empty-consult early return can't
-  skip it; the live-panel ad-hoc record object (teamPanel.ts:52-58) gains the
-  field.
+- teamPanel.ts: `△ disagreement` ledger after the consultation-count line and
+  before the exchange section, from live turn or settled record; restructured so
+  the empty-consult early return can't skip it; the live-panel ad-hoc record
+  object (teamPanel.ts:52-58) gains the field.
 - StatusBar.tsx: `· △ 1 disagreement` suffix on the done summary when > 0.
 
 ### Residual risks (accepted, documented)

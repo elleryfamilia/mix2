@@ -276,9 +276,9 @@ impl ConsultServer {
     ///
     /// The ActiveTurn is taken and its record extracted under ONE write lock.
     /// Because every commit happens inside a read guard, each committed record
-    /// strictly happens-before this take: a request that answered "recorded"
-    /// is always in the returned value, and a request arriving after it finds
-    /// no active turn and is refused.
+    /// strictly happens-before this take: the LATEST committed record is
+    /// returned; an earlier record superseded by a revision is not. A request
+    /// arriving after it finds no active turn and is refused.
     pub async fn end_turn(&self) -> Option<DisagreementRecord> {
         let record = self.shared.active.write().await.take().and_then(|turn| {
             let mut slot = lock_disagreement(&turn.disagreement);

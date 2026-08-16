@@ -282,12 +282,12 @@ Left segment (colored by state), right segment (faint hints):
 
 | State        | Left                                              | Right |
 | ------------ | ------------------------------------------------- | ----- |
-| idle         | `ready` (muted)                                   | `ctrl+t team · /help` |
+| idle         | `ready` (muted)                                   | `ctrl+t activity · /help` |
 | lead working | `⠸ claude working` (agent color)                  | `esc cancel · ctrl+t` |
 | consulting   | `⠧ codex reviewing` (agent color)                 | `esc cancel · ctrl+t` |
 | conferring   | `⇄ conferring` (mauve)                            | `esc cancel · ctrl+t` |
 | synthesizing | `⠸ claude reconciling` (agent color)              | `esc cancel · ctrl+t` |
-| done         | `done in 2:33 · ⇄ 2 consultations · △ 1 disagreement` (muted) | `ctrl+t team` |
+| done         | `done in 2:33 · ⇄ 2 consultations · △ 1 disagreement` (muted) | `ctrl+t activity` |
 | team panel   | `◐ team — this run` (mauve)                       | `esc close` |
 
 ## Team panel (ctrl+t, 4c)
