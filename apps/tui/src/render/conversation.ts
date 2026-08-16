@@ -337,9 +337,7 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
       .map((l) => [span(l, { color: theme.text.muted, italic: true })]);
   } else {
     leadStatus = 'thinking';
-    leadBody = [
-      [span(`${glyphs.treeEnd} mulling it over ${ctx.spinner}`, { color: theme.text.faint })],
-    ];
+    leadBody = [[span(`${glyphs.treeEnd} mulling it over`, { color: theme.text.faint })]];
   }
 
   const teammateBody = tileBody(consult, innerWidth);
@@ -354,7 +352,11 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
         span(agentGlyph(lead), { color: agentColor(lead) }),
         span(` ${lead} — ${leadStatus}`, { color: agentColor(lead), bold: true }),
       ],
-      headerRight: [span(formatElapsed(ctx.now - turn.startedAt), { color: theme.text.faint })],
+      headerRight: [
+        span(`${ctx.spinner} ${formatElapsed(ctx.now - turn.startedAt)}`, {
+          color: theme.text.faint,
+        }),
+      ],
       body: leadBody,
       borderColor: agentColor(lead),
     },

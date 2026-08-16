@@ -122,6 +122,14 @@ describe('consultation activity', () => {
     expect(lines.some((l) => l.includes('╭'))).toBe(true);
   });
 
+  it('both live tiles carry the spinner in their headers', () => {
+    const lines = text(consulting());
+    const leadHeader = lines.find((l) => l.includes('● claude —'));
+    const teammateHeader = lines.find((l) => l.includes('○ codex —'));
+    expect(leadHeader).toContain(ctx.spinner);
+    expect(teammateHeader).toContain(ctx.spinner);
+  });
+
   it('stacks tiles on narrow terminals', () => {
     const narrow = { ...ctx, width: 80 };
     const lines = text(consulting(), narrow);

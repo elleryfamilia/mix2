@@ -1,6 +1,6 @@
 # mix2
 
-**Claude Code and OpenAI Codex, on the same team. Yes, really.**
+**Claude Code and Codex, on the same team. Yes, really.**
 
 mix2 is a terminal app that turns two rival frontier coding agents into
 one small engineering team. You ask one question; both investigate in
