@@ -232,17 +232,33 @@ max reading width. Individual agent identity (names, glyphs, colors)
 appears only in live activity: working lines, tiles, the trace pill, and
 the team panel.
 
-**Disagreement stance block (4b)** — when the lead reports a split, it is
-part of the lead's own final text; the UI additionally renders the runtime's
-knowledge ("N consultations") in the status bar. The recommended textual
-shape (taught to the lead via instructions, not enforced):
+**Disagreement stance block (4b)** — this block never comes from the lead's
+free-text answer. When the lead and teammate genuinely split, the lead
+records the split as a runtime action, `mix2-consult disagree` — a heredoc
+with one line per session agent (`<agent>: <position> | <outcome>`) and a
+required closing `team: <resolution>` line. The core validates the record
+before accepting it: at least one consultation must have completed this
+turn, the agent names must match the session's actual lead and teammate,
+the two positions can't be identical, and a turn can revise its record at
+most 3 times. Once accepted, the validated record rides `message.final` as
+structured data, not prose — the TUI never parses disagreement structure out
+of text. If the lead never calls the verb, no block renders and no count
+increments; that is the expected degradation, not a bug. Positions in the
+block are truncated to fit the row, ending in a visible `…`; the
+untruncated positions live in the ctrl+t team panel's ledger.
 
 ```text
   △ where we split
-  ● claude   cache compiled schema in-process        → shipped
+  ● claude   cache compiled schema in-process        ← shipped
   ○ codex    move validation off the hot path        → follow-up
   ◐ team     lead's call — ship now, file the rework
 ```
+
+Mauve `△` header. Each stance row: agent glyph in agent color, name padded
+to a 9-column field, truncated position, then a faint outcome arrow
+right-aligned to the block's edge — `← shipped` for the chosen stance,
+`→ follow-up` for deferred, `→ set aside` for dropped. The closing `◐ team`
+row carries the resolution in the same name-field width, no arrow.
 
 **Markdown in answers** — agent text renders as terminal markdown, in the
 same quiet vocabulary: headings bold (marker stripped, blank line before),
@@ -271,7 +287,7 @@ Left segment (colored by state), right segment (faint hints):
 | consulting   | `⠧ codex reviewing` (agent color)                 | `esc cancel · ctrl+t` |
 | conferring   | `⇄ conferring` (mauve)                            | `esc cancel · ctrl+t` |
 | synthesizing | `⠸ claude reconciling` (agent color)              | `esc cancel · ctrl+t` |
-| done         | `done in 2:33 · ⇄ 2 consultations` (muted)        | `ctrl+t team` |
+| done         | `done in 2:33 · ⇄ 2 consultations · △ 1 disagreement` (muted) | `ctrl+t team` |
 | team panel   | `◐ team — this run` (mauve)                       | `esc close` |
 
 ## Team panel (ctrl+t, 4c)
@@ -285,15 +301,41 @@ An overlay replacing the conversation viewport (chrome stays):
   ○ codex   teammate  0:41 active    3 tools
   └ 2 consultations · 4 messages
 
+  △ disagreement
+
+  ● claude
+    cache the compiled schema in-process
+    ← shipped
+
+  ○ codex
+    move validation off the hot path
+    → follow-up
+
+  ◐ team
+    ship the cache now, file the validation rework as a follow-up
+
   exchange
   ● 14:02  does per-request compile explain the p99?
   ○ 14:02  yes — repro'd at 6.1ms/req on the bench
 ```
 
 Contents: participants with role/elapsed/tool counts, consultation list with
-duration, and each teammate consultation's **final response** (scrollable).
-Hidden reasoning is never shown here. When the teammate is unavailable the
-panel says so: `○ codex   teammate  unavailable — <reason>`.
+duration, the `△ disagreement` ledger when a split was recorded, and each
+teammate consultation's **final response** (scrollable). Hidden reasoning is
+never shown here. When the teammate is unavailable the panel says so:
+`○ codex   teammate  unavailable — <reason>`.
+
+**Disagreement ledger** — sits right after the consultation count, before
+the exchange. It renders both while the turn is still live (the record is
+provisional, updated in place if the lead revises it) and after the turn
+settles (the record then comes from the finished turn's `message.final`,
+the same authoritative payload the stance block reads). Unlike the stance
+block in the final answer, nothing here is truncated: each stance gets its
+own glyph-and-name line, the full position text wrapped across as many
+lines as it needs, and a faint outcome line below it (`← shipped` /
+`→ follow-up` / `→ set aside`); a closing `◐ team` line carries the full,
+also-wrapped resolution. The ledger renders even when this turn had no
+consultations to list in the exchange below it.
 
 ## Model picker (/model)
 
