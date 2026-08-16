@@ -404,6 +404,19 @@ describe('stance block', () => {
     expect(row!.endsWith('shipped')).toBe(true);
   });
 
+  it('renders the dropped outcome as a right-aligned "set aside" arrow', () => {
+    const lines = withDisagreement(100, [
+      { agent: 'codex', position: 'rewrite the retry logic from scratch', outcome: 'dropped' },
+    ]);
+    const row = lines.find((l) => l.includes('→ set aside'));
+    expect(row).toBeDefined();
+    expect(row).toContain('○ codex');
+    expect(row).toContain('rewrite the retry logic from scratch');
+    // width 100 caps to MAX_CONTENT_WIDTH (92).
+    expect(row).toHaveLength(92);
+    expect(row!.endsWith('set aside')).toBe(true);
+  });
+
   it('truncates a long position with an ellipsis and never exceeds the frame', () => {
     const longPosition =
       'this stance position rambles on at great length about tradeoffs, benchmarks, and edge cases far past what any row could hold '.repeat(
