@@ -50,22 +50,51 @@ else
 fi
 [ "$expected" = "$actual" ] || fail "checksum mismatch for $asset"
 
-say "→ installing to $INSTALL_DIR"
+# The tarball's top-level dir is mix2-<version>-<target>; read the version
+# from it rather than running the binary (which needs Node we may not have).
+topdir="$(tar -tzf "$tmp/$asset" | head -n 1)"
+topdir="${topdir%%/*}"
+version="${topdir#mix2-}"
+version="${version%"-$target"}"
+
+say "→ installing mix2 ${version} to $INSTALL_DIR"
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 tar -xzf "$tmp/$asset" -C "$INSTALL_DIR" --strip-components=1
 ln -sf "$INSTALL_DIR/mix2" "$BIN_DIR/mix2"
 
-if ! command -v node >/dev/null 2>&1; then
-  say "⚠ mix2 needs Node.js >= 22 at runtime — install it from https://nodejs.org"
+# mix2 refuses to start unless Node >= 22 and BOTH agent CLIs are present
+# and signed in — check now so the install ends with honest next steps
+# instead of a success line on a machine that can't run it.
+missing=""
+need() {
+  if [ -z "$missing" ]; then missing="  • $*"; else missing="${missing}
+  • $*"; fi
+}
+if command -v node >/dev/null 2>&1; then
+  node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  [ "${node_major:-0}" -ge 22 ] \
+    || need "Node.js >= 22 (found $(node --version 2>/dev/null || echo 'an unknown version')) — https://nodejs.org"
+else
+  need "Node.js >= 22 — https://nodejs.org"
 fi
-say "⚠ mix2 needs both the Claude Code and Codex CLIs installed and signed in:"
-say "    claude   https://claude.com/claude-code"
-say "    codex    https://developers.openai.com/codex/cli"
+command -v claude >/dev/null 2>&1 \
+  || need "Claude Code CLI — https://claude.com/claude-code"
+command -v codex >/dev/null 2>&1 \
+  || need "Codex CLI — https://developers.openai.com/codex/cli (npm i -g @openai/codex)"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) say "⚠ add $BIN_DIR to your PATH to run mix2 from anywhere" ;;
+  *) need "$BIN_DIR on your PATH (to run mix2 from anywhere)" ;;
 esac
 
-say "✓ installed $("$INSTALL_DIR/mix2" --version 2>/dev/null || echo mix2). Run: mix2"
+if [ -n "$missing" ]; then
+  say ""
+  say "⚠ mix2 ${version} is installed, but this machine is missing:"
+  say "$missing"
+  say ""
+  say "Both CLIs must also be signed in (run \`claude\` once; run \`codex login\`)."
+  say "Fix the above, then run: mix2"
+else
+  say "✓ installed mix2 ${version} — make sure both CLIs are signed in, then run: mix2"
+fi
