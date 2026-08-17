@@ -81,21 +81,25 @@ fi
 # lost the race must not delete the winner's lock.)
 tmp=""
 stage=""
-old=""      # previous install, moved aside; set only until the new one is accepted
+aside=""    # where the previous install is moved while the new one is unverified
 accepted="" # set once the new install has been verified
 probe=""    # pid of the verification run of the new launcher, if any
 cleanup() {
   if [ -n "$probe" ]; then kill "$probe" 2>/dev/null || true; fi
-  # $old is set from the moment the previous install is moved aside until
-  # the new one is accepted. Exiting in that window — a failure, or a
-  # signal — means whatever sits at $INSTALL_DIR is unverified: drop it
-  # and put the previous install back so mix2 keeps working.
-  if [ -n "$old" ] && [ -z "$accepted" ]; then
-    rm -rf "$INSTALL_DIR"
-    mv "$old" "$INSTALL_DIR"
+  # The previous install sits at $aside from the moment it is renamed
+  # there until the new one is accepted. Renames are atomic, so "$aside
+  # exists" is the truth of that state — no variable is assigned after
+  # the fact for a signal to slip in between. Exiting in that window — a
+  # failure, or a signal — means whatever sits at $INSTALL_DIR is
+  # unverified: drop it and put the previous install back.
+  if [ -n "$aside" ] && [ -e "$aside" ]; then
+    if [ -z "$accepted" ]; then
+      rm -rf "$INSTALL_DIR"
+      mv "$aside" "$INSTALL_DIR"
+    else
+      rm -rf "$aside" # accepted; interrupted before the old copy was gone
+    fi
   fi
-  # Accepted but interrupted before the old copy was fully deleted.
-  if [ -n "$old" ] && [ -n "$accepted" ]; then rm -rf "$old"; fi
   if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
   if [ -n "$stage" ]; then rm -rf "$stage"; fi
   # (`if`s, not `[ ] &&`: under set -e a false test as the trap's last
@@ -148,15 +152,13 @@ for f in mix2 mix2-core mix2-consult mix2.bundle.mjs; do
   [ -f "$stage/$f" ] || fail "release archive is missing $f — not installing"
 done
 if [ -e "$INSTALL_DIR" ]; then
-  # $old is set only once the rename has succeeded: the trap treats a set
-  # $old as "the previous install lives there", so it must never name a
-  # path that does not.
-  aside="${INSTALL_DIR}.old.$$"
+  candidate="${INSTALL_DIR}.old.$$"
+  rm -rf "$candidate" # a leftover from a crashed run with this pid must not swallow the mv
+  aside="$candidate"
   mv "$INSTALL_DIR" "$aside" || fail "could not move the previous install aside"
-  old="$aside"
 fi
 if ! mv "$stage" "$INSTALL_DIR"; then
-  fail "could not move the new install into place" # cleanup restores $old
+  fail "could not move the new install into place" # cleanup restores the previous install
 fi
 stage=""
 
@@ -195,7 +197,7 @@ if [ "$(node_major)" -ge 22 ]; then
     problem="reported '${reported}', expected 'mix2 ${version}'"
   fi
   if [ -n "$problem" ]; then
-    if [ -n "$old" ]; then
+    if [ -n "$aside" ] && [ -e "$aside" ]; then
       # cleanup (EXIT trap) drops the new tree and restores the old one
       fail "the new install does not run (${problem}); the previous version was restored"
     fi
@@ -204,8 +206,7 @@ if [ "$(node_major)" -ge 22 ]; then
   fi
 fi
 accepted=1
-if [ -n "$old" ]; then rm -rf "$old"; fi
-old=""
+if [ -n "$aside" ] && [ -e "$aside" ]; then rm -rf "$aside"; fi
 
 if [ -z "${MIX2_NO_LINK:-}" ]; then
   mkdir -p "$BIN_DIR"

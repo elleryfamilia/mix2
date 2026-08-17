@@ -338,3 +338,7 @@ previous install has actually been moved aside (a failed rename could
 otherwise make the trap delete the live install); all trailing slashes
 are stripped from `MIX2_INSTALL_DIR`; and the launcher probe is accepted
 only if it exits 0 within the deadline *and* prints the expected version.
+
+Round four: the trap keyed on a variable assigned *after* the rename, so a
+signal in between left the previous install stranded. It now keys on the
+aside directory existing (renames are atomic), so there is no window.
