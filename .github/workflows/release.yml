@@ -23,13 +23,13 @@ jobs:
             rust_target: x86_64-unknown-linux-musl
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -65,7 +65,7 @@ jobs:
           cp LICENSE README.md "dist/$stage/"
           tar -czf "dist/mix2-${{ matrix.target }}.tar.gz" -C dist "$stage"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mix2-${{ matrix.target }}
           path: dist/mix2-${{ matrix.target }}.tar.gz
@@ -74,7 +74,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -85,7 +85,7 @@ jobs:
           sha256sum mix2-*.tar.gz > checksums.txt
           cat checksums.txt
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/mix2-*.tar.gz
