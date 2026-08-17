@@ -85,7 +85,11 @@ aside=""    # where the previous install is moved while the new one is unverifie
 accepted="" # set once the new install has been verified
 probe=""    # pid of the verification run of the new launcher, if any
 cleanup() {
-  if [ -n "$probe" ]; then kill "$probe" 2>/dev/null || true; fi
+  # Cleanup must run to the end: no errexit in here (one failing rm must
+  # not skip the restore), and a second Ctrl+C must not cut it short.
+  set +e
+  trap '' HUP INT TERM
+  if [ -n "$probe" ]; then kill "$probe" 2>/dev/null; fi
   # The previous install sits at $aside from the moment it is renamed
   # there until the new one is accepted. Renames are atomic, so "$aside
   # exists" is the truth of that state — no variable is assigned after
@@ -98,15 +102,19 @@ cleanup() {
     if [ -n "$stage" ] && [ ! -e "$stage" ]; then rm -rf "$INSTALL_DIR"; fi
     if [ -n "$aside" ] && [ -e "$aside" ]; then
       rm -rf "$INSTALL_DIR"
-      mv "$aside" "$INSTALL_DIR"
+      if [ ! -e "$INSTALL_DIR" ] && mv "$aside" "$INSTALL_DIR"; then
+        :
+      else
+        printf 'mix2 install: could not restore the previous install; it is at %s\n' "$aside" >&2
+      fi
     fi
   elif [ -n "$aside" ] && [ -e "$aside" ]; then
     rm -rf "$aside" # accepted; interrupted before the old copy was gone
   fi
   if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
   if [ -n "$stage" ] && [ -e "$stage" ]; then rm -rf "$stage"; fi
-  # (`if`s, not `[ ] &&`: under set -e a false test as the trap's last
-  # command would turn a successful install into exit status 1)
+  # (`if`s, not `[ ] &&`: a false test as the trap's last command would
+  # turn a successful install into exit status 1)
   rm -rf "$lock"
 }
 trap cleanup EXIT
@@ -115,6 +123,11 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# We hold the lock, so siblings left by a run that was SIGKILLed (which
+# no trap can catch) are safe to sweep now.
+for d in "$INSTALL_DIR".old.* "$INSTALL_DIR".new.*; do
+  if [ -e "$d" ]; then rm -rf "$d"; fi
+done
 tmp="$(mktemp -d)"
 
 say "→ downloading ${asset} (${label})"
@@ -209,7 +222,11 @@ if [ "$(node_major)" -ge 22 ]; then
   fi
 fi
 accepted=1
-if [ -n "$aside" ] && [ -e "$aside" ]; then rm -rf "$aside"; fi
+if [ -n "$aside" ] && [ -e "$aside" ]; then
+  # A leftover we cannot delete (root-owned files from a sudo install, an
+  # immutable flag) is a warning, not a failed update: the new install is in.
+  rm -rf "$aside" || say "⚠ could not remove the previous install at $aside — delete it by hand"
+fi
 
 if [ -z "${MIX2_NO_LINK:-}" ]; then
   mkdir -p "$BIN_DIR"

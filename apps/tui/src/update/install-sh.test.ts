@@ -6,6 +6,7 @@
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -332,6 +333,46 @@ describe('install.sh', () => {
     expect(code).toBe(143);
     expect(existsSync(installDir)).toBe(false);
     expect(leftovers()).toEqual([]);
+  });
+
+  it('a fresh install whose launcher fails verification leaves nothing behind', async () => {
+    serve('0.4.0', { reportedVersion: '0.3.9' });
+    const r = await run();
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("reported 'mix2 0.3.9', expected 'mix2 0.4.0'");
+    expect(r.err).not.toContain('previous version was restored');
+    expect(existsSync(installDir)).toBe(false);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('an undeletable previous install is a warning, not a failed update', async () => {
+    serve('0.3.0');
+    expect((await run()).status).toBe(0);
+    // A read-only subdir with a file inside cannot be removed by rm -rf.
+    const locked = path.join(installDir, 'locked');
+    mkdirSync(locked);
+    writeFileSync(path.join(locked, 'f'), 'x');
+    chmodSync(locked, 0o555);
+    serve('0.4.0');
+    const r = await run();
+    try {
+      expect(r.status, r.err).toBe(0);
+      expect(r.out).toContain('could not remove the previous install');
+      expect(installedVersion()).toBe('mix2 0.4.0');
+      const stale = leftovers();
+      expect(stale).toHaveLength(1);
+      expect(stale[0]).toMatch(/^mix2\.old\.\d+$/);
+      // The next run holds the lock and sweeps it once it is deletable.
+      chmodSync(path.join(path.dirname(installDir), stale[0]!, 'locked'), 0o755);
+      serve('0.4.0');
+      expect((await run()).status).toBe(0);
+      expect(leftovers()).toEqual([]);
+    } finally {
+      for (const d of readdirSync(path.dirname(installDir))) {
+        const l = path.join(path.dirname(installDir), d, 'locked');
+        if (existsSync(l)) chmodSync(l, 0o755);
+      }
+    }
   });
 
   it('refuses to run while another installer holds the lock', async () => {

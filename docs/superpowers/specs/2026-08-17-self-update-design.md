@@ -353,3 +353,9 @@ Round six: a fresh install interrupted after the swap (no previous
 install to restore) kept the unverified tree; the trap now removes it,
 detecting the swap by "staging dir was created and is gone". The
 installer's scratch dir is removed if writing the script fails.
+
+Final pass (fresh reviewer on the trap alone, Codex having run out of
+quota): cleanup now runs with errexit off and HUP/INT/TERM ignored, so one
+failing `rm` or a second Ctrl+C cannot skip the restore; an undeletable
+previous install after acceptance is a warning rather than a failed
+update; siblings left by a SIGKILLed run are swept once the lock is held.
