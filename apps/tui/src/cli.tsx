@@ -1,86 +1,37 @@
 #!/usr/bin/env node
 /**
  * `mix2` — one conversational interface backed by two coding agents.
- * This entry point parses arguments, launches the Rust core, and renders
- * the Ink app in the terminal's alternate screen buffer, restoring the
- * terminal on any exit path.
+ * This entry point parses arguments, offers a pending update, launches the
+ * Rust core, and renders the Ink app in the terminal's alternate screen
+ * buffer, restoring the terminal on any exit path.
  */
 import { render } from 'ink';
 import path from 'node:path';
 import React from 'react';
+import { parseArgs } from './args.js';
 import { App } from './components/App.js';
 import { CoreClient } from './ipc/client.js';
 import type { CoreEvent } from './ipc/protocol.js';
 import { FilteredStdin } from './mouse/filteredStdin.js';
+import { defaultDeps, offerUpdateAtStartup, runUpdateCommand } from './update/flow.js';
 
-const HELP = `mix2 — talk to an AI engineering team in your terminal
-
-Usage:
-  mix2 [options]
-
-Options:
-  -l, --lead <agent>   Lead agent: claude or codex (default: configured, else claude)
-      --cwd <path>     Project directory (default: current directory)
-      --debug          Verbose runtime logging (IPC log in /tmp/mix2)
-      --core <path>    Path to the mix2-core binary
-  -h, --help           Show this help
-  -V, --version        Show version
-
-Keys:
-  Enter submit · Ctrl+J newline · Esc cancel · Ctrl+T team panel
-  PageUp/PageDown scroll · Ctrl+C cancel (twice: quit) · Ctrl+Q quit
-`;
-
-interface CliArgs {
-  lead?: string;
-  cwd?: string;
-  debug: boolean;
-  core?: string;
+const parsed = parseArgs(process.argv.slice(2));
+if (parsed.kind === 'exit') {
+  if (parsed.stdout) process.stdout.write(parsed.stdout);
+  if (parsed.stderr) process.stderr.write(parsed.stderr);
+  process.exit(parsed.code);
 }
-
-function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { debug: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    switch (arg) {
-      case '-l':
-      case '--lead':
-        args.lead = argv[++i];
-        break;
-      case '--cwd':
-        args.cwd = argv[++i];
-        break;
-      case '--debug':
-        args.debug = true;
-        break;
-      case '--core':
-        args.core = argv[++i];
-        break;
-      case '-h':
-      case '--help':
-        process.stdout.write(HELP);
-        process.exit(0);
-        break;
-      case '-V':
-      case '-v':
-      case '--version':
-        process.stdout.write('mix2 0.3.0\n');
-        process.exit(0);
-        break;
-      default:
-        process.stderr.write(`unknown option: ${arg}\n\n${HELP}`);
-        process.exit(2);
-    }
-  }
-  if (args.lead && !['claude', 'codex'].includes(args.lead)) {
-    process.stderr.write(`invalid --lead '${args.lead}' (expected claude or codex)\n`);
-    process.exit(2);
-  }
-  return args;
+if (parsed.kind === 'update') {
+  // Explicit exit: a kept-alive HTTPS socket would otherwise hold the loop.
+  process.exit(await runUpdateCommand(defaultDeps()));
 }
-
-const args = parseArgs(process.argv.slice(2));
+const args = parsed.args;
 const cwd = args.cwd ? path.resolve(args.cwd) : process.cwd();
+
+// Before touching the terminal: is there a newer release, and does the
+// user want it now? (Once a day at most; silent when offline or opted out.)
+const startup = await offerUpdateAtStartup(process.argv.slice(2), defaultDeps({ debug: args.debug }));
+if (startup.action === 'exit') process.exit(startup.code);
 
 // 1049: alternate screen buffer.
 // 1002/1006: SGR mouse reporting — drag-selection with copy-on-release and
