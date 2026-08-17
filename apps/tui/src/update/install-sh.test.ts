@@ -322,6 +322,18 @@ describe('install.sh', () => {
     expect(leftovers()).toEqual([]);
   });
 
+  it('a signal during verification of a fresh install leaves no unverified tree behind', async () => {
+    serve('0.4.0', { hangOnVersion: true });
+    const child = start();
+    for (let i = 0; i < 50 && !existsSync(path.join(installDir, 'mix2.bundle.mjs')); i++) await sleep(100);
+    await sleep(300);
+    child.kill('SIGTERM');
+    const code = await new Promise<number | null>((resolve) => child.on('exit', (c) => resolve(c)));
+    expect(code).toBe(143);
+    expect(existsSync(installDir)).toBe(false);
+    expect(leftovers()).toEqual([]);
+  });
+
   it('refuses to run while another installer holds the lock', async () => {
     serve('0.4.0');
     mkdirSync(`${installDir}.lock`, { recursive: true });

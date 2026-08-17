@@ -92,16 +92,19 @@ cleanup() {
   # the fact for a signal to slip in between. Exiting in that window — a
   # failure, or a signal — means whatever sits at $INSTALL_DIR is
   # unverified: drop it and put the previous install back.
-  if [ -n "$aside" ] && [ -e "$aside" ]; then
-    if [ -z "$accepted" ]; then
+  if [ -z "$accepted" ]; then
+    # The staging dir was created and no longer exists ⇒ it was renamed
+    # into $INSTALL_DIR (atomic), and that tree is unverified: drop it.
+    if [ -n "$stage" ] && [ ! -e "$stage" ]; then rm -rf "$INSTALL_DIR"; fi
+    if [ -n "$aside" ] && [ -e "$aside" ]; then
       rm -rf "$INSTALL_DIR"
       mv "$aside" "$INSTALL_DIR"
-    else
-      rm -rf "$aside" # accepted; interrupted before the old copy was gone
     fi
+  elif [ -n "$aside" ] && [ -e "$aside" ]; then
+    rm -rf "$aside" # accepted; interrupted before the old copy was gone
   fi
   if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
-  if [ -n "$stage" ]; then rm -rf "$stage"; fi
+  if [ -n "$stage" ] && [ -e "$stage" ]; then rm -rf "$stage"; fi
   # (`if`s, not `[ ] &&`: under set -e a false test as the trap's last
   # command would turn a successful install into exit status 1)
   rm -rf "$lock"
@@ -160,7 +163,7 @@ fi
 if ! mv "$stage" "$INSTALL_DIR"; then
   fail "could not move the new install into place" # cleanup restores the previous install
 fi
-stage=""
+# ($stage is kept: "created but gone" is how cleanup knows the swap happened.)
 
 # Before discarding the previous install, prove the new one runs and is
 # the version we think it is. Needs a usable Node (the launcher's own

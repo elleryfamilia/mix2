@@ -348,3 +348,8 @@ installer to `TMPDIR` threw instead of returning an outcome, which would
 have crashed the startup path rather than "continuing with the old
 version". `runInstaller` now reports it, and the flow additionally treats
 anything the installer throws as a failed update.
+
+Round six: a fresh install interrupted after the swap (no previous
+install to restore) kept the unverified tree; the trap now removes it,
+detecting the swap by "staging dir was created and is gone". The
+installer's scratch dir is removed if writing the script fails.
