@@ -112,6 +112,21 @@ describe('runInstaller', () => {
     expect(result).toEqual({ ok: false, reason: 'installer exited with status 3' });
   });
 
+  it('reports an unusable TMPDIR as an outcome instead of throwing', async () => {
+    const installDir = path.join(dir, 'mix2');
+    mkdirSync(installDir);
+    const saved = process.env['TMPDIR'];
+    process.env['TMPDIR'] = path.join(dir, 'no', 'such', 'tmp');
+    try {
+      const result = await runInstaller({ tag: 'v0.4.0', installDir, fetch: serve(script), env: {} });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/could not write the installer/);
+    } finally {
+      if (saved === undefined) delete process.env['TMPDIR'];
+      else process.env['TMPDIR'] = saved;
+    }
+  });
+
   it('refuses up front when the install location is not writable', async () => {
     const parent = path.join(dir, 'ro');
     mkdirSync(parent);

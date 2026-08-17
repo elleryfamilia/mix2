@@ -69,11 +69,16 @@ export async function runInstaller(options: RunInstallerOptions): Promise<Outcom
     return { ok: false, reason: `the download from ${url} is not a shell script — not running it` };
   }
 
-  const scratch = mkdtempSync(path.join(tmpdir(), 'mix2-update-'));
-  const file = path.join(scratch, 'install.sh');
+  let scratch: string;
+  const file = () => path.join(scratch, 'install.sh');
   try {
-    writeFileSync(file, script, { mode: 0o600 });
-    const child = spawnSync('sh', [file], {
+    scratch = mkdtempSync(path.join(tmpdir(), 'mix2-update-'));
+    writeFileSync(file(), script, { mode: 0o600 });
+  } catch (error) {
+    return { ok: false, reason: `could not write the installer to ${tmpdir()}: ${errorMessage(error)}` };
+  }
+  try {
+    const child = spawnSync('sh', [file()], {
       stdio: 'inherit',
       env: {
         ...env,

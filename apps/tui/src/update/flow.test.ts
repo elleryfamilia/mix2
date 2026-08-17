@@ -174,6 +174,18 @@ describe('offerUpdateAtStartup', () => {
     expect(err()).toContain('curl -fsSL');
   });
 
+  it('on yes with an installer that throws: reports it and keeps going', async () => {
+    const { d, err } = deps({
+      ask: async () => 'yes',
+      install: async () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+    await expect(offerUpdateAtStartup([], d)).resolves.toEqual({ action: 'continue' });
+    expect(err()).toContain('mix2 update failed: ENOSPC');
+    expect(err()).toContain('continuing with mix2 0.3.0');
+  });
+
   it('on quit (Ctrl+C / Ctrl+D at the prompt): exits 130', async () => {
     const { d } = deps({ ask: async () => 'quit' });
     await expect(offerUpdateAtStartup([], d)).resolves.toEqual({ action: 'exit', code: 130 });

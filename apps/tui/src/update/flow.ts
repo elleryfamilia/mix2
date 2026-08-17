@@ -159,7 +159,13 @@ export async function offerUpdateAtStartup(argv: string[], deps: FlowDeps): Prom
 }
 
 async function installAndVerify(deps: FlowDeps, release: Release, installDir: string): Promise<Outcome> {
-  const installed = await deps.install(release.tag, installDir);
-  if (!installed.ok) return installed;
-  return deps.verify(installDir, release.version);
+  // Anything the installer throws (rather than reports) is still just a
+  // failed update: the caller decides whether to continue or exit.
+  try {
+    const installed = await deps.install(release.tag, installDir);
+    if (!installed.ok) return installed;
+    return deps.verify(installDir, release.version);
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
 }

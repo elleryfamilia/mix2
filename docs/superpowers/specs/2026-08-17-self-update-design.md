@@ -342,3 +342,9 @@ only if it exits 0 within the deadline *and* prints the expected version.
 Round four: the trap keyed on a variable assigned *after* the rename, so a
 signal in between left the previous install stranded. It now keys on the
 aside directory existing (renames are atomic), so there is no window.
+
+Round five (installer judged sound): a failure to write the downloaded
+installer to `TMPDIR` threw instead of returning an outcome, which would
+have crashed the startup path rather than "continuing with the old
+version". `runInstaller` now reports it, and the flow additionally treats
+anything the installer throws as a failed update.
