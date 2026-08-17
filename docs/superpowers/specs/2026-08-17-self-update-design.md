@@ -322,3 +322,13 @@ Codex's review of the pull request (PR #2) added two `install.sh` fixes:
   `install.sh` now runs `<new>/mix2 --version` (when Node ≥ 22 is
   present) before discarding the previous install and swaps it back on a
   mismatch; the TS-side `verifyInstalled` remains as a second check.
+
+Round two of Codex's PR review, also fixed:
+
+- A signal *after* the swap (while the new launcher was being probed) left
+  the unverified tree in place. The EXIT trap now restores the previous
+  install whenever it has been moved aside and the new one has not been
+  accepted, wherever the exit happens.
+- The shell-side `--version` probe had no deadline; it now runs under a
+  watchdog (10s, `MIX2_VERIFY_TIMEOUT` for tests). Both cases have
+  integration tests.

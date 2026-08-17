@@ -35,11 +35,12 @@ function buildRelease(
   version: string,
   omit: string[] = [],
   reportedVersion: string = version,
+  hangOnVersion = false,
 ): Buffer {
   const stage = path.join(work, `mix2-${version}-${TARGET}`);
   mkdirSync(stage, { recursive: true });
   const files: Record<string, string> = {
-    mix2: `#!/bin/sh\necho "mix2 ${reportedVersion}"\n`,
+    mix2: hangOnVersion ? '#!/bin/sh\nsleep 60\n' : `#!/bin/sh\necho "mix2 ${reportedVersion}"\n`,
     'mix2-core': '#!/bin/sh\nexit 0\n',
     'mix2-consult': '#!/bin/sh\nexit 0\n',
     'mix2.bundle.mjs': `// ${version}\n`,
@@ -103,9 +104,21 @@ afterEach(() => {
 
 function serve(
   version: string,
-  opts: { omit?: string[]; corruptChecksum?: boolean; reportedVersion?: string; delayMs?: number } = {},
+  opts: {
+    omit?: string[];
+    corruptChecksum?: boolean;
+    reportedVersion?: string;
+    delayMs?: number;
+    hangOnVersion?: boolean;
+  } = {},
 ) {
-  const tarball = buildRelease(path.join(work, `build-${version}`), version, opts.omit, opts.reportedVersion);
+  const tarball = buildRelease(
+    path.join(work, `build-${version}`),
+    version,
+    opts.omit,
+    opts.reportedVersion,
+    opts.hangOnVersion,
+  );
   const sum = opts.corruptChecksum ? '0'.repeat(64) : sha256(tarball);
   served = { tarball, checksums: `${sum}  ${ASSET}\n`, delayMs: opts.delayMs ?? 0 };
 }
@@ -124,6 +137,7 @@ async function run(env: Record<string, string> = {}) {
       MIX2_INSTALL_DIR: installDir,
       MIX2_BIN_DIR: binDir,
       MIX2_RELEASE_BASE_URL: baseUrl,
+      MIX2_VERIFY_TIMEOUT: '2',
       ...env,
     },
   };
@@ -232,11 +246,8 @@ describe('install.sh', () => {
     expect(leftovers()).toEqual([]);
   });
 
-  it('cleans up the lock and keeps the old install when killed mid-download (SIGTERM)', async () => {
-    serve('0.3.0');
-    expect((await run()).status).toBe(0);
-    serve('0.4.0', { delayMs: 3000 });
-    const child = spawn(SH, [INSTALL_SH], {
+  const start = () =>
+    spawn(SH, [INSTALL_SH], {
       env: {
         PATH: process.env['PATH'] ?? '/usr/bin:/bin',
         HOME: work,
@@ -246,13 +257,50 @@ describe('install.sh', () => {
       },
       stdio: 'ignore',
     });
-    await new Promise((resolve) => setTimeout(resolve, 700));
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('cleans up the lock and keeps the old install when killed mid-download (SIGTERM)', async () => {
+    serve('0.3.0');
+    expect((await run()).status).toBe(0);
+    serve('0.4.0', { delayMs: 2000 });
+    const child = start();
+    await sleep(500);
     expect(existsSync(`${installDir}.lock`)).toBe(true);
     child.kill('SIGTERM');
     const code = await new Promise<number | null>((resolve) => child.on('exit', (c) => resolve(c)));
     expect(code).toBe(143);
     expect(existsSync(`${installDir}.lock`)).toBe(false);
     expect(installedVersion()).toBe('mix2 0.3.0');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('gives up on a launcher that hangs on --version and restores the old install', async () => {
+    serve('0.3.0');
+    expect((await run()).status).toBe(0);
+    serve('0.4.0', { hangOnVersion: true });
+    const started = Date.now();
+    const r = await run();
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('the new install does not run');
+    expect(r.err).toContain('previous version was restored');
+    expect(Date.now() - started).toBeLessThan(8_000);
+    expect(installedVersion()).toBe('mix2 0.3.0');
+    expect(leftovers()).toEqual([]);
+  }, 15_000);
+
+  it('a signal after the swap (during verification) still restores the old install', async () => {
+    serve('0.3.0');
+    expect((await run()).status).toBe(0);
+    serve('0.4.0', { hangOnVersion: true });
+    const child = start();
+    // Wait until the swap has happened (the hanging launcher is running).
+    for (let i = 0; i < 50 && !existsSync(path.join(installDir, 'mix2.bundle.mjs')); i++) await sleep(100);
+    await sleep(300);
+    child.kill('SIGTERM');
+    const code = await new Promise<number | null>((resolve) => child.on('exit', (c) => resolve(c)));
+    expect(code).toBe(143);
+    expect(installedVersion()).toBe('mix2 0.3.0');
+    expect(existsSync(`${installDir}.lock`)).toBe(false);
     expect(leftovers()).toEqual([]);
   });
 

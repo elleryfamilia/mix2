@@ -14,6 +14,7 @@
 #   MIX2_NO_LINK           if set, do not create the symlink (updates use this:
 #                          the existing link keeps pointing at MIX2_INSTALL_DIR)
 #   MIX2_RELEASE_BASE_URL  override the download base URL (tests only)
+#   MIX2_VERIFY_TIMEOUT    seconds to wait for the new launcher's --version (default 10)
 set -eu
 
 say() { printf '%s\n' "$*"; }
@@ -77,11 +78,21 @@ fi
 # lost the race must not delete the winner's lock.)
 tmp=""
 stage=""
-old=""
+old=""      # previous install, moved aside; set only until the new one is accepted
+accepted="" # set once the new install has been verified
+probe=""    # pid of the verification run of the new launcher, if any
 cleanup() {
-  # If we died between moving the old install aside and moving the new one
-  # in, put the old one back so the user still has a working mix2.
-  if [ -n "$old" ] && [ ! -e "$INSTALL_DIR" ]; then mv "$old" "$INSTALL_DIR"; fi
+  if [ -n "$probe" ]; then kill "$probe" 2>/dev/null || true; fi
+  # $old is set from the moment the previous install is moved aside until
+  # the new one is accepted. Exiting in that window — a failure, or a
+  # signal — means whatever sits at $INSTALL_DIR is unverified: drop it
+  # and put the previous install back so mix2 keeps working.
+  if [ -n "$old" ] && [ -z "$accepted" ]; then
+    rm -rf "$INSTALL_DIR"
+    mv "$old" "$INSTALL_DIR"
+  fi
+  # Accepted but interrupted before the old copy was fully deleted.
+  if [ -n "$old" ] && [ -n "$accepted" ]; then rm -rf "$old"; fi
   if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
   if [ -n "$stage" ]; then rm -rf "$stage"; fi
   # (`if`s, not `[ ] &&`: under set -e a false test as the trap's last
@@ -147,17 +158,31 @@ stage=""
 # requirement); without one there is nothing mix2 could do anyway, and the
 # checklist below says so.
 if [ "$(node_major)" -ge 22 ]; then
-  reported="$("$INSTALL_DIR/mix2" --version 2>/dev/null || true)"
+  # Run the probe in the background with a watchdog (10s; tests shorten it
+  # via MIX2_VERIFY_TIMEOUT): a launcher that hangs must not hang the
+  # update, and there is no portable `timeout`.
+  "$INSTALL_DIR/mix2" --version > "$tmp/version.txt" 2>/dev/null &
+  probe=$!
+  i=0
+  limit=$(( ${MIX2_VERIFY_TIMEOUT:-10} * 10 ))
+  while kill -0 "$probe" 2>/dev/null && [ "$i" -lt "$limit" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$probe" 2>/dev/null; then kill "$probe" 2>/dev/null || true; fi
+  wait "$probe" 2>/dev/null || true
+  probe=""
+  reported="$(cat "$tmp/version.txt" 2>/dev/null || true)"
   if [ "$reported" != "mix2 ${version}" ]; then
-    rm -rf "$INSTALL_DIR"
     if [ -n "$old" ]; then
-      mv "$old" "$INSTALL_DIR"
-      old=""
+      # cleanup (EXIT trap) drops the new tree and restores the old one
       fail "the new install does not run (reported '${reported}', expected 'mix2 ${version}'); the previous version was restored"
     fi
+    rm -rf "$INSTALL_DIR"
     fail "the new install does not run (reported '${reported}', expected 'mix2 ${version}')"
   fi
 fi
+accepted=1
 if [ -n "$old" ]; then rm -rf "$old"; fi
 old=""
 
