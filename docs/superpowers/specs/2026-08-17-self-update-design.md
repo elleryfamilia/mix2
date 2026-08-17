@@ -310,3 +310,15 @@ then code quality) found one real bug and several small ones, all fixed:
 - Future-dated cache timestamps are treated as stale, not fresh.
 - `mix2 --version` verification timeout is 10s as specified; the
   unwritable-directory message names the directory that failed.
+
+Codex's review of the pull request (PR #2) added two `install.sh` fixes:
+
+- `sh` does not run the EXIT trap when killed by SIGHUP/SIGINT/SIGTERM,
+  so a closed terminal mid-update left a stale lock (or, between the two
+  `mv`s, no install at all). HUP/INT/TERM now `exit` through the EXIT
+  trap; an integration test kills the installer mid-download and checks
+  the lock is gone and the old install intact.
+- The old install was deleted before anything proved the new one runs.
+  `install.sh` now runs `<new>/mix2 --version` (when Node ≥ 22 is
+  present) before discarding the previous install and swaps it back on a
+  mismatch; the TS-side `verifyInstalled` remains as a second check.

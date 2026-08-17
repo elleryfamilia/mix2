@@ -3,7 +3,7 @@
  * local HTTP server serving a fixture release, so the transactional
  * behaviour is tested rather than assumed.
  */
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -30,11 +30,16 @@ const TARGET = `${platform() === 'darwin' ? 'macos' : 'linux'}-${arch() === 'arm
 const ASSET = `mix2-${TARGET}.tar.gz`;
 
 /** Build a release tarball the way the workflow does; returns its bytes. */
-function buildRelease(work: string, version: string, omit: string[] = []): Buffer {
+function buildRelease(
+  work: string,
+  version: string,
+  omit: string[] = [],
+  reportedVersion: string = version,
+): Buffer {
   const stage = path.join(work, `mix2-${version}-${TARGET}`);
   mkdirSync(stage, { recursive: true });
   const files: Record<string, string> = {
-    mix2: `#!/bin/sh\necho "mix2 ${version}"\n`,
+    mix2: `#!/bin/sh\necho "mix2 ${reportedVersion}"\n`,
     'mix2-core': '#!/bin/sh\nexit 0\n',
     'mix2-consult': '#!/bin/sh\nexit 0\n',
     'mix2.bundle.mjs': `// ${version}\n`,
@@ -54,7 +59,11 @@ const sha256 = (buf: Buffer) => createHash('sha256').update(buf).digest('hex');
 
 let server: Server;
 let baseUrl: string;
-let served: { tarball: Buffer; checksums: string } = { tarball: Buffer.alloc(0), checksums: '' };
+let served: { tarball: Buffer; checksums: string; delayMs: number } = {
+  tarball: Buffer.alloc(0),
+  checksums: '',
+  delayMs: 0,
+};
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -62,8 +71,10 @@ beforeAll(async () => {
       res.writeHead(200, { 'content-type': 'application/gzip' });
       res.end(served.tarball);
     } else if (req.url === '/checksums.txt') {
-      res.writeHead(200, { 'content-type': 'text/plain' });
-      res.end(served.checksums);
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end(served.checksums);
+      }, served.delayMs);
     } else {
       res.writeHead(404);
       res.end('nope');
@@ -90,10 +101,13 @@ afterEach(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
-function serve(version: string, opts: { omit?: string[]; corruptChecksum?: boolean } = {}) {
-  const tarball = buildRelease(path.join(work, `build-${version}`), version, opts.omit);
+function serve(
+  version: string,
+  opts: { omit?: string[]; corruptChecksum?: boolean; reportedVersion?: string; delayMs?: number } = {},
+) {
+  const tarball = buildRelease(path.join(work, `build-${version}`), version, opts.omit, opts.reportedVersion);
   const sum = opts.corruptChecksum ? '0'.repeat(64) : sha256(tarball);
-  served = { tarball, checksums: `${sum}  ${ASSET}\n` };
+  served = { tarball, checksums: `${sum}  ${ASSET}\n`, delayMs: opts.delayMs ?? 0 };
 }
 
 const execFileAsync = promisify(execFile);
@@ -204,6 +218,42 @@ describe('install.sh', () => {
     expect(r.status, r.err).toBe(0);
     expect(existsSync(binDir)).toBe(false);
     expect(r.out).not.toContain('on your PATH');
+  });
+
+  it('rolls back to the previous install when the new one does not run as the right version', async () => {
+    serve('0.3.0');
+    expect((await run()).status).toBe(0);
+    serve('0.4.0', { reportedVersion: '0.3.9' });
+    const r = await run();
+    expect(r.status).toBe(1);
+    expect(r.err).toContain("reported 'mix2 0.3.9', expected 'mix2 0.4.0'");
+    expect(r.err).toContain('previous version was restored');
+    expect(installedVersion()).toBe('mix2 0.3.0');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('cleans up the lock and keeps the old install when killed mid-download (SIGTERM)', async () => {
+    serve('0.3.0');
+    expect((await run()).status).toBe(0);
+    serve('0.4.0', { delayMs: 3000 });
+    const child = spawn(SH, [INSTALL_SH], {
+      env: {
+        PATH: process.env['PATH'] ?? '/usr/bin:/bin',
+        HOME: work,
+        MIX2_INSTALL_DIR: installDir,
+        MIX2_BIN_DIR: binDir,
+        MIX2_RELEASE_BASE_URL: baseUrl,
+      },
+      stdio: 'ignore',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(existsSync(`${installDir}.lock`)).toBe(true);
+    child.kill('SIGTERM');
+    const code = await new Promise<number | null>((resolve) => child.on('exit', (c) => resolve(c)));
+    expect(code).toBe(143);
+    expect(existsSync(`${installDir}.lock`)).toBe(false);
+    expect(installedVersion()).toBe('mix2 0.3.0');
+    expect(leftovers()).toEqual([]);
   });
 
   it('refuses to run while another installer holds the lock', async () => {

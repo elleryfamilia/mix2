@@ -18,6 +18,14 @@ set -eu
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'mix2 install: %s\n' "$*" >&2; exit 1; }
+# Major version of the node on PATH, or 0 when there is none.
+node_major() {
+  if command -v node >/dev/null 2>&1; then
+    node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0
+  else
+    echo 0
+  fi
+}
 
 : "${HOME:?HOME is not set}"
 REPO="elleryfamilia/mix2"
@@ -81,6 +89,11 @@ cleanup() {
   rm -rf "$lock"
 }
 trap cleanup EXIT
+# sh does not run the EXIT trap when killed by a signal (terminal closed,
+# Ctrl+C, kill): route the common ones through exit so cleanup still runs.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 tmp="$(mktemp -d)"
 
 say "→ downloading ${asset} (${label})"
@@ -128,6 +141,23 @@ if ! mv "$stage" "$INSTALL_DIR"; then
   fail "could not move the new install into place" # cleanup restores $old
 fi
 stage=""
+
+# Before discarding the previous install, prove the new one runs and is
+# the version we think it is. Needs a usable Node (the launcher's own
+# requirement); without one there is nothing mix2 could do anyway, and the
+# checklist below says so.
+if [ "$(node_major)" -ge 22 ]; then
+  reported="$("$INSTALL_DIR/mix2" --version 2>/dev/null || true)"
+  if [ "$reported" != "mix2 ${version}" ]; then
+    rm -rf "$INSTALL_DIR"
+    if [ -n "$old" ]; then
+      mv "$old" "$INSTALL_DIR"
+      old=""
+      fail "the new install does not run (reported '${reported}', expected 'mix2 ${version}'); the previous version was restored"
+    fi
+    fail "the new install does not run (reported '${reported}', expected 'mix2 ${version}')"
+  fi
+fi
 if [ -n "$old" ]; then rm -rf "$old"; fi
 old=""
 
@@ -145,8 +175,7 @@ need() {
   • $*"; fi
 }
 if command -v node >/dev/null 2>&1; then
-  node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-  [ "${node_major:-0}" -ge 22 ] \
+  [ "$(node_major)" -ge 22 ] \
     || need "Node.js >= 22 (found $(node --version 2>/dev/null || echo 'an unknown version')) — https://nodejs.org"
 else
   need "Node.js >= 22 — https://nodejs.org"
