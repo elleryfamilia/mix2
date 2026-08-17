@@ -89,8 +89,11 @@ strategy, a document.
   budgeted verb — not a surprise.
 - **Honest attribution.** Every answer speaks as "we", but the roster
   suffix (`claude + codex`) appears only when both actually worked, and
-  disagreements are disclosed, never smoothed over. No visible boss:
-  which agent coordinates is a config detail the UI refuses to leak.
+  disagreements are disclosed, never smoothed over. Progress lines while
+  the team works are the harness narrating (`mix2`: "Codex is reading the
+  doc; Claude is checking the docs"), never one agent talking about the
+  other. No visible boss: which agent coordinates is a config detail the
+  UI refuses to leak.
 
 ## Architecture
 

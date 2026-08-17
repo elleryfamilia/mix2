@@ -18,6 +18,18 @@ components; when in doubt, this file is the authority for visuals.
 
 ## Voice & tone
 
+Two registers, and the UI labels them so they never blur:
+
+- **Narration** — what the lead writes between tool calls while the team
+  works. It is the harness talking *about* the team, in the third person,
+  naming who is doing what ("Codex is reading the doc; Claude is extracting
+  the text"). Rendered under the app's own ` mix2 ` chip in muted text.
+  Never "I", never "we".
+- **The answer** — the final message, under the ` Team ` chip, in the first
+  person plural. "We" always means both agents together, never the lead
+  alone; individual names appear in the answer only to attribute a real
+  split or who found what ("Codex picked A, Claude leaned B; our call is A").
+
 Two rival labs' agents on one team is the product's standing joke — let
 microcopy and the agents' own voice carry it dryly ("sworn competitors,
 model colleagues"), at most one wink per screen or response, and never in
@@ -50,12 +62,12 @@ them through semantic roles (`theme.ts`), never as raw values in components.
 | `bgStatus`            | `#211f27` | status bar background |
 | `text.primary`        | `#d6d3dc` | user text, final answers |
 | `text.secondary`      | `#a9a5b2` | dialogue lines, stances |
-| `text.muted`          | `#8d8896` | status phrases, interim notes |
+| `text.muted`          | `#8d8896` | status phrases, narration body |
 | `text.faint`          | `#514d59` | tool tree, timings, keyboard hints |
 | `agent.claude`        | `#e0a06a` | Claude glyph `●`, chip background, tile border |
 | `agent.codex`         | `#8ab8d6` | Codex glyph `○`, chip background, tile border |
 | `agent.team`          | `#b795e6` | mauve: confer glyph `⇄`, Team chip, disagreement `△` |
-| `chip.appBg/appFg`    | `#d6d3dc` / `#17161b` | inverted ` mix2 ` chip |
+| `chip.appBg/appFg`    | `#d6d3dc` / `#17161b` | inverted ` mix2 ` chip: header, composer, narration label |
 | `chip.claudeFg`       | `#1c1208` | text on Claude chip |
 | `chip.codexFg`        | `#0c141c` | text on Codex chip |
 | `chip.teamFg`         | `#160e20` | text on Team chip |
@@ -164,8 +176,19 @@ colors, out of phase) when both agents are active, `⠧ codex reviewing`
 only when the coordinator is idle, `⠋ team working` / `⠋ team
 reconciling` (mauve) for solo phases.
 
-**Interim finding** — the lead talks while working: plain primary text
-paragraph between activity blocks.
+**Narration** — the lead's text between tool calls, written as the harness
+narrating in the third person. A ` mix2 ` chip leads the first line, the
+body is muted, and continuation lines hang under the text (not the chip):
+
+```text
+   mix2   Codex is reading the doc independently; Claude is extracting
+          the text so both work from the same source.
+```
+
+The same block sits at the tail of the live working region while the
+stream is still open, showing its last four lines. Never the Team chip and
+never a named-agent chip: the narrator is the app, not a speaker on the
+team.
 
 **Consultation announced**
 
@@ -225,12 +248,13 @@ settles to one faint line:
 ```
 
 Speaker chip: always ` Team ` (mauve bg) — the user talks to one team with
-one voice, and the answer text says "we". The faint `claude + codex`
-suffix appears only when at least one consultation actually succeeded, so
-the participation signal stays honest. Body text primary at full width ≤
-max reading width. Individual agent identity (names, glyphs, colors)
-appears only in live activity: working lines, tiles, the trace pill, and
-the team panel.
+one voice, and the answer text says "we" (both agents; agents are named in
+the answer only to attribute a split). The faint `claude + codex` suffix
+appears only when at least one consultation actually succeeded, so the
+participation signal stays honest. Body text primary at full width ≤ max
+reading width. Individual agent identity (names, glyphs, colors) appears
+only in live activity: narration, working lines, tiles, the trace pill,
+and the team panel.
 
 **Disagreement stance block (4b)** — when the lead reports a split, it is
 part of the lead's own final text; the UI additionally renders the runtime's

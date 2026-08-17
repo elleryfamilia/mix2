@@ -54,7 +54,11 @@ drop the code lens and treat the session as general brainstorming.
 
 The "lead" is deliberately invisible to the user: the UI shows one team
 roster, every answer carries the Team chip, and the role instructions
-require the first-person-plural voice. Which agent coordinates is a config
+require the first-person-plural voice in the answer. Progress text the lead
+writes between tool calls is a different register: third-person narration
+that names both agents ("Codex is reading the doc; Claude is extracting the
+text"), which the UI shows under the app's ` mix2 ` chip — the harness
+narrating, not the lead speaking. Which agent coordinates is a config
 choice, not a product concept.
 
 ## The consultation path
