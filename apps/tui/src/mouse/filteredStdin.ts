@@ -20,6 +20,11 @@ export class FilteredStdin extends PassThrough {
     this.real = real;
     this.isTTY = real.isTTY ?? false;
     real.on('data', this.handleData);
+    // A 'data' listener only starts the flow if the stream was never
+    // explicitly paused. The startup update prompt (readline) pauses stdin
+    // when it closes, so resume on purpose — otherwise the TUI's keyboard
+    // is dead after answering it.
+    real.resume();
   }
 
   private handleData = (chunk: Buffer | string): void => {

@@ -33,6 +33,20 @@ jobs:
         with:
           node-version: 22
 
+      # The tag, Cargo.toml, apps/tui/package.json and the TUI's VERSION
+      # constant must agree: a release whose binary reports an older
+      # version would offer itself as an update forever.
+      - name: Check version consistency
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          cargo="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          pkg="$(node -p 'require("./apps/tui/package.json").version')"
+          ts="$(sed -n "s/^export const VERSION = '\(.*\)';/\1/p" apps/tui/src/version.ts)"
+          echo "tag=$tag cargo=$cargo package.json=$pkg version.ts=$ts"
+          [ "$tag" = "$cargo" ] && [ "$tag" = "$pkg" ] && [ "$tag" = "$ts" ] \
+            || { echo "::error::version mismatch — bump every copy before tagging"; exit 1; }
+
       - name: Build core (release)
         run: |
           if [ -n "${{ matrix.rust_target }}" ]; then
@@ -74,6 +88,12 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      # Checkout first: it cleans the workspace, so it must not run after
+      # the artifacts have been downloaded into it. Needed for install.sh,
+      # which ships with every release so `mix2 update` runs the installer
+      # matching the release it installs.
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v8
         with:
           path: dist
@@ -90,4 +110,8 @@ jobs:
           files: |
             dist/mix2-*.tar.gz
             dist/checksums.txt
+            install.sh
+          # A tag like v0.5.0-rc1 must not become "latest": every install
+          # would be prompted to update to a release candidate.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
