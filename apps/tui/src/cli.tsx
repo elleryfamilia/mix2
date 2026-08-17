@@ -64,7 +64,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '-V':
       case '-v':
       case '--version':
-        process.stdout.write('mix2 0.2.1\n');
+        process.stdout.write('mix2 0.3.0\n');
         process.exit(0);
         break;
       default:
