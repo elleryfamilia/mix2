@@ -332,3 +332,9 @@ Round two of Codex's PR review, also fixed:
 - The shell-side `--version` probe had no deadline; it now runs under a
   watchdog (10s, `MIX2_VERIFY_TIMEOUT` for tests). Both cases have
   integration tests.
+
+Round three, also fixed: the rollback marker is set only after the
+previous install has actually been moved aside (a failed rename could
+otherwise make the trap delete the live install); all trailing slashes
+are stripped from `MIX2_INSTALL_DIR`; and the launcher probe is accepted
+only if it exits 0 within the deadline *and* prints the expected version.

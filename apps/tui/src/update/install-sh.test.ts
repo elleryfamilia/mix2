@@ -36,11 +36,14 @@ function buildRelease(
   omit: string[] = [],
   reportedVersion: string = version,
   hangOnVersion = false,
+  exitStatus = 0,
 ): Buffer {
   const stage = path.join(work, `mix2-${version}-${TARGET}`);
   mkdirSync(stage, { recursive: true });
   const files: Record<string, string> = {
-    mix2: hangOnVersion ? '#!/bin/sh\nsleep 60\n' : `#!/bin/sh\necho "mix2 ${reportedVersion}"\n`,
+    mix2: hangOnVersion
+      ? '#!/bin/sh\nsleep 60\n'
+      : `#!/bin/sh\necho "mix2 ${reportedVersion}"\nexit ${exitStatus}\n`,
     'mix2-core': '#!/bin/sh\nexit 0\n',
     'mix2-consult': '#!/bin/sh\nexit 0\n',
     'mix2.bundle.mjs': `// ${version}\n`,
@@ -110,6 +113,7 @@ function serve(
     reportedVersion?: string;
     delayMs?: number;
     hangOnVersion?: boolean;
+    exitStatus?: number;
   } = {},
 ) {
   const tarball = buildRelease(
@@ -118,6 +122,7 @@ function serve(
     opts.omit,
     opts.reportedVersion,
     opts.hangOnVersion,
+    opts.exitStatus,
   );
   const sum = opts.corruptChecksum ? '0'.repeat(64) : sha256(tarball);
   served = { tarball, checksums: `${sum}  ${ASSET}\n`, delayMs: opts.delayMs ?? 0 };
@@ -217,7 +222,9 @@ describe('install.sh', () => {
     expect(leftovers()).toEqual([]);
   });
 
-  it('tolerates a trailing slash in MIX2_INSTALL_DIR (lock and staging dirs stay siblings)', async () => {
+  it('tolerates trailing slashes in MIX2_INSTALL_DIR (lock and staging dirs stay siblings)', async () => {
+    serve('0.3.0');
+    expect((await run({ MIX2_INSTALL_DIR: `${installDir}//` })).status).toBe(0);
     serve('0.4.0');
     const r = await run({ MIX2_INSTALL_DIR: `${installDir}/` });
     expect(r.status, r.err).toBe(0);
@@ -274,6 +281,17 @@ describe('install.sh', () => {
     expect(leftovers()).toEqual([]);
   });
 
+  it('rejects a launcher whose --version prints the right thing but exits non-zero', async () => {
+    serve('0.3.0');
+    expect((await run()).status).toBe(0);
+    serve('0.4.0', { exitStatus: 3 });
+    const r = await run();
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('--version exited with status 3');
+    expect(installedVersion()).toBe('mix2 0.3.0');
+    expect(leftovers()).toEqual([]);
+  });
+
   it('gives up on a launcher that hangs on --version and restores the old install', async () => {
     serve('0.3.0');
     expect((await run()).status).toBe(0);
@@ -281,7 +299,7 @@ describe('install.sh', () => {
     const started = Date.now();
     const r = await run();
     expect(r.status).toBe(1);
-    expect(r.err).toContain('the new install does not run');
+    expect(r.err).toContain('did not answer --version within the deadline');
     expect(r.err).toContain('previous version was restored');
     expect(Date.now() - started).toBeLessThan(8_000);
     expect(installedVersion()).toBe('mix2 0.3.0');

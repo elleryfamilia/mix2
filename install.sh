@@ -31,7 +31,10 @@ node_major() {
 : "${HOME:?HOME is not set}"
 REPO="elleryfamilia/mix2"
 INSTALL_DIR="${MIX2_INSTALL_DIR:-$HOME/.local/share/mix2}"
-INSTALL_DIR="${INSTALL_DIR%/}" # the lock/staging dirs are siblings of it
+# Strip every trailing slash: the lock, staging and rollback dirs are
+# formed by appending to this path and must be siblings, not children.
+while [ "${INSTALL_DIR%/}" != "$INSTALL_DIR" ]; do INSTALL_DIR="${INSTALL_DIR%/}"; done
+[ -n "$INSTALL_DIR" ] || fail "MIX2_INSTALL_DIR must be a directory path, not /"
 BIN_DIR="${MIX2_BIN_DIR:-$HOME/.local/bin}"
 
 os="$(uname -s)"
@@ -145,8 +148,12 @@ for f in mix2 mix2-core mix2-consult mix2.bundle.mjs; do
   [ -f "$stage/$f" ] || fail "release archive is missing $f — not installing"
 done
 if [ -e "$INSTALL_DIR" ]; then
-  old="${INSTALL_DIR}.old.$$"
-  mv "$INSTALL_DIR" "$old"
+  # $old is set only once the rename has succeeded: the trap treats a set
+  # $old as "the previous install lives there", so it must never name a
+  # path that does not.
+  aside="${INSTALL_DIR}.old.$$"
+  mv "$INSTALL_DIR" "$aside" || fail "could not move the previous install aside"
+  old="$aside"
 fi
 if ! mv "$stage" "$INSTALL_DIR"; then
   fail "could not move the new install into place" # cleanup restores $old
@@ -169,17 +176,31 @@ if [ "$(node_major)" -ge 22 ]; then
     sleep 0.1
     i=$((i + 1))
   done
-  if kill -0 "$probe" 2>/dev/null; then kill "$probe" 2>/dev/null || true; fi
-  wait "$probe" 2>/dev/null || true
+  timed_out=""
+  if kill -0 "$probe" 2>/dev/null; then
+    kill "$probe" 2>/dev/null || true
+    timed_out=1
+  fi
+  probe_status=0
+  wait "$probe" 2>/dev/null || probe_status=$?
   probe=""
   reported="$(cat "$tmp/version.txt" 2>/dev/null || true)"
-  if [ "$reported" != "mix2 ${version}" ]; then
+  # Accept only a clean run: exited 0, within the deadline, right output.
+  problem=""
+  if [ -n "$timed_out" ]; then
+    problem="did not answer --version within the deadline"
+  elif [ "$probe_status" -ne 0 ]; then
+    problem="--version exited with status ${probe_status}"
+  elif [ "$reported" != "mix2 ${version}" ]; then
+    problem="reported '${reported}', expected 'mix2 ${version}'"
+  fi
+  if [ -n "$problem" ]; then
     if [ -n "$old" ]; then
       # cleanup (EXIT trap) drops the new tree and restores the old one
-      fail "the new install does not run (reported '${reported}', expected 'mix2 ${version}'); the previous version was restored"
+      fail "the new install does not run (${problem}); the previous version was restored"
     fi
     rm -rf "$INSTALL_DIR"
-    fail "the new install does not run (reported '${reported}', expected 'mix2 ${version}')"
+    fail "the new install does not run (${problem})"
   fi
 fi
 accepted=1
