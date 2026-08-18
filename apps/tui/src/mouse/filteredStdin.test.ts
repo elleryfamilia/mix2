@@ -30,3 +30,32 @@ describe('FilteredStdin', () => {
     expect(mouse).toBe(1);
   });
 });
+
+describe('FilteredStdin lone escape', () => {
+  it('delivers a bare Escape keypress on its own instead of holding it for the next key', async () => {
+    const real = new PassThrough();
+    const filtered = new FilteredStdin(real as unknown as NodeJS.ReadStream);
+    const chunks: string[] = [];
+    filtered.on('data', (chunk: Buffer) => chunks.push(chunk.toString()));
+    real.write('\x1b');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(chunks).toEqual(['\x1b']);
+    real.write('a');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(chunks).toEqual(['\x1b', 'a']);
+  });
+
+  it('still reassembles a mouse sequence that arrives split across two chunks', async () => {
+    const real = new PassThrough();
+    const filtered = new FilteredStdin(real as unknown as NodeJS.ReadStream);
+    const keys: string[] = [];
+    let mouse = 0;
+    filtered.on('data', (chunk: Buffer) => keys.push(chunk.toString()));
+    filtered.mouse.on('event', () => mouse++);
+    real.write('\x1b[<0;10');
+    real.write(';5Mz');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(mouse).toBe(1);
+    expect(keys.join('')).toBe('z');
+  });
+});
