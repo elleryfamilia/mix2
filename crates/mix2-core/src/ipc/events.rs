@@ -1,4 +1,5 @@
 use crate::agents::{AgentKind, AgentRole};
+pub use crate::collaboration::disagreement::{DisagreementRecord, Outcome, Stance};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +123,17 @@ pub enum Event {
         message: String,
     },
 
+    /// A disagreement was committed for this turn — live team-panel ledger
+    /// only. The settled UI reads `message.final`'s `disagreement` field
+    /// instead, so this event never appears there.
+    #[serde(rename = "disagreement.recorded")]
+    DisagreementRecorded {
+        turn_id: String,
+        stances: Vec<Stance>,
+        resolution: String,
+        revision: u32,
+    },
+
     /// An agent's model changed or was observed from its stream.
     /// source: "selected" (user /model) or "observed" (provider reported).
     #[serde(rename = "agent.model")]
@@ -143,6 +155,9 @@ pub enum Event {
         text: String,
         consultations: u32,
         duration_ms: u64,
+        /// The turn's settled disagreement record, if the lead recorded one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        disagreement: Option<DisagreementRecord>,
     },
 
     #[serde(rename = "turn.completed")]
@@ -193,6 +208,7 @@ mod tests {
             text: "answer".into(),
             consultations: 1,
             duration_ms: 1234,
+            disagreement: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
@@ -203,5 +219,73 @@ mod tests {
     fn speaker_from_kind() {
         assert_eq!(Speaker::from(AgentKind::Claude), Speaker::Claude);
         assert_eq!(Speaker::from(AgentKind::Codex), Speaker::Codex);
+    }
+
+    #[test]
+    fn disagreement_recorded_shape() {
+        let ev = Event::DisagreementRecorded {
+            turn_id: "t1".into(),
+            stances: vec![
+                Stance {
+                    agent: AgentKind::Claude,
+                    position: "cache in-process".into(),
+                    outcome: Outcome::Chosen,
+                },
+                Stance {
+                    agent: AgentKind::Codex,
+                    position: "move validation off the hot path".into(),
+                    outcome: Outcome::Deferred,
+                },
+            ],
+            resolution: "ship the cache; file the rework".into(),
+            revision: 1,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"disagreement.recorded","turn_id":"t1","stances":[{"agent":"claude","position":"cache in-process","outcome":"chosen"},{"agent":"codex","position":"move validation off the hot path","outcome":"deferred"}],"resolution":"ship the cache; file the rework","revision":1}"#
+        );
+    }
+
+    #[test]
+    fn message_final_omits_disagreement_when_none() {
+        let ev = Event::MessageFinal {
+            turn_id: "t1".into(),
+            speaker: Speaker::Team,
+            lead: AgentKind::Claude,
+            text: "answer".into(),
+            consultations: 1,
+            duration_ms: 1234,
+            disagreement: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(
+            !json.contains("disagreement"),
+            "key should be omitted when None: {json}"
+        );
+    }
+
+    #[test]
+    fn message_final_disagreement_round_trips() {
+        let ev = Event::MessageFinal {
+            turn_id: "t1".into(),
+            speaker: Speaker::Team,
+            lead: AgentKind::Claude,
+            text: "answer".into(),
+            consultations: 1,
+            duration_ms: 1234,
+            disagreement: Some(DisagreementRecord {
+                stances: vec![Stance {
+                    agent: AgentKind::Claude,
+                    position: "cache in-process".into(),
+                    outcome: Outcome::Chosen,
+                }],
+                resolution: "ship the cache".into(),
+            }),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""disagreement":{"stances":"#));
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
     }
 }

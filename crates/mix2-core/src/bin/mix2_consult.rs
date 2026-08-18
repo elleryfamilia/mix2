@@ -1,13 +1,15 @@
 //! `mix2-consult` — the command a mix2 lead agent runs to ask its
-//! teammate for an independent opinion.
+//! teammate for an independent opinion, or to record a disagreement.
 //!
-//! Three forms:
+//! Four forms:
 //!   mix2-consult                 read prompt from stdin, block, print reply
 //!   mix2-consult start           read prompt from stdin, print a ticket
 //!                                  immediately so the caller can keep
 //!                                  working while the teammate researches
 //!   mix2-consult wait <ticket>   block until that consultation finishes,
 //!                                  print the teammate's reply
+//!   mix2-consult disagree        read disagreement text from stdin, send it
+//!                                  as-is to the runtime (no parsing here)
 //!
 //! Transport: first a Unix socket at `$MIX2_RUNTIME_DIR/consult.sock`
 //! (reachable from Claude Code's Bash sandbox); if the sandbox blocks
@@ -49,6 +51,7 @@ enum Mode {
     Sync,
     Start,
     Wait(String),
+    Disagree,
 }
 
 fn run() -> Result<String, String> {
@@ -88,11 +91,25 @@ fn run() -> Result<String, String> {
                 .ok_or_else(|| "Usage: mix2-consult wait <ticket>".to_owned())?;
             Mode::Wait(ticket)
         }
+        Some("disagree") => Mode::Disagree,
         _ => Mode::Sync,
     };
 
-    let prompt = match &mode {
-        Mode::Wait(_) => String::new(),
+    let (prompt, disagreement_text) = match &mode {
+        Mode::Wait(_) => (String::new(), None),
+        Mode::Disagree => {
+            let mut text = String::new();
+            std::io::stdin()
+                .read_to_string(&mut text)
+                .map_err(|e| format!("Consultation failed: could not read stdin: {e}"))?;
+            let text = text.trim().to_owned();
+            if text.is_empty() {
+                return Err("Nothing to record. Pipe the split on stdin, e.g.\n\
+                     mix2-consult disagree <<'SPLIT'\n...\nSPLIT"
+                    .to_owned());
+            }
+            (String::new(), Some(text))
+        }
         Mode::Sync | Mode::Start => {
             let mut prompt = String::new();
             let extra: Vec<&String> = match mode {
@@ -118,21 +135,24 @@ fn run() -> Result<String, String> {
                         .to_owned(),
                 );
             }
-            prompt
+            (prompt, None)
         }
     };
 
     let consult_token = std::env::var("MIX2_CONSULT_TOKEN").ok();
-    let request = serde_json::json!({
+    let mut request_obj = serde_json::json!({
         "v": 1,
         "prompt": prompt,
         "role": if role.is_empty() { "lead" } else { &role },
         "depth": depth,
         "token": consult_token,
-        "mode": match &mode { Mode::Sync => "sync", Mode::Start => "start", Mode::Wait(_) => "wait" },
+        "mode": match &mode { Mode::Sync => "sync", Mode::Start => "start", Mode::Wait(_) => "wait", Mode::Disagree => "disagree" },
         "ticket": match &mode { Mode::Wait(t) => Some(t.clone()), _ => None },
-    })
-    .to_string();
+    });
+    if let Some(text) = disagreement_text {
+        request_obj["disagreement_text"] = serde_json::Value::String(text);
+    }
+    let request = request_obj.to_string();
 
     let response = match try_socket(&runtime_dir, &request) {
         Ok(response) => response,

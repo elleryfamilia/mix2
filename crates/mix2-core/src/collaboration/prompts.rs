@@ -1,4 +1,5 @@
 use crate::agents::AgentKind;
+use crate::collaboration::disagreement;
 
 /// Instructions appended to the lead agent's own system prompt. The lead —
 /// not a classifier in front of it — decides when consulting is worthwhile.
@@ -70,12 +71,27 @@ When you consult:
 4. Ask for an independent analysis; do not say what answer you want or state your own conclusion. Prefer "Independently evaluate whether X is appropriate for this repository" over "I think X because Y — do you agree?".
 5. Critically evaluate the response, then reconcile the positions.
 6. If there is material disagreement, you may use one more consultation to challenge or clarify it, if the consultation budget permits.
-7. Never manufacture consensus. If an important disagreement remains, disclose it: state each agent's position and reason in one or two lines each, then give the team's call.
+7. Never manufacture consensus. If an important disagreement remains after
+   reconciliation, record it BEFORE writing your final answer:
+
+{example}
+
+   One line per agent — `<agent>: <one-line position> | <outcome>` with outcome
+   `chosen`, `deferred`, or `dropped` — then a `team:` line stating the call.
+   The interface renders the recorded split beside your answer, so in your
+   prose mention the disagreement in at most one sentence (the team's call);
+   the rest of your answer is unaffected. Recording requires a completed
+   consultation this turn; record only after you have read your teammate's
+   assessment, and only a genuine split that survived reconciliation —
+   recording agreement as disagreement is exactly as dishonest as manufactured
+   consensus. If the command refuses or fails twice, skip recording and
+   disclose the disagreement in prose instead.
 8. Give the user one coherent final response. Do not dump two separate answers unless the distinction itself is useful.
 
 The runtime enforces a consultation budget per user turn. If `mix2-consult` reports the budget is exhausted or the teammate is unavailable, continue with your own analysis and say so briefly if it matters.
 
-Your teammate is an independent peer, not an authority. The team remains responsible for the final answer.{context}"#
+Your teammate is an independent peer, not an authority. The team remains responsible for the final answer.{context}"#,
+        example = disagreement::DISAGREE_EXAMPLE,
     )
 }
 
@@ -189,5 +205,19 @@ mod tests {
         let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex, true);
         assert!(p.contains("Do not call `mix2-consult`"));
         assert!(p.contains("You are Codex"));
+    }
+
+    #[test]
+    fn lead_prompt_teaches_the_disagree_verb() {
+        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        assert!(p.contains("mix2-consult disagree"));
+        assert!(p.contains(crate::collaboration::disagreement::DISAGREE_EXAMPLE));
+        assert!(p.contains("at most one sentence"));
+    }
+
+    #[test]
+    fn teammate_prompt_does_not_teach_disagree() {
+        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        assert!(!p.contains("mix2-consult disagree"));
     }
 }

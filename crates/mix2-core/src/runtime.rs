@@ -11,7 +11,8 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
@@ -38,7 +39,8 @@ fn update_turn_id(update: &ConsultUpdate) -> Uuid {
         ConsultUpdate::Started { turn_id, .. }
         | ConsultUpdate::AgentEvent { turn_id, .. }
         | ConsultUpdate::Completed { turn_id, .. }
-        | ConsultUpdate::Failed { turn_id, .. } => *turn_id,
+        | ConsultUpdate::Failed { turn_id, .. }
+        | ConsultUpdate::DisagreementRecorded { turn_id, .. } => *turn_id,
     }
 }
 
@@ -363,6 +365,8 @@ impl Runtime {
                 budget: budget_for_server,
                 cancel: cancel.clone(),
                 token: consult_token,
+                completed_consults: Arc::new(AtomicU32::new(0)),
+                disagreement: Arc::new(Mutex::new(None)),
             })
             .await;
 
@@ -515,6 +519,14 @@ impl Runtime {
                     agent: self.config.lead,
                 });
             }
+            ConsultUpdate::DisagreementRecorded {
+                record, revision, ..
+            } => emit(&Event::DisagreementRecorded {
+                turn_id: turn.ui_id.clone(),
+                stances: record.stances,
+                resolution: record.resolution,
+                revision,
+            }),
             ConsultUpdate::Failed { index, message, .. } => emit(&Event::ConsultFailed {
                 turn_id: turn.ui_id.clone(),
                 agent: teammate,
@@ -529,7 +541,7 @@ impl Runtime {
         // `start`ed consultation the lead never waited for. Its result
         // belongs to no one, and it must not bleed into the next turn.
         turn.cancel.cancel();
-        self.consult_server.end_turn().await;
+        let disagreement = self.consult_server.end_turn().await;
         let duration_ms = turn.started.elapsed().as_millis() as u64;
         match result {
             _ if turn.cancelled => {
@@ -553,6 +565,7 @@ impl Runtime {
                     text: result.text,
                     consultations: turn.successful_consults,
                     duration_ms,
+                    disagreement,
                 });
                 emit(&Event::TurnCompleted {
                     turn_id: turn.ui_id,

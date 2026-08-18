@@ -4,7 +4,7 @@
  * local UI actions. Components render this state; they never interpret
  * provider behavior.
  */
-import type { AgentInfo, CoreEvent } from '../ipc/protocol.js';
+import type { AgentInfo, CoreEvent, Disagreement, Stance } from '../ipc/protocol.js';
 import type { AgentName, SpeakerName } from '../theme/theme.js';
 
 export interface ToolActivity {
@@ -32,6 +32,14 @@ export interface ConsultState {
 
 export type TurnPhase = 'working' | 'consulting' | 'synthesizing';
 
+/** Live disagreement state for the in-progress turn. Revisioned because the
+ * core can send updates concurrently and out of order. */
+export interface DisagreementState {
+  stances: Stance[];
+  resolution: string;
+  revision: number;
+}
+
 export interface ActiveTurn {
   id: string;
   phase: TurnPhase;
@@ -44,6 +52,7 @@ export interface ActiveTurn {
   leadAgent: AgentName;
   /** Scratchpad files (.mix2/…) the coordinator wrote this turn. */
   scratchpadPaths: string[];
+  disagreement?: DisagreementState;
 }
 
 export type ConversationItem =
@@ -70,6 +79,7 @@ export type ConversationItem =
       lead: AgentName;
       text: string;
       consultations: number;
+      disagreement?: Disagreement;
     }
   | { kind: 'error'; text: string }
   | { kind: 'cancelled' }
@@ -81,6 +91,7 @@ export interface TurnRecord {
   consults: ConsultState[];
   toolsCompleted: number;
   outcome: 'completed' | 'cancelled' | 'failed';
+  disagreement?: Disagreement;
 }
 
 export interface SessionInfo {
@@ -99,7 +110,7 @@ export interface AppState {
   items: ConversationItem[];
   turn?: ActiveTurn;
   lastTurn?: TurnRecord;
-  lastSummary?: { durationMs: number; consultations: number };
+  lastSummary?: { durationMs: number; consultations: number; disagreements: number };
   teamPanelOpen: boolean;
 }
 
@@ -166,12 +177,19 @@ function settleTurn(
 }
 
 function recordTurn(turn: ActiveTurn, now: number, outcome: TurnRecord['outcome']): TurnRecord {
+  // Cancelled and failed turns never carry a disagreement forward — only a
+  // completed turn's settled payload is meaningful in history.
+  const disagreement: Disagreement | undefined =
+    outcome === 'completed' && turn.disagreement
+      ? { stances: turn.disagreement.stances, resolution: turn.disagreement.resolution }
+      : undefined;
   return {
     id: turn.id,
     durationMs: now - turn.startedAt,
     consults: turn.consults,
     toolsCompleted: turn.toolsCompleted,
     outcome,
+    disagreement,
   };
 }
 
@@ -379,6 +397,24 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       return { ...state, turn: { ...turn, phase: 'synthesizing', consults } };
     }
 
+    case 'disagreement.recorded': {
+      const turn = state.turn;
+      if (!turn || turn.id !== event.turn_id) return state;
+      // The core can send revisions concurrently; only the latest wins.
+      if (event.revision <= (turn.disagreement?.revision ?? 0)) return state;
+      return {
+        ...state,
+        turn: {
+          ...turn,
+          disagreement: {
+            stances: event.stances,
+            resolution: event.resolution,
+            revision: event.revision,
+          },
+        },
+      };
+    }
+
     case 'lead.synthesizing': {
       const turn = state.turn;
       if (!turn || turn.id !== event.turn_id) return state;
@@ -399,6 +435,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           lead: event.lead,
           text: event.text,
           consultations: event.consultations,
+          disagreement: event.disagreement,
         },
       ];
       if (turn.scratchpadPaths.length > 0) {
@@ -407,7 +444,18 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           text: `▸ ${turn.scratchpadPaths.join(', ')} updated`,
         });
       }
-      return { ...state, items, turn };
+      // The final payload is authoritative: it overwrites live disagreement
+      // state, and an absent payload clears it.
+      return {
+        ...state,
+        items,
+        turn: {
+          ...turn,
+          disagreement: event.disagreement
+            ? { ...event.disagreement, revision: turn.disagreement?.revision ?? 1 }
+            : undefined,
+        },
+      };
     }
 
     case 'turn.completed': {
@@ -417,7 +465,11 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
         ...state,
         turn: undefined,
         lastTurn: recordTurn(turn, now, 'completed'),
-        lastSummary: { durationMs: event.duration_ms, consultations: event.consultations },
+        lastSummary: {
+          durationMs: event.duration_ms,
+          consultations: event.consultations,
+          disagreements: turn.disagreement ? 1 : 0,
+        },
       };
     }
 

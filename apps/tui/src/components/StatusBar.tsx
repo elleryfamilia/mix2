@@ -78,13 +78,17 @@ export function statusSegments(
     };
   }
   if (state.lastSummary) {
-    const { durationMs, consultations } = state.lastSummary;
+    const { durationMs, consultations, disagreements } = state.lastSummary;
     const consultNote =
       consultations > 0
         ? ` ${glyphs.dot} ${glyphs.confer} ${consultations} consultation${consultations === 1 ? '' : 's'}`
         : '';
+    const splitNote =
+      disagreements > 0
+        ? ` ${glyphs.dot} ${glyphs.disagree} ${disagreements} disagreement${disagreements === 1 ? '' : 's'}`
+        : '';
     return {
-      left: [{ text: `done in ${formatDuration(durationMs)}${consultNote}`, color: muted }],
+      left: [{ text: `done in ${formatDuration(durationMs)}${consultNote}${splitNote}`, color: muted }],
       right: [{ text: 'ctrl+t activity', color: faint }],
     };
   }
