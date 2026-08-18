@@ -100,6 +100,76 @@ describe('live activity', () => {
   });
 });
 
+describe('narration', () => {
+  const narration =
+    'Codex is reading the doc independently; Claude is extracting the text so both work from the same source and nothing is lost.';
+
+  it('shows the live stream under the mix2 chip in a hanging block', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'viable?' }, T);
+    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', agent: 'claude', role: 'lead', text: narration });
+    const lines = text(s, { ...ctx, width: 60 });
+    const first = lines.findIndex((l) => l.includes(' mix2 '));
+    expect(first).toBeGreaterThan(-1);
+    expect(lines[first]).toMatch(/^ {2} mix2 {3}Codex is reading/);
+    // Wrapped continuation hangs under the text, not under the chip.
+    expect(lines[first + 1]).toMatch(/^ {10}\S/);
+    // The narrator is the harness, never the team or a named agent.
+    expect(lines.some((l) => l.includes(' Team ') && l.includes('Codex is reading'))).toBe(false);
+  });
+
+  it('settles narration as a mix2 block when a tool call interrupts it', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'viable?' }, T);
+    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', agent: 'claude', role: 'lead', text: 'Codex is reading the doc.' });
+    s = apply(s, {
+      type: 'agent.tool.started',
+      turn_id: 't1',
+      agent: 'claude',
+      role: 'lead',
+      name: 'Bash',
+      detail: 'mix2-consult start',
+    });
+    const lines = text(s);
+    const settled = lines.findIndex((l) => l.includes(' mix2 ') && l.includes('Codex is reading the doc.'));
+    const working = lines.findIndex((l) => l.includes('◐ Team'));
+    expect(settled).toBeGreaterThan(-1);
+    // Settled narration sits above the live working block.
+    expect(settled).toBeLessThan(working);
+  });
+
+  it('keeps the answer under the Team chip, not the narrator', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'message.user', turn_id: 't1', text: 'viable?' }, T);
+    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', agent: 'claude', role: 'lead', text: 'Codex is reading the doc.' });
+    s = apply(s, {
+      type: 'agent.tool.started',
+      turn_id: 't1',
+      agent: 'claude',
+      role: 'lead',
+      name: 'Bash',
+      detail: 'mix2-consult start',
+    });
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'team',
+      lead: 'claude',
+      text: 'Our call: viable as a narrow wedge.',
+      consultations: 1,
+      duration_ms: 9000,
+    });
+    const lines = text(s);
+    const narrator = lines.findIndex((l) => l.includes(' mix2 '));
+    const team = lines.findIndex((l) => l.includes(' Team '));
+    const answer = lines.findIndex((l) => l.includes('Our call'));
+    expect(narrator).toBeGreaterThan(-1);
+    expect(team).toBeGreaterThan(narrator);
+    expect(answer).toBeGreaterThan(team);
+    expect(lines[answer]).not.toContain(' mix2 ');
+  });
+});
+
 describe('consultation activity', () => {
   function consulting(): AppState {
     let s = apply(initialState, ready);

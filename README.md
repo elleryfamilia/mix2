@@ -30,6 +30,14 @@ installed and signed in:
 `mix2`. (Verifies checksums; installs to `~/.local/share/mix2`, links
 `~/.local/bin/mix2`.)
 
+**Updating.** `mix2 update` installs the latest release in place. mix2
+also checks for a newer release when it starts — at most once a day, with
+a two-second budget so it never holds you up — and, if there is one, asks
+`Update now? [y/N]` before opening. Answer `y` and it installs, then
+relaunches into the new version; anything else and it just starts. Set
+`MIX2_NO_UPDATE_CHECK=1` to turn the startup check off. (Source checkouts
+are never offered updates: `git pull && pnpm build` instead.)
+
 ## Why two agents?
 
 Because one model agreeing with itself is not a review. Claude and Codex
@@ -89,8 +97,11 @@ strategy, a document.
   budgeted verb — not a surprise.
 - **Honest attribution.** Every answer speaks as "we", but the roster
   suffix (`claude + codex`) appears only when both actually worked, and
-  disagreements are disclosed, never smoothed over. No visible boss:
-  which agent coordinates is a config detail the UI refuses to leak.
+  disagreements are disclosed, never smoothed over. Progress lines while
+  the team works are the harness narrating (`mix2`: "Codex is reading the
+  doc; Claude is checking the docs"), never one agent talking about the
+  other. No visible boss: which agent coordinates is a config detail the
+  UI refuses to leak.
 
 ## Architecture
 

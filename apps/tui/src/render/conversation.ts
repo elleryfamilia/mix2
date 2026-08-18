@@ -17,8 +17,18 @@ import {
   glyphs,
   theme,
 } from '../theme/theme.js';
-import { BLANK, Line, Span, displayWidth, span, spread, truncate, truncateDisplay, wrapText } from './lines.js';
-import { markdownLines } from './markdown.js';
+import {
+  BLANK,
+  Line,
+  Span,
+  displayWidth,
+  span,
+  spread,
+  truncate,
+  truncateDisplay,
+  wrapText,
+} from './lines.js';
+import { inlineSpans, markdownLines, wrapSpans } from './markdown.js';
 
 const INDENT = 2;
 
@@ -53,11 +63,36 @@ function userLines(text: string, ctx: RenderContext): Line[] {
   );
 }
 
+/**
+ * Narration — the lead's text between tool calls, which the role
+ * instructions make it write as a third-person narrator ("Codex is reading
+ * the doc; Claude is extracting the text"). It is the harness talking about
+ * the team, so it carries the app's own ` mix2 ` chip, never the Team chip,
+ * and sits in muted text: quieter than the answer, louder than tool lines.
+ * Continuation lines hang under the text, not under the chip.
+ */
+const NARRATOR_LABEL = 'mix2';
+const NARRATOR_GAP = 2;
+
+function narratorLines(text: string, ctx: RenderContext, maxLines?: number): Line[] {
+  const label = chip(NARRATOR_LABEL, theme.chip.appBg, theme.chip.appFg);
+  const hang = label.text.length + NARRATOR_GAP;
+  const width = Math.max(contentWidth(ctx) - hang, 8);
+  const paragraphs = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const wrapped = paragraphs.flatMap((paragraph) =>
+    wrapSpans(inlineSpans(paragraph, { color: theme.text.muted }), width),
+  );
+  const shown = maxLines === undefined ? wrapped : wrapped.slice(-maxLines);
+  return shown.map((line, i) =>
+    i === 0 ? pad(label, span(' '.repeat(NARRATOR_GAP)), ...line) : pad(span(' '.repeat(hang)), ...line),
+  );
+}
+
 function interimLines(item: Extract<ConversationItem, { kind: 'interim' }>, ctx: RenderContext): Line[] {
-  return markdownLines(item.text, contentWidth(ctx)).map((line) => [
-    span(' '.repeat(INDENT)),
-    ...line,
-  ]);
+  return narratorLines(item.text, ctx);
 }
 
 function activityLines(
@@ -254,13 +289,12 @@ function leadWorkingLines(turn: ActiveTurn, ctx: RenderContext): Line[] {
     );
   });
 
-  // The lead talking while it works (interim, not yet settled).
+  // The narrator talking while the team works (interim, not yet settled):
+  // the tail of the stream, so the newest words stay in view.
   const stream = turn.streamText.trim();
   if (stream) {
     lines.push(BLANK);
-    for (const line of wrapText(stream, contentWidth(ctx)).slice(-4)) {
-      lines.push(pad(span(line, { color: theme.text.primary })));
-    }
+    lines.push(...narratorLines(stream, ctx, 4));
   }
   return lines;
 }
