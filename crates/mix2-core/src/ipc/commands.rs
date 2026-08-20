@@ -25,10 +25,11 @@ pub enum Command {
     Cancel {
         turn_id: String,
     },
-    /// Override (or clear, with model=None) the model an agent uses for
-    /// subsequent invocations this session.
+    /// Override (or clear, with model=None) the model a slot uses for
+    /// subsequent invocations this session. `slot` is `one`/`two`, or a
+    /// harness name while it names exactly one slot.
     SetModel {
-        agent: String,
+        slot: String,
         #[serde(default)]
         model: Option<String>,
     },
@@ -42,13 +43,13 @@ mod tests {
     #[test]
     fn parses_initialize() {
         let cmd: Command = serde_json::from_str(
-            r#"{"type":"initialize","protocol":1,"lead":"claude","cwd":"/r"}"#,
+            r#"{"type":"initialize","protocol":2,"lead":"claude","cwd":"/r"}"#,
         )
         .unwrap();
         assert_eq!(
             cmd,
             Command::Initialize {
-                protocol: 1,
+                protocol: 2,
                 lead: Some("claude".into()),
                 cwd: Some("/r".into()),
                 debug: false
@@ -72,6 +73,19 @@ mod tests {
             cmd,
             Command::Cancel {
                 turn_id: "t1".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_set_model_by_slot() {
+        let cmd: Command =
+            serde_json::from_str(r#"{"type":"set_model","slot":"one","model":"sonnet"}"#).unwrap();
+        assert_eq!(
+            cmd,
+            Command::SetModel {
+                slot: "one".into(),
+                model: Some("sonnet".into())
             }
         );
     }

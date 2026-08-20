@@ -1,4 +1,4 @@
-use super::{AgentEvent, AgentKind, AgentRole};
+use super::{AgentEvent, AgentRole, HarnessKind};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub enum AuthStatus {
 
 #[derive(Debug, Clone)]
 pub struct AgentSession {
-    pub agent: AgentKind,
+    pub harness: HarnessKind,
     pub id: String,
 }
 
@@ -57,10 +57,10 @@ pub struct AgentResult {
 /// this trait; the runtime and UI never see raw provider JSON.
 #[async_trait]
 pub trait Agent: Send + Sync {
-    fn kind(&self) -> AgentKind;
+    fn harness(&self) -> HarnessKind;
 
     fn display_name(&self) -> &'static str {
-        self.kind().display_name()
+        self.harness().display_name()
     }
 
     /// Resolve and report the installed CLI version, or fail if missing.

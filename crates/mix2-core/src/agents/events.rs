@@ -1,59 +1,46 @@
-use super::AgentKind;
-
 /// Provider-neutral events emitted while an agent invocation runs.
 ///
 /// These are normalized from each provider's native stream. Only semantics
 /// that both providers genuinely share are modeled; anything else stays in
-/// the adapter. Hidden reasoning is never surfaced here.
+/// the adapter. Deliberately identity-free: the decoder cannot know which
+/// team slot it speaks for, so the runtime stamps the [`crate::agents::SlotId`]
+/// when it forwards these to the UI. Hidden reasoning is never surfaced here.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentEvent {
-    Started {
-        agent: AgentKind,
-    },
+    Started,
     /// The provider reported its native session/thread id.
     SessionStarted {
-        agent: AgentKind,
         session_id: String,
     },
     /// Incremental assistant text (safe to render).
     TextDelta {
-        agent: AgentKind,
         text: String,
     },
     /// A complete assistant message (safe to render).
     Message {
-        agent: AgentKind,
         text: String,
     },
     ToolStarted {
-        agent: AgentKind,
         name: String,
         detail: Option<String>,
     },
     ToolFinished {
-        agent: AgentKind,
         name: String,
     },
     /// The provider reported which model is actually serving this run.
     ModelObserved {
-        agent: AgentKind,
         model: String,
     },
     Usage {
-        agent: AgentKind,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
     },
-    Completed {
-        agent: AgentKind,
-    },
+    Completed,
     Failed {
-        agent: AgentKind,
         message: String,
     },
     /// A line the parser could not understand. Logged, never fatal.
     ParserWarning {
-        agent: AgentKind,
         message: String,
     },
 }

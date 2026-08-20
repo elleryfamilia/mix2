@@ -1,4 +1,4 @@
-use crate::agents::AgentKind;
+use crate::agents::{HarnessKind, SlotId, Team};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -33,25 +33,32 @@ pub struct ProviderConfig {
     pub model: Option<String>,
 }
 
-/// Fully-resolved runtime configuration.
+/// Fully-resolved settings for one team slot (its harness lives in `team`).
+#[derive(Debug, Clone)]
+pub struct SlotSettings {
+    pub command: String,
+    pub model: Option<String>,
+}
+
+/// Fully-resolved runtime configuration. The legacy config syntax names
+/// harnesses, but it resolves to slots here: slot one is Claude, slot two is
+/// Codex, and `lead = "codex"` picks slot two as lead. Everything downstream
+/// keys on [`SlotId`].
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub lead: AgentKind,
-    pub teammate: AgentKind,
+    pub team: Team,
+    pub one: SlotSettings,
+    pub two: SlotSettings,
     pub max_consults_per_turn: u32,
-    pub claude_command: String,
-    pub codex_command: String,
-    pub claude_model: Option<String>,
-    pub codex_model: Option<String>,
 }
 
 pub const DEFAULT_MAX_CONSULTS: u32 = 2;
 
 impl Config {
-    pub fn command_for(&self, kind: AgentKind) -> &str {
-        match kind {
-            AgentKind::Claude => &self.claude_command,
-            AgentKind::Codex => &self.codex_command,
+    pub fn slot(&self, id: SlotId) -> &SlotSettings {
+        match id {
+            SlotId::One => &self.one,
+            SlotId::Two => &self.two,
         }
     }
 
@@ -61,28 +68,39 @@ impl Config {
             .map(str::to_owned)
             .or_else(|| file.lead.clone())
             .unwrap_or_else(|| "claude".to_owned());
-        let lead: AgentKind = lead_str
+        let lead_harness: HarnessKind = lead_str
             .parse()
             .map_err(|e: String| anyhow::anyhow!("invalid lead: {e}"))?;
+        let team = Team {
+            one: HarnessKind::Claude,
+            two: HarnessKind::Codex,
+            lead: match lead_harness {
+                HarnessKind::Claude => SlotId::One,
+                HarnessKind::Codex => SlotId::Two,
+            },
+        };
         Ok(Self {
-            lead,
-            teammate: lead.other(),
+            team,
+            one: SlotSettings {
+                command: file
+                    .claude
+                    .command
+                    .clone()
+                    .unwrap_or_else(|| "claude".to_owned()),
+                model: file.claude.model.clone(),
+            },
+            two: SlotSettings {
+                command: file
+                    .codex
+                    .command
+                    .clone()
+                    .unwrap_or_else(|| "codex".to_owned()),
+                model: file.codex.model.clone(),
+            },
             max_consults_per_turn: file
                 .collaboration
                 .max_consults_per_turn
                 .unwrap_or(DEFAULT_MAX_CONSULTS),
-            claude_command: file
-                .claude
-                .command
-                .clone()
-                .unwrap_or_else(|| "claude".to_owned()),
-            codex_command: file
-                .codex
-                .command
-                .clone()
-                .unwrap_or_else(|| "codex".to_owned()),
-            claude_model: file.claude.model.clone(),
-            codex_model: file.codex.model.clone(),
         })
     }
 }
@@ -120,26 +138,29 @@ mod tests {
     }
 
     #[test]
-    fn default_lead_is_claude() {
+    fn default_lead_is_slot_one_claude() {
         let cfg = Config::resolve(None, &FileConfig::default()).unwrap();
-        assert_eq!(cfg.lead, AgentKind::Claude);
-        assert_eq!(cfg.teammate, AgentKind::Codex);
+        assert_eq!(cfg.team.lead, SlotId::One);
+        assert_eq!(cfg.team.one, HarnessKind::Claude);
+        assert_eq!(cfg.team.two, HarnessKind::Codex);
+        assert_eq!(cfg.team.teammate(), SlotId::Two);
         assert_eq!(cfg.max_consults_per_turn, DEFAULT_MAX_CONSULTS);
-        assert_eq!(cfg.claude_command, "claude");
-        assert_eq!(cfg.codex_command, "codex");
+        assert_eq!(cfg.one.command, "claude");
+        assert_eq!(cfg.two.command, "codex");
     }
 
     #[test]
-    fn file_lead_applies() {
+    fn file_lead_resolves_to_slot_two() {
         let cfg = Config::resolve(None, &parse("lead = \"codex\"")).unwrap();
-        assert_eq!(cfg.lead, AgentKind::Codex);
-        assert_eq!(cfg.teammate, AgentKind::Claude);
+        assert_eq!(cfg.team.lead, SlotId::Two);
+        assert_eq!(cfg.team.lead_harness(), HarnessKind::Codex);
+        assert_eq!(cfg.team.teammate_harness(), HarnessKind::Claude);
     }
 
     #[test]
     fn cli_overrides_file() {
         let cfg = Config::resolve(Some("claude"), &parse("lead = \"codex\"")).unwrap();
-        assert_eq!(cfg.lead, AgentKind::Claude);
+        assert_eq!(cfg.team.lead, SlotId::One);
     }
 
     #[test]
@@ -149,21 +170,21 @@ mod tests {
     }
 
     #[test]
-    fn provider_command_override() {
+    fn provider_command_override_lands_on_slots() {
         let cfg = Config::resolve(
             None,
             &parse("[claude]\ncommand = \"/custom/claude\"\n[codex]\ncommand = \"/custom/codex\""),
         )
         .unwrap();
-        assert_eq!(cfg.claude_command, "/custom/claude");
-        assert_eq!(cfg.codex_command, "/custom/codex");
+        assert_eq!(cfg.slot(SlotId::One).command, "/custom/claude");
+        assert_eq!(cfg.slot(SlotId::Two).command, "/custom/codex");
     }
 
     #[test]
-    fn provider_model_override() {
+    fn provider_model_override_lands_on_slots() {
         let cfg = Config::resolve(None, &parse("[claude]\nmodel = \"sonnet\"")).unwrap();
-        assert_eq!(cfg.claude_model.as_deref(), Some("sonnet"));
-        assert_eq!(cfg.codex_model, None);
+        assert_eq!(cfg.slot(SlotId::One).model.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.slot(SlotId::Two).model, None);
     }
 
     #[test]

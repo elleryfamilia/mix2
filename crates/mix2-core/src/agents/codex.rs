@@ -1,6 +1,6 @@
 use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthStatus};
 use super::claude::friendly_failure;
-use super::{AgentEvent, AgentKind, AgentRole};
+use super::{AgentEvent, AgentRole, HarnessKind};
 use crate::process::child::{ChildProcess, SpawnOptions};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -93,9 +93,7 @@ impl CodexAgent {
             stdin: Some(&request.prompt),
         })?;
 
-        let _ = events
-            .send(AgentEvent::Started { agent: self.kind() })
-            .await;
+        let _ = events.send(AgentEvent::Started).await;
 
         let mut lines = child.stdout_lines()?;
         let stderr = child.stderr_tail()?;
@@ -130,7 +128,6 @@ impl CodexAgent {
         if let Some(err) = parser.error.take() {
             let _ = events
                 .send(AgentEvent::Failed {
-                    agent: self.kind(),
                     message: err.clone(),
                 })
                 .await;
@@ -140,16 +137,13 @@ impl CodexAgent {
             let msg = friendly_failure("codex", &status, &stderr_tail);
             let _ = events
                 .send(AgentEvent::Failed {
-                    agent: self.kind(),
                     message: msg.clone(),
                 })
                 .await;
             bail!("{msg}");
         }
 
-        let _ = events
-            .send(AgentEvent::Completed { agent: self.kind() })
-            .await;
+        let _ = events.send(AgentEvent::Completed).await;
         Ok(AgentResult {
             text: parser.final_text.take().unwrap_or_default(),
             session_id: parser.thread_id.clone(),
@@ -179,8 +173,8 @@ fn toml_string(s: &str) -> String {
 
 #[async_trait]
 impl Agent for CodexAgent {
-    fn kind(&self) -> AgentKind {
-        AgentKind::Codex
+    fn harness(&self) -> HarnessKind {
+        HarnessKind::Codex
     }
 
     async fn version(&self) -> Result<AgentVersion> {
@@ -266,7 +260,6 @@ pub struct CodexStreamParser {
 
 impl CodexStreamParser {
     pub fn parse_line(&mut self, line: &str) -> Vec<AgentEvent> {
-        let agent = AgentKind::Codex;
         let line = line.trim();
         if line.is_empty() {
             return vec![];
@@ -275,7 +268,6 @@ impl CodexStreamParser {
             Ok(v) => v,
             Err(_) => {
                 return vec![AgentEvent::ParserWarning {
-                    agent,
                     message: format!("unparseable line ({} bytes)", line.len()),
                 }]
             }
@@ -287,7 +279,6 @@ impl CodexStreamParser {
                 if let Some(id) = value.get("thread_id").and_then(Value::as_str) {
                     self.thread_id = Some(id.to_owned());
                     out.push(AgentEvent::SessionStarted {
-                        agent,
                         session_id: id.to_owned(),
                     });
                 }
@@ -296,7 +287,6 @@ impl CodexStreamParser {
             Some("turn.completed") => {
                 if let Some(usage) = value.get("usage") {
                     out.push(AgentEvent::Usage {
-                        agent,
                         input_tokens: usage.get("input_tokens").and_then(Value::as_u64),
                         output_tokens: usage.get("output_tokens").and_then(Value::as_u64),
                     });
@@ -335,7 +325,6 @@ impl CodexStreamParser {
                         match text.get(*seen..) {
                             Some(delta) if !delta.is_empty() => {
                                 out.push(AgentEvent::TextDelta {
-                                    agent,
                                     text: delta.to_owned(),
                                 });
                             }
@@ -345,7 +334,6 @@ impl CodexStreamParser {
                         if t == "item.completed" {
                             self.final_text = Some(text.to_owned());
                             out.push(AgentEvent::Message {
-                                agent,
                                 text: text.to_owned(),
                             });
                         }
@@ -359,7 +347,6 @@ impl CodexStreamParser {
                         if t == "item.completed" {
                             self.running_commands.remove(&item_id);
                             out.push(AgentEvent::ToolFinished {
-                                agent,
                                 name: "shell".into(),
                             });
                         } else if let std::collections::hash_map::Entry::Vacant(entry) =
@@ -367,7 +354,6 @@ impl CodexStreamParser {
                         {
                             entry.insert(command.clone());
                             out.push(AgentEvent::ToolStarted {
-                                agent,
                                 name: "shell".into(),
                                 detail: Some(short_detail(&command)),
                             });
@@ -376,7 +362,6 @@ impl CodexStreamParser {
                     Some("file_change") => {
                         if t == "item.completed" {
                             out.push(AgentEvent::ToolFinished {
-                                agent,
                                 name: "edit".into(),
                             });
                         } else {
@@ -385,7 +370,6 @@ impl CodexStreamParser {
                                 .and_then(Value::as_array)
                                 .map(|c| format!("{} file(s)", c.len()));
                             out.push(AgentEvent::ToolStarted {
-                                agent,
                                 name: "edit".into(),
                                 detail,
                             });
@@ -394,12 +378,10 @@ impl CodexStreamParser {
                     Some("web_search") => {
                         if t == "item.completed" {
                             out.push(AgentEvent::ToolFinished {
-                                agent,
                                 name: "search".into(),
                             });
                         } else {
                             out.push(AgentEvent::ToolStarted {
-                                agent,
                                 name: "search".into(),
                                 detail: item
                                     .get("query")
@@ -442,7 +424,6 @@ mod tests {
         assert_eq!(
             ev,
             vec![AgentEvent::SessionStarted {
-                agent: AgentKind::Codex,
                 session_id: "01a00224-aaaa".into()
             }]
         );
@@ -454,10 +435,7 @@ mod tests {
         let ev = p.parse_line(
             r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"OK"}}"#,
         );
-        assert!(ev.contains(&AgentEvent::Message {
-            agent: AgentKind::Codex,
-            text: "OK".into()
-        }));
+        assert!(ev.contains(&AgentEvent::Message { text: "OK".into() }));
         assert_eq!(p.final_text.as_deref(), Some("OK"));
     }
 
@@ -467,13 +445,7 @@ mod tests {
         let ev = p.parse_line(
             r#"{"type":"item.updated","item":{"id":"m1","type":"agent_message","text":"Hel"}}"#,
         );
-        assert_eq!(
-            ev,
-            vec![AgentEvent::TextDelta {
-                agent: AgentKind::Codex,
-                text: "Hel".into()
-            }]
-        );
+        assert_eq!(ev, vec![AgentEvent::TextDelta { text: "Hel".into() }]);
         let ev = p.parse_line(
             r#"{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"Hello"}}"#,
         );
@@ -490,7 +462,6 @@ mod tests {
         assert_eq!(
             ev,
             vec![AgentEvent::ToolStarted {
-                agent: AgentKind::Codex,
                 name: "shell".into(),
                 detail: Some("cargo test".into())
             }]
@@ -501,7 +472,6 @@ mod tests {
         assert_eq!(
             ev,
             vec![AgentEvent::ToolFinished {
-                agent: AgentKind::Codex,
                 name: "shell".into()
             }]
         );

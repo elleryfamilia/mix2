@@ -1,5 +1,5 @@
 use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthStatus};
-use super::{AgentEvent, AgentKind, AgentRole};
+use super::{AgentEvent, AgentRole, HarnessKind};
 use crate::process::child::{ChildProcess, SpawnOptions};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -83,9 +83,7 @@ impl ClaudeAgent {
             stdin: Some(&request.prompt),
         })?;
 
-        let _ = events
-            .send(AgentEvent::Started { agent: self.kind() })
-            .await;
+        let _ = events.send(AgentEvent::Started).await;
 
         let mut lines = child.stdout_lines()?;
         let stderr = child.stderr_tail()?;
@@ -120,7 +118,6 @@ impl ClaudeAgent {
         if let Some(err) = parser.error.take() {
             let _ = events
                 .send(AgentEvent::Failed {
-                    agent: self.kind(),
                     message: err.clone(),
                 })
                 .await;
@@ -130,16 +127,13 @@ impl ClaudeAgent {
             let msg = friendly_failure("claude", &status, &stderr_tail);
             let _ = events
                 .send(AgentEvent::Failed {
-                    agent: self.kind(),
                     message: msg.clone(),
                 })
                 .await;
             bail!("{msg}");
         }
 
-        let _ = events
-            .send(AgentEvent::Completed { agent: self.kind() })
-            .await;
+        let _ = events.send(AgentEvent::Completed).await;
         Ok(AgentResult {
             text: parser.take_final_text(),
             session_id: parser.session_id.clone(),
@@ -162,8 +156,8 @@ pub(crate) fn friendly_failure(
 
 #[async_trait]
 impl Agent for ClaudeAgent {
-    fn kind(&self) -> AgentKind {
-        AgentKind::Claude
+    fn harness(&self) -> HarnessKind {
+        HarnessKind::Claude
     }
 
     async fn version(&self) -> Result<AgentVersion> {
@@ -270,7 +264,6 @@ impl ClaudeStreamParser {
     }
 
     pub fn parse_line(&mut self, line: &str) -> Vec<AgentEvent> {
-        let agent = AgentKind::Claude;
         let line = line.trim();
         if line.is_empty() {
             return vec![];
@@ -279,7 +272,6 @@ impl ClaudeStreamParser {
             Ok(v) => v,
             Err(_) => {
                 return vec![AgentEvent::ParserWarning {
-                    agent,
                     message: format!("unparseable line ({} bytes)", line.len()),
                 }]
             }
@@ -292,7 +284,6 @@ impl ClaudeStreamParser {
                     if let Some(id) = value.get("session_id").and_then(Value::as_str) {
                         self.session_id = Some(id.to_owned());
                         out.push(AgentEvent::SessionStarted {
-                            agent,
                             session_id: id.to_owned(),
                         });
                     }
@@ -306,7 +297,6 @@ impl ClaudeStreamParser {
                     if let Some(model) = event.pointer("/message/model").and_then(Value::as_str) {
                         self.model_reported = true;
                         out.push(AgentEvent::ModelObserved {
-                            agent,
                             model: model.to_owned(),
                         });
                     }
@@ -324,7 +314,6 @@ impl ClaudeStreamParser {
                             if let Some(text) = delta.get("text").and_then(Value::as_str) {
                                 self.delta_buf.push_str(text);
                                 out.push(AgentEvent::TextDelta {
-                                    agent,
                                     text: text.to_owned(),
                                 });
                             }
@@ -358,11 +347,7 @@ impl ClaudeStreamParser {
                                 }
                             }
                             let detail = tool_detail(&name, block.get("input"));
-                            out.push(AgentEvent::ToolStarted {
-                                agent,
-                                name,
-                                detail,
-                            });
+                            out.push(AgentEvent::ToolStarted { name, detail });
                         }
                         Some("text") => {
                             // Assistant text snapshots duplicate the deltas;
@@ -378,7 +363,7 @@ impl ClaudeStreamParser {
                         if block.get("type").and_then(Value::as_str) == Some("tool_result") {
                             if let Some(id) = block.get("tool_use_id").and_then(Value::as_str) {
                                 if let Some(name) = self.tool_names.remove(id) {
-                                    out.push(AgentEvent::ToolFinished { agent, name });
+                                    out.push(AgentEvent::ToolFinished { name });
                                 }
                             }
                         }
@@ -405,7 +390,6 @@ impl ClaudeStreamParser {
                 }
                 if let Some(usage) = value.get("usage") {
                     out.push(AgentEvent::Usage {
-                        agent,
                         input_tokens: usage.get("input_tokens").and_then(Value::as_u64),
                         output_tokens: usage.get("output_tokens").and_then(Value::as_u64),
                     });
@@ -466,7 +450,6 @@ mod tests {
         assert_eq!(
             events,
             vec![AgentEvent::SessionStarted {
-                agent: AgentKind::Claude,
                 session_id: "abc-123".into()
             }]
         );
@@ -479,13 +462,7 @@ mod tests {
         let ev = p.parse_line(
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hel"}},"parent_tool_use_id":null}"#,
         );
-        assert_eq!(
-            ev,
-            vec![AgentEvent::TextDelta {
-                agent: AgentKind::Claude,
-                text: "Hel".into()
-            }]
-        );
+        assert_eq!(ev, vec![AgentEvent::TextDelta { text: "Hel".into() }]);
         p.parse_line(
             r#"{"type":"result","subtype":"success","is_error":false,"result":"Hello","session_id":"s1","usage":{"input_tokens":10,"output_tokens":2}}"#,
         );
@@ -519,7 +496,6 @@ mod tests {
         assert_eq!(
             ev,
             vec![AgentEvent::ToolStarted {
-                agent: AgentKind::Claude,
                 name: "Read".into(),
                 detail: Some("src/db.ts".into())
             }]
@@ -530,7 +506,6 @@ mod tests {
         assert_eq!(
             ev,
             vec![AgentEvent::ToolFinished {
-                agent: AgentKind::Claude,
                 name: "Read".into()
             }]
         );

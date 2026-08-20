@@ -1,4 +1,4 @@
-use crate::agents::AgentKind;
+use crate::agents::Team;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -12,18 +12,16 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct Mix2Session {
     pub id: Uuid,
-    pub lead: AgentKind,
-    pub teammate: AgentKind,
+    pub team: Team,
     pub cwd: PathBuf,
     pub lead_provider_session_id: Option<String>,
 }
 
 impl Mix2Session {
-    pub fn new(lead: AgentKind, cwd: PathBuf) -> Self {
+    pub fn new(team: Team, cwd: PathBuf) -> Self {
         Self {
             id: Uuid::new_v4(),
-            lead,
-            teammate: lead.other(),
+            team,
             cwd,
             lead_provider_session_id: None,
         }

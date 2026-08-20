@@ -1,5 +1,5 @@
 use crate::agents::agent::{Agent, AgentRequest};
-use crate::agents::{AgentEvent, AgentKind, AgentRole};
+use crate::agents::{AgentEvent, AgentRole, HarnessKind, Team};
 use crate::collaboration::disagreement::{self, DisagreementRecord};
 use crate::collaboration::limits::ConsultBudget;
 use crate::collaboration::prompts;
@@ -56,7 +56,7 @@ pub const DISAGREEMENT_RECORDED: &str =
 /// are accepted; further distinct records are refused.
 pub const MAX_DISAGREEMENT_REVISIONS: u32 = 3;
 
-pub fn teammate_unavailable_message(teammate: AgentKind, reason: &str) -> String {
+pub fn teammate_unavailable_message(teammate: HarnessKind, reason: &str) -> String {
     format!(
         "{} is unavailable, so a second opinion could not be obtained ({reason}). \
          Continue with your own analysis.",
@@ -162,8 +162,8 @@ pub struct ConsultServer {
 
 struct Shared {
     teammate: Arc<dyn Agent>,
-    teammate_kind: AgentKind,
-    lead_kind: AgentKind,
+    /// The resolved team shape: slot harnesses + lead slot.
+    team: Team,
     cwd: PathBuf,
     runtime_dir: PathBuf,
     session_id: Uuid,
@@ -193,8 +193,7 @@ impl ConsultServer {
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         teammate: Arc<dyn Agent>,
-        teammate_kind: AgentKind,
-        lead_kind: AgentKind,
+        team: Team,
         cwd: PathBuf,
         runtime_dir: PathBuf,
         session_id: Uuid,
@@ -209,8 +208,7 @@ impl ConsultServer {
 
         let shared = Arc::new(Shared {
             teammate,
-            teammate_kind,
-            lead_kind,
+            team,
             cwd,
             runtime_dir: runtime_dir.clone(),
             session_id,
@@ -521,8 +519,10 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
                 }
             }
             Err(e) => {
-                let message =
-                    teammate_unavailable_message(task_shared.teammate_kind, &e.to_string());
+                let message = teammate_unavailable_message(
+                    task_shared.team.teammate_harness(),
+                    &e.to_string(),
+                );
                 let _ = task_shared
                     .updates
                     .send(ConsultUpdate::Failed {
@@ -578,8 +578,7 @@ async fn record_disagreement(shared: &Arc<Shared>, request: &ConsultRequest) -> 
         }
         let record = match disagreement::parse(
             request.disagreement_text.as_deref().unwrap_or_default(),
-            shared.lead_kind,
-            shared.teammate_kind,
+            &shared.team,
         ) {
             Ok(record) => record,
             Err(e) => return refuse(disagreement::refusal(&e)),
@@ -643,8 +642,8 @@ async fn run_consultation(
         turn_id,
         model: shared.teammate_model.read().await.clone(),
         instructions: prompts::teammate_instructions(
-            shared.lead_kind,
-            shared.teammate_kind,
+            shared.team.lead_harness(),
+            shared.team.teammate_harness(),
             shared.project,
         ),
         env,
@@ -690,6 +689,7 @@ async fn run_consultation(
 mod tests {
     use super::*;
     use crate::agents::agent::{AgentResult, AgentSession, AgentVersion};
+    use crate::agents::SlotId;
     use crate::collaboration::disagreement::{Outcome, DISAGREE_EXAMPLE};
     use async_trait::async_trait;
     use std::sync::atomic::AtomicU32;
@@ -716,8 +716,8 @@ mod tests {
 
     #[async_trait]
     impl Agent for StubTeammate {
-        fn kind(&self) -> AgentKind {
-            AgentKind::Codex
+        fn harness(&self) -> HarnessKind {
+            HarnessKind::Codex
         }
 
         async fn version(&self) -> Result<AgentVersion> {
@@ -766,8 +766,11 @@ mod tests {
             let (tx, updates) = mpsc::channel(64);
             let shared = Arc::new(Shared {
                 teammate: Arc::new(StubTeammate),
-                teammate_kind: AgentKind::Codex,
-                lead_kind: AgentKind::Claude,
+                team: Team {
+                    one: HarnessKind::Claude,
+                    two: HarnessKind::Codex,
+                    lead: SlotId::One,
+                },
                 cwd: runtime_dir.clone(),
                 runtime_dir,
                 session_id: Uuid::new_v4(),
@@ -897,7 +900,7 @@ mod tests {
         let (record, revision) = h.stored().await.expect("record committed");
         assert_eq!(revision, 1);
         assert_eq!(record.stances.len(), 2);
-        assert_eq!(record.stances[0].agent, AgentKind::Claude);
+        assert_eq!(record.stances[0].slot, SlotId::One);
         assert_eq!(record.stances[1].outcome, Outcome::Deferred);
 
         let recorded: Vec<_> = h
