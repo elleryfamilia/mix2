@@ -20,7 +20,7 @@ exactly as the app renders it.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/feat/mvp/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/main/install.sh | sh
 ```
 
 macOS and Linux. Needs Node.js ≥ 22 at runtime, plus both agents
