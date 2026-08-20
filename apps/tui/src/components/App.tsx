@@ -382,8 +382,8 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       const equippedIndex = (column: 0 | 1, selection: TeamPickerSelection) =>
         entryIndexOf(discovery, column === 0 ? selection.one : selection.two);
       if (key.return) {
-        // Enter is pick-equip-advance on the slot columns; the coordinator
-        // control is where the team actually starts. The IPC send stays
+        // Enter is pick-equip-advance on the slot columns; the continue
+        // button is where the team actually starts. The IPC send stays
         // outside any state updater — updaters may run more than once.
         const { cursor, selection } = picker;
         if (cursor.column === 2) {
@@ -418,17 +418,22 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       }
       if (key.upArrow || key.downArrow) {
         setPicker((prev) => {
-          if (!prev) return prev;
-          if (prev.cursor.column === 2) {
-            // The lead control is a two-state toggle.
-            const leadSlot = prev.selection.leadSlot === 'one' ? 'two' : 'one';
-            return { ...prev, selection: { ...prev.selection, leadSlot } };
-          }
+          if (!prev || prev.cursor.column === 2) return prev;
           // Arrows only move the highlight; equipping is the explicit
           // enter. Disabled entries stay reachable so their reason reads.
           const delta = key.upArrow ? -1 : 1;
           const index = Math.max(0, Math.min(entries.length - 1, prev.cursor.index + delta));
           return { ...prev, cursor: { ...prev.cursor, index } };
+        });
+        return;
+      }
+      if (input.toLowerCase() === 'c' && !key.ctrl && !key.meta) {
+        // The coordinator is described, not focused: `c` swaps it from
+        // anywhere. The core re-validates eligibility on start.
+        setPicker((prev) => {
+          if (!prev) return prev;
+          const leadSlot = prev.selection.leadSlot === 'one' ? 'two' : 'one';
+          return { ...prev, selection: { ...prev.selection, leadSlot } };
         });
         return;
       }
@@ -499,20 +504,20 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           return { column, index: Math.min(prev.index, Math.max(0, entryCount(column) - 1)) };
         });
       } else if (key.return) {
-        setModelPanel((prev) => {
-          if (prev) {
-            const info = infoFor(prev.column);
-            const entry = filteredModelEntries(info.models ?? [], modelFilter)[prev.index];
-            if (entry) {
-              client.send({
-                type: 'set_model',
-                slot: info.slot,
-                model: entry === PROVIDER_DEFAULT ? null : entry,
-              });
-            }
-          }
-          return prev;
-        });
+        // Select-and-leave, matching the team picker: enter applies the
+        // highlighted model and closes the panel. The IPC send stays
+        // outside any state updater — updaters may run more than once.
+        const info = infoFor(modelPanel.column);
+        const entry = filteredModelEntries(info.models ?? [], modelFilter)[modelPanel.index];
+        if (entry) {
+          client.send({
+            type: 'set_model',
+            slot: info.slot,
+            model: entry === PROVIDER_DEFAULT ? null : entry,
+          });
+          setModelPanel(null);
+          setModelFilter('');
+        }
       } else if (key.backspace || key.delete) {
         // Narrow the filter; the cursor re-clamps against the wider list.
         setModelFilter((f) => f.slice(0, -1));

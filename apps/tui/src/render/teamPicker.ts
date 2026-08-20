@@ -1,7 +1,9 @@
 /**
  * The startup team picker (`selecting-team` phase): one column per slot
- * listing every discovered harness, plus a lead-slot control. The
- * configured proposal arrives preselected; unavailable or ineligible
+ * listing every discovered harness, then a continue button. The
+ * coordinator is a described default (`c` swaps it), not a focus stop —
+ * leaving the picker should read as "continue", not as one more setting.
+ * The configured proposal arrives preselected; unavailable or ineligible
  * entries stay visible but disabled, each carrying its actionable reason.
  * The same harness on both slots is a supported choice, not an error.
  */
@@ -22,7 +24,7 @@ const INDENT = 2;
 
 /** Picker cursor: which control has focus and which row is under it. */
 export interface TeamPickerCursor {
-  /** 0 = slot one column, 1 = slot two column, 2 = lead control. */
+  /** 0 = slot one column, 1 = slot two column, 2 = continue button. */
   column: 0 | 1 | 2;
   index: number;
 }
@@ -170,19 +172,25 @@ export function renderTeamPicker(
   }
 
   lines.push(BLANK);
-  const leadActive = cursor.column === 2;
+  // The coordinator is a description, not a control: the default is fine
+  // almost always, so it never costs a focus stop — `c` swaps it.
   lines.push([
     span(' '.repeat(INDENT)),
-    span(`${glyphs.confer} coordinator: `, {
-      color: leadActive ? theme.text.primary : theme.text.muted,
-      bold: leadActive,
+    span(`${glyphs.confer} `, { color: theme.text.muted }),
+    span(`slot ${selection.leadSlot}`, { color: agentColor(selection.leadSlot), bold: true }),
+    span(' coordinates', { color: theme.text.muted }),
+    span('  (press c to swap)', { color: theme.text.faint }),
+  ]);
+  lines.push(BLANK);
+  const continueActive = cursor.column === 2;
+  lines.push([
+    span(' '.repeat(INDENT)),
+    span(continueActive ? '› ' : '  ', { color: theme.agent.team, bold: true }),
+    span(' continue ', {
+      color: continueActive ? theme.text.primary : theme.text.muted,
+      bold: continueActive,
+      inverse: continueActive,
     }),
-    span(`slot ${selection.leadSlot}`, {
-      color: agentColor(selection.leadSlot),
-      bold: true,
-      inverse: leadActive,
-    }),
-    span('  (the UI keeps it secret)', { color: theme.text.faint }),
   ]);
 
   if (selectionError) {
@@ -194,10 +202,10 @@ export function renderTeamPicker(
 
   lines.push(BLANK);
   // The hint follows the focused control: slot columns equip, the
-  // coordinator control is where the team actually starts.
+  // continue button is where the team actually starts.
   const hint =
     cursor.column === 2
-      ? '↑↓ coordinator · enter start · ←→ back · esc defaults'
+      ? 'enter start · ←→ back · esc defaults'
       : '↑↓ choose · enter equip · ←→ switch · esc defaults';
   lines.push([span(' '.repeat(INDENT)), span(hint, { color: theme.text.faint })]);
   return lines;

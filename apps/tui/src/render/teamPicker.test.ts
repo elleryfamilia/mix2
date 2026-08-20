@@ -51,7 +51,11 @@ describe('team picker', () => {
     expect(joined).toContain('● slot one');
     expect(joined).toContain('○ slot two');
     expect(joined).toContain('coordinates');
-    expect(joined).toContain('coordinator: slot one');
+    // The coordinator is a description with a swap key, and leaving the
+    // picker is a plain continue button — not a coordinator focus stop.
+    expect(joined).toContain('slot one coordinates');
+    expect(joined).toContain('(press c to swap)');
+    expect(joined).toContain('continue');
     // The proposal's choices carry the chosen mark.
     expect(lines.some((l) => l.includes('claude') && l.includes('●'))).toBe(true);
   });

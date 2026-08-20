@@ -116,7 +116,7 @@ export function renderModelPanel(
         span('◐ models', { color: theme.agent.team, bold: true }),
         span(' — pick per agent', { color: theme.text.faint }),
       ],
-      [span('esc close ', { color: theme.text.faint })],
+      [span('esc cancel ', { color: theme.text.faint })],
       w,
     ),
   );
@@ -160,7 +160,7 @@ export function renderModelPanel(
   lines.push(BLANK);
   lines.push([
     span(' '.repeat(INDENT)),
-    span('type to filter · ↑↓ choose · ←→ agent · enter apply · esc close', {
+    span('type to filter · ↑↓ choose · ←→ agent · enter apply · esc cancel', {
       color: theme.text.faint,
     }),
   ]);

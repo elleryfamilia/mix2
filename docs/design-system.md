@@ -368,9 +368,11 @@ Shown between discovery and ready whenever the core is not auto-confirming
 (no explicit `[slot.*]` config in an interactive session, or `--pick-team`).
 Panel pattern: `◐ pick your team` header, one column per **slot** (slot
 colors, stacked under 88 cols) listing every discovered harness with its
-version, and a coordinator control underneath (`⇄ coordinator: slot one`,
-plus the standing "the UI keeps it secret" wink). The configured proposal
-arrives preselected with the `●` mark.
+version, then a coordinator *description* and a **continue button**. The
+coordinator is not a control you land on — the default is right almost
+always, so it reads as a described fact (`⇄ slot one coordinates`) with a
+single swap key, and leaving the picker is a plain continue. The
+configured proposal arrives preselected with the `●` mark.
 
 ```text
   ◐ pick your team — two slots, any agents          esc defaults
@@ -379,29 +381,31 @@ arrives preselected with the `●` mark.
   › claude  2.1.232 ●                claude  2.1.232
     codex   0.146.0                › codex   0.146.0 ●
 
-  ⇄ coordinator: slot one  (the UI keeps it secret)
+  ⇄ slot one coordinates  (press c to swap)
+
+  ›  continue 
 
   ↑↓ choose · enter equip · ←→ switch · esc defaults
 ```
 
-Interaction is **pick → equip → advance**: arrows only move the
-highlight; enter equips the highlighted harness for the focused slot and
-advances focus to the next control (slot one → slot two → coordinator),
+Interaction is **pick → equip → advance → continue**: arrows only move
+the highlight; enter equips the highlighted harness for the focused slot
+and advances focus to the next control (slot one → slot two → continue),
 seeding the cursor on that slot's currently-equipped entry. The `●` mark
 shows what each slot has equipped; the same harness on both slots is a
-supported choice, not an error. On the coordinator control `↑↓` toggles
-the lead slot and **enter starts the team** — the footer hint follows
-the focused control (`enter equip` vs `enter start`), so the commit
-point is always explicit. Esc opts out at any point and starts the
-defaults.
+supported choice, not an error. `c` swaps the coordinator from anywhere —
+no focus stop. On the continue button (inverse when focused) **enter
+starts the team** — the footer hint follows the focused control
+(`enter equip` vs `enter start`), so the commit point is always
+explicit. Esc opts out at any point and starts the defaults.
 
 Unavailable, signed-out, or role-ineligible entries stay visible but
 disabled, each with its actionable reason on a faint line beneath
 (`not installed: …`, `not signed in: …`, `teammate-only for now`) — they
 can be highlighted to read the reason, but enter refuses to equip them.
 A core refusal (`select_team` rejected) renders in place in the error
-color with focus still on the coordinator, so retrying is one enter —
-the core keeps waiting.
+color with focus still on continue, so retrying is one enter — the core
+keeps waiting.
 
 **Switching teams later** — `/team` relaunches the runtime with the
 picker forced. It is a fresh session by design: a re-slotted team cannot
@@ -415,8 +419,9 @@ An overlay in the panel pattern: `◐ models` header, the two agents as
 side-by-side columns (stacked under 88 cols) in their identity colors,
 "provider default" always first, `›` inverse cursor on the focused entry,
 `●` in the agent color marking the active choice. `↑↓` choose, `←→`/tab
-switch agent, enter applies (panel stays open so both agents can be set),
-esc closes. Selections confirm via a conversation notice.
+switch agent, **enter applies the highlight and closes** —
+select-and-leave, the same commit contract as the team picker — esc
+cancels without applying. Selections confirm via a conversation notice.
 
 Long lists stay navigable: typing filters both columns (case-insensitive
 substring, shown as `filter: <query>` under the header, backspace edits),
