@@ -35,6 +35,10 @@ export type ParseResult =
   | { kind: 'update' }
   | { kind: 'exit'; code: number; stdout?: string; stderr?: string };
 
+function missingValue(flag: string): ParseResult {
+  return { kind: 'exit', code: 2, stderr: `missing value for ${flag}\n\n${HELP}` };
+}
+
 export function parseArgs(argv: string[]): ParseResult {
   if (argv[0] === 'update') {
     if (argv.length > 1) {
@@ -48,15 +52,18 @@ export function parseArgs(argv: string[]): ParseResult {
     switch (arg) {
       case '-l':
       case '--lead':
+        if (argv[i + 1] === undefined) return missingValue(arg);
         args.lead = argv[++i];
         break;
       case '--cwd':
+        if (argv[i + 1] === undefined) return missingValue(arg);
         args.cwd = argv[++i];
         break;
       case '--debug':
         args.debug = true;
         break;
       case '--core':
+        if (argv[i + 1] === undefined) return missingValue(arg);
         args.core = argv[++i];
         break;
       case '-h':

@@ -107,7 +107,10 @@ export async function offerUpdateAtStartup(argv: string[], deps: FlowDeps): Prom
   const trace = (why: string) => {
     if (deps.debug) deps.err(`[update-check] ${why}\n`);
   };
-  if (deps.env['MIX2_NO_UPDATE_CHECK']) {
+  // The README documents `=1`; any set value disables except the obvious
+  // "off" spellings, so `=0` / `=false` behave the way they read.
+  const noCheck = deps.env['MIX2_NO_UPDATE_CHECK'];
+  if (noCheck !== undefined && !['', '0', 'false'].includes(noCheck.toLowerCase())) {
     trace('disabled by MIX2_NO_UPDATE_CHECK');
     return proceed;
   }
