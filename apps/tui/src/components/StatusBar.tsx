@@ -136,7 +136,7 @@ export function StatusBar({
   let { left, right } = statusSegments(state, spinner, teamGlyph);
   if (modelPanelOpen) {
     left = [{ text: '◐ models', color: theme.agent.team }];
-    right = [{ text: 'type to filter · ↑↓ ←→ enter · esc close', color: theme.text.faint }];
+    right = [{ text: 'type to filter · ↑↓ ←→ enter · esc cancel', color: theme.text.faint }];
   }
   if (slashOpen) {
     left = [

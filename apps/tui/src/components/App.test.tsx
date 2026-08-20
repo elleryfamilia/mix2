@@ -121,7 +121,7 @@ const discovered: Extract<CoreEvent, { type: 'harnesses.discovered' }> = {
 };
 
 describe('team picker', () => {
-  it('pick–equip–advance: enter equips each slot, then starts from the coordinator', async () => {
+  it('pick–equip–advance: enter equips each slot, then starts from continue', async () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
@@ -135,12 +135,12 @@ describe('team picker', () => {
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
-    // Equip slot two (codex highlighted) → focus advances to coordinator.
+    // Equip slot two (codex highlighted) → focus advances to continue.
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
     expect(h.lastFrame()).toContain('enter start');
-    // Coordinator enter starts the team.
+    // Enter on continue starts the team.
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one');
@@ -157,6 +157,11 @@ describe('team picker', () => {
     h.emit(discovered);
     await waitForFrame(h, 'slot one');
 
+    // `c` swaps the coordinator from anywhere — no focus stop needed.
+    h.stdin.write('c');
+    await tickReact();
+    expect(h.lastFrame()).toContain('slot two coordinates');
+
     // ↓ only moves the highlight onto codex — nothing is equipped yet…
     h.stdin.write('\x1b[B');
     await tickReact();
@@ -164,12 +169,13 @@ describe('team picker', () => {
     // seeded on slot two's equipped harness (codex).
     h.stdin.write('\r');
     await tickReact();
-    // Equip codex for slot two → coordinator; ↑ toggles the lead.
+    // Equip codex for slot two → continue; ↑ there is a no-op, not a
+    // hidden coordinator toggle.
     h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\x1b[A');
     await tickReact();
-    expect(h.lastFrame()).toContain('coordinator: slot two');
+    expect(h.lastFrame()).toContain('slot two coordinates');
 
     h.stdin.write('\r');
     await tickReact();
@@ -210,7 +216,7 @@ describe('team picker', () => {
     expect(frame).toContain('pick your team');
     expect(frame).toContain('not signed in');
 
-    // Focus stayed on the coordinator: one enter retries.
+    // Focus stayed on continue: one enter retries.
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).toHaveBeenCalledTimes(2);
@@ -251,7 +257,7 @@ describe('team picker', () => {
     await tickReact();
     h.stdin.write('\x1b[A'); // highlight claude
     await tickReact();
-    h.stdin.write('\r'); // equip slot two → coordinator
+    h.stdin.write('\r'); // equip slot two → continue
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
@@ -720,7 +726,7 @@ describe('App', () => {
     instance.unmount();
   });
 
-  it('/model opens the picker; arrows and enter select a model', async () => {
+  it('/model opens the picker; enter applies the highlight and leaves', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -735,7 +741,8 @@ describe('App', () => {
     expect(frame).toContain('sonnet');
     expect(frame).toContain('gpt-5.3-codex');
 
-    // ↓↓↓ to "sonnet" (default, fable, opus, sonnet), enter applies.
+    // ↓↓↓ to "sonnet" (default, fable, opus, sonnet); enter applies and
+    // closes — select-and-leave, matching the team picker.
     h.stdin.write('\x1b[B\x1b[B\x1b[B');
     await tickReact();
     h.stdin.write('\r');
@@ -745,10 +752,18 @@ describe('App', () => {
       slot: 'one',
       model: 'sonnet',
     });
+    expect(h.lastFrame()).not.toContain('◐ models');
 
-    // → switches to the codex column (cursor clamps to its last entry,
-    // gpt-5-codex); enter applies it.
+    // The other slot is a fresh /model: → to the codex column, ↓↓ to
+    // gpt-5-codex, enter applies and leaves again.
+    h.stdin.write('/model');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).toContain('◐ models');
     h.stdin.write('\x1b[C');
+    await tickReact();
+    h.stdin.write('\x1b[B\x1b[B');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
@@ -757,10 +772,6 @@ describe('App', () => {
       slot: 'two',
       model: 'gpt-5-codex',
     });
-
-    // Esc closes the picker back to the conversation.
-    h.stdin.write('\x1b');
-    await tickReact();
     expect(h.lastFrame()).not.toContain('◐ models');
     h.unmount();
   });
@@ -810,6 +821,8 @@ describe('App', () => {
       slot: 'one',
       model: 'sonnet',
     });
+    // The apply closed the panel and cleared the filter with it.
+    expect(h.lastFrame()).not.toContain('◐ models');
     h.unmount();
   });
 
