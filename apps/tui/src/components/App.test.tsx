@@ -76,6 +76,16 @@ async function tickReact(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
+/** Poll for content instead of sleeping blind: the picker needs two render
+ * cycles (reducer, then the seeding effect), and fixed ticks get marginal
+ * when the whole suite loads the machine. */
+async function waitForFrame(h: Harness, needle: string): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (!h.lastFrame()?.includes(needle) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 const pickerCaps = {
   teammate_read_only: 'enforced',
   lead_permission_scoping: 'enforced',
@@ -115,7 +125,7 @@ describe('team picker', () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     const frame = h.lastFrame()!;
     expect(frame).toContain('pick your team');
     expect(frame).toContain('slot one');
@@ -145,7 +155,7 @@ describe('team picker', () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
 
     // ↓ only moves the highlight onto codex — nothing is equipped yet…
     h.stdin.write('\x1b[B');
@@ -171,7 +181,7 @@ describe('team picker', () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     h.stdin.write('\x1b[B'); // wander first — esc still means "defaults"
     await tickReact();
     h.stdin.write('\x1b');
@@ -184,7 +194,7 @@ describe('team picker', () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     // Equip both slots and start.
     h.stdin.write('\r');
     await tickReact();
@@ -224,7 +234,7 @@ describe('team picker', () => {
         },
       ],
     });
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     expect(h.lastFrame()).toContain('not installed: npm i -g @openai/codex');
 
     // Enter on the disabled codex row is a no-op — focus stays put.
@@ -275,7 +285,7 @@ describe('team picker', () => {
     expect(h.lastFrame()).not.toContain('old answer');
 
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     expect(h.lastFrame()).toContain('pick your team');
     h.unmount();
   });

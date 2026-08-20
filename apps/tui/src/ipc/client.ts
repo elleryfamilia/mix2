@@ -102,6 +102,9 @@ export class CoreClient {
 
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
+      // Identity guard: a slow-dying pre-restart core must not feed the
+      // fresh session's buffer or dispatch stale events into it.
+      if (this.child !== child) return;
       this.buffer += chunk;
       let index: number;
       while ((index = this.buffer.indexOf('\n')) >= 0) {
@@ -115,6 +118,7 @@ export class CoreClient {
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
+      if (this.child !== child) return;
       this.log('!!', chunk.trimEnd());
       for (const line of chunk.split('\n')) {
         if (!line.trim()) continue;

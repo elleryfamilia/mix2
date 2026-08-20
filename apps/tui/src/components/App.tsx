@@ -383,22 +383,21 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         entryIndexOf(discovery, column === 0 ? selection.one : selection.two);
       if (key.return) {
         // Enter is pick-equip-advance on the slot columns; the coordinator
-        // control is where the team actually starts.
-        setPicker((prev) => {
-          if (!prev) return prev;
-          if (prev.cursor.column === 2) {
-            client.selectTeam(prev.selection.one, prev.selection.two, prev.selection.leadSlot);
-            return prev;
-          }
-          const slot = prev.cursor.column === 0 ? 'one' : 'two';
-          const entry = entries[prev.cursor.index];
-          // A disabled entry cannot be equipped; its reason is on screen.
-          if (!entry || !selectable(entry, slot, prev.selection.leadSlot)) return prev;
-          const selection = { ...prev.selection, [slot]: entry.harness };
-          const column = (prev.cursor.column + 1) as TeamPickerCursor['column'];
-          const index = column === 2 ? 0 : equippedIndex(column, selection);
-          return { selection, cursor: { column, index } };
-        });
+        // control is where the team actually starts. The IPC send stays
+        // outside any state updater — updaters may run more than once.
+        const { cursor, selection } = picker;
+        if (cursor.column === 2) {
+          client.selectTeam(selection.one, selection.two, selection.leadSlot);
+          return;
+        }
+        const slot = cursor.column === 0 ? 'one' : 'two';
+        const entry = entries[cursor.index];
+        // A disabled entry cannot be equipped; its reason is on screen.
+        if (!entry || !selectable(entry, slot, selection.leadSlot)) return;
+        const nextSelection = { ...selection, [slot]: entry.harness };
+        const column = (cursor.column + 1) as TeamPickerCursor['column'];
+        const index = column === 2 ? 0 : equippedIndex(column, nextSelection);
+        setPicker({ selection: nextSelection, cursor: { column, index } });
         return;
       }
       if (key.escape) {
