@@ -9,6 +9,11 @@ hand you a single answer — signed by the team, not by either of them.
 
 Sworn competitors. Model colleagues.
 
+The pair is the default, not the limit: the team is pluggable. Keep
+Claude Code and Codex, run the same harness on both slots, or pick
+Cursor, OpenCode, or Copilot as the second opinion — the interface,
+the etiquette, and the disagreement ledger stay identical.
+
 <p align="center">
   <img src="docs/assets/hero.svg" width="780" alt="A mix2 session: one question; the team investigates; Claude and Codex work in parallel tiles; they confer; one Team answer with the disagreement disclosed.">
 </p>
@@ -106,14 +111,17 @@ strategy, a document.
 ## Architecture
 
 ```text
-Ink UI (TypeScript + React)  ↕ JSONL  Rust core  →  claude / codex CLIs
+Ink UI (TypeScript + React)  ↕ JSONL  Rust core  →  agent CLIs
+                                        (claude · codex · cursor-agent · opencode · copilot)
 ```
 
 The TypeScript layer renders; the Rust core owns everything real:
 process lifecycles (process-group kill on cancel — no orphaned agents),
 sessions, the consult server (Unix socket, with a file mailbox fallback
-for Codex's socket-blocking sandbox), budgets, and tolerant provider
-stream parsing. Details in [docs/architecture.md](docs/architecture.md);
+for Codex's socket-blocking sandbox), budgets, tolerant provider stream
+parsing, and the adapter registry — each harness is a declarative
+descriptor plus a decoder, discovered and probed (quota-free) at
+startup. Details in [docs/architecture.md](docs/architecture.md);
 the visual system is specified in
 [docs/design-system.md](docs/design-system.md).
 
@@ -123,13 +131,18 @@ the visual system is specified in
 - Node.js ≥ 22 and pnpm; Rust (stable) to build the core
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`), logged in
 - [Codex](https://developers.openai.com/codex/cli) CLI (`codex`), logged in
+- Optional teammates: [Cursor CLI](https://cursor.com/cli),
+  [OpenCode](https://opencode.ai), and the
+  [GitHub Copilot CLI](https://github.com/features/copilot/cli) — picked
+  in config or the startup team picker
 
-Both agents are required — the whole point is the team, and one model
-agreeing with itself is not a review. mix2 checks both at startup
-(installed *and* signed in, via each CLI's own quota-free status
-command); if either one is missing or signed out, it refuses to start
+Two agents are required — the whole point is the team, and one model
+agreeing with itself is not a review (same-harness teams are supported,
+but they're two independent sessions, chosen on purpose). mix2 probes
+every installed harness at startup (quota-free version/status commands
+only); if a selected slot is missing or signed out, it refuses to start
 and tells you exactly what to install or sign in to, per agent. No solo
-mode — if you want a single agent, run `claude` or `codex` directly.
+mode — if you want a single agent, run its CLI directly.
 
 ## From source
 
@@ -266,15 +279,26 @@ team thinks, its `◐` mark rotates — when the mark stops, the team has.
 ## Provider requirements
 
 Verified against `claude` 2.1.x (`-p --output-format stream-json`,
-`--append-system-prompt`, `--resume`) and `codex-cli` 0.146.x
-(`exec --json`, `exec resume`, `-c developer_instructions=…`). Parsers
-are tolerant: unknown events from newer CLIs are ignored, never fatal.
-Missing required capabilities produce a clear startup error.
+`--append-system-prompt`, `--resume`), `codex-cli` 0.146.x
+(`exec --json`, `exec resume`, `-c developer_instructions=…`),
+`cursor-agent` 2026.08 (`-p --output-format stream-json --mode plan`),
+`opencode` 1.16.x (`run --format json --agent plan`), and `copilot`
+1.0.x (`-p --output-format json` with write/shell denied). Parsers are
+tolerant: unknown events from newer CLIs are ignored, never fatal.
+Missing required capabilities produce a clear startup error, and
+capability facts (enforced / unverified / unsupported) decide which
+roles a harness may hold — Claude and Codex are the lead-capable pair;
+the newer adapters consult as teammates until their lead-side
+permission scoping is verified.
 
 ## Limitations
 
-- Two agents, one coordinator; the model is designed so
-  `--team codex,gemini` can exist someday, but it doesn't yet.
+- Two slots, one coordinator. Slots are pluggable (any registered
+  harness, same harness twice included), but the team is exactly two —
+  wider fan-out would be a budgeted verb, not a default.
+- Cursor, OpenCode, and Copilot are teammate-only for now; leads stay
+  Claude/Codex until instruction injection and scoped write/consult
+  permissions are verified per harness.
 - Consultations are stateless between turns by design — independence is
   the point.
 - Execution belongs to the interactive CLIs; mix2 produces the plan.
@@ -289,15 +313,18 @@ cargo test      # Rust unit + integration suites
 pnpm test       # TUI suites (vitest + ink-testing-library)
 ```
 
-No test spends real model quota: `tests/fixtures/fake-claude` and
-`fake-codex` are executable stand-ins speaking each provider's exact
-stream format, with scenarios for streaming, tool events, session
-resume, consultations (including concurrent start/wait and per-index
-prompts), failures, rate limits, malformed output, and child-process
-trees for cancellation tests. Point mix2 at them with
-`MIX2_CLAUDE_CMD` / `MIX2_CODEX_CMD` and the integration suite drives
-the entire stack — budgets, recursion refusal, both consult transports,
-and process-tree kills included.
+No test spends real model quota: `tests/fixtures/fake-{claude,codex,
+cursor-agent,opencode,copilot}` are executable stand-ins speaking each
+provider's exact stream format, with scenarios for streaming, tool
+events, session resume, consultations (including concurrent start/wait
+and per-index prompts), failures, auth refusals, malformed output, and
+child-process trees for cancellation tests; `fake-hang` covers
+discovery timeouts. Point mix2 at them with the `MIX2_*_CMD` env
+overrides (`MIX2_CLAUDE_CMD`, `MIX2_CODEX_CMD`, `MIX2_CURSOR_CMD`,
+`MIX2_OPENCODE_CMD`, `MIX2_COPILOT_CMD`, or the slot-targeted
+`MIX2_SLOT_ONE_CMD`/`MIX2_SLOT_TWO_CMD`) and the integration suite
+drives the entire stack — discovery, team selection, budgets, recursion
+refusal, both consult transports, and process-tree kills included.
 
 ---
 
