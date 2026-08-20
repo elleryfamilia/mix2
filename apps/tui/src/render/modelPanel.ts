@@ -1,8 +1,10 @@
 /**
- * The /model picker: each agent's available models side by side, with the
+ * The /model picker: each slot's available models side by side, with the
  * active choice marked and a cursor for keyboard selection. "provider
  * default" is always the first entry — mix2 never second-guesses the
- * user's CLI configuration unless asked.
+ * user's CLI configuration unless asked. Long lists (some harnesses expose
+ * dozens of models) are handled by type-to-filter plus a scrolling window
+ * with above/below counts, so the panel never outgrows the terminal.
  */
 import type { SessionInfo } from '../state/store.js';
 import { leadInfo, teammateInfo } from '../state/store.js';
@@ -17,6 +19,9 @@ import { BLANK, Line, span, spread } from './lines.js';
 
 const INDENT = 2;
 
+/** Rows of model entries visible per column before windowing kicks in. */
+export const MODEL_WINDOW = 8;
+
 export interface ModelCursor {
   /** 0 = lead column, 1 = teammate column. */
   column: 0 | 1;
@@ -30,11 +35,21 @@ export function modelEntries(models: string[]): string[] {
   return [PROVIDER_DEFAULT, ...models];
 }
 
+/** Entries surviving the type-to-filter query (case-insensitive substring).
+ * An empty query keeps everything. */
+export function filteredModelEntries(models: string[], filter: string): string[] {
+  const entries = modelEntries(models);
+  const query = filter.trim().toLowerCase();
+  if (!query) return entries;
+  return entries.filter((entry) => entry.toLowerCase().includes(query));
+}
+
 function columnLines(
   info: SessionInfo['one'],
   active: boolean,
   cursorIndex: number,
   width: number,
+  filter: string,
 ): Line[] {
   const slot = info.slot;
   const lines: Line[] = [];
@@ -42,10 +57,27 @@ function columnLines(
     span(agentGlyph(slot), { color: agentColor(slot) }),
     span(` ${info.name}`, { color: agentColor(slot), bold: true }),
   ]);
-  const entries = modelEntries(info.models ?? []);
-  entries.forEach((entry, i) => {
+  const entries = filteredModelEntries(info.models ?? [], filter);
+  if (entries.length === 0) {
+    lines.push([span('  no models match', { color: theme.text.faint })]);
+    return lines;
+  }
+
+  // Window the list around the cursor (inactive columns start at the top).
+  const cursor = active ? Math.min(cursorIndex, entries.length - 1) : 0;
+  let start = Math.max(0, cursor - Math.floor(MODEL_WINDOW / 2));
+  start = Math.min(start, Math.max(0, entries.length - MODEL_WINDOW));
+  const visible = entries.slice(start, start + MODEL_WINDOW);
+  const above = start;
+  const below = entries.length - start - visible.length;
+
+  if (above > 0) {
+    lines.push([span(`  ↑ ${above} more`, { color: theme.text.faint })]);
+  }
+  visible.forEach((entry, offset) => {
+    const i = start + offset;
     const isCurrent = entry === PROVIDER_DEFAULT ? !info.model : info.model === entry;
-    const isCursor = active && i === cursorIndex;
+    const isCursor = active && i === cursor;
     const marker = isCursor ? '›' : ' ';
     const current = isCurrent ? ' ●' : '';
     const label = entry.length > width - 6 ? entry.slice(0, width - 7) + '…' : entry;
@@ -63,6 +95,9 @@ function columnLines(
       span(current, { color: agentColor(slot) }),
     ]);
   });
+  if (below > 0) {
+    lines.push([span(`  ↓ ${below} more`, { color: theme.text.faint })]);
+  }
   return lines;
 }
 
@@ -70,6 +105,7 @@ export function renderModelPanel(
   session: SessionInfo,
   cursor: ModelCursor,
   width: number,
+  filter = '',
 ): Line[] {
   const w = Math.min(width, MAX_CONTENT_WIDTH);
   const lines: Line[] = [];
@@ -84,12 +120,25 @@ export function renderModelPanel(
       w,
     ),
   );
+  if (filter) {
+    lines.push([
+      span(' '.repeat(INDENT)),
+      span('filter: ', { color: theme.text.faint }),
+      span(filter, { color: theme.text.primary, bold: true }),
+    ]);
+  }
   lines.push(BLANK);
 
   const stacked = width < TILE_BREAKPOINT;
   const colWidth = stacked ? w - INDENT : Math.floor((w - INDENT) / 2) - 2;
-  const left = columnLines(leadInfo(session), cursor.column === 0, cursor.index, colWidth);
-  const right = columnLines(teammateInfo(session), cursor.column === 1, cursor.index, colWidth);
+  const left = columnLines(leadInfo(session), cursor.column === 0, cursor.index, colWidth, filter);
+  const right = columnLines(
+    teammateInfo(session),
+    cursor.column === 1,
+    cursor.index,
+    colWidth,
+    filter,
+  );
 
   if (stacked) {
     for (const line of left) lines.push([span(' '.repeat(INDENT)), ...line]);
@@ -111,7 +160,9 @@ export function renderModelPanel(
   lines.push(BLANK);
   lines.push([
     span(' '.repeat(INDENT)),
-    span('↑↓ choose · ←→ agent · enter apply · esc close', { color: theme.text.faint }),
+    span('type to filter · ↑↓ choose · ←→ agent · enter apply · esc close', {
+      color: theme.text.faint,
+    }),
   ]);
   return lines;
 }

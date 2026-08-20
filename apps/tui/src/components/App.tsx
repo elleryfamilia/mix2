@@ -5,12 +5,20 @@ import type { CoreEvent } from '../ipc/protocol.js';
 import { renderConversationWithAnchors, type PromptAnchor } from '../render/conversation.js';
 import type { Line } from '../render/lines.js';
 import {
-  modelEntries,
+  filteredModelEntries,
   renderModelPanel,
   PROVIDER_DEFAULT,
   type ModelCursor,
 } from '../render/modelPanel.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
+import {
+  initialSelection,
+  pickerEntries,
+  renderTeamPicker,
+  selectable,
+  type TeamPickerCursor,
+  type TeamPickerSelection,
+} from '../render/teamPicker.js';
 import type { EventEmitter } from 'node:events';
 import type { MouseEvent } from '../mouse/sgr.js';
 import {
@@ -64,6 +72,11 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [modelPanel, setModelPanel] = useState<ModelCursor | null>(null);
+  const [modelFilter, setModelFilter] = useState('');
+  const [picker, setPicker] = useState<{
+    cursor: TeamPickerCursor;
+    selection: TeamPickerSelection;
+  } | null>(null);
   const turnCounter = useRef(0);
   const ctrlCArmed = useRef(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -85,6 +98,20 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   }, [stdout]);
 
   const busy = state.turn !== undefined;
+
+  // Entering the selecting-team phase seeds the picker with the core's
+  // proposal; leaving it (ready/fatal) clears it.
+  useEffect(() => {
+    if (state.phase === 'selecting-team' && state.discovery && !picker) {
+      setPicker({
+        cursor: { column: 0, index: 0 },
+        selection: initialSelection(state.discovery),
+      });
+    }
+    if (state.phase !== 'selecting-team' && picker) {
+      setPicker(null);
+    }
+  }, [state.phase, state.discovery, picker]);
 
   // One shared animation clock: the 10fps spinner interval also refreshes
   // elapsed-time displays (each render re-reads Date.now()), so no second
@@ -110,14 +137,29 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       ? { one: state.session.one.name, two: state.session.two.name }
       : undefined;
     const ctx = { width, spinner, teamGlyph, now: Date.now(), names };
+    if (state.phase === 'selecting-team' && state.discovery && picker) {
+      return {
+        lines: renderTeamPicker(
+          state.discovery,
+          picker.selection,
+          picker.cursor,
+          width,
+          state.discovery.selectionError,
+        ),
+        anchors: [],
+      };
+    }
     if (modelPanel && state.session) {
-      return { lines: renderModelPanel(state.session, modelPanel, width), anchors: [] };
+      return {
+        lines: renderModelPanel(state.session, modelPanel, width, modelFilter),
+        anchors: [],
+      };
     }
     if (state.teamPanelOpen) {
       return { lines: renderTeamPanel(state, width, ctx.now, teamGlyph), anchors: [] };
     }
     return renderConversationWithAnchors(state, ctx);
-  }, [state, width, spinner, teamGlyph, modelPanel]);
+  }, [state, width, spinner, teamGlyph, modelPanel, modelFilter, picker]);
 
   const composerRows = composerHeight(editor, width); // includes its frame
   const chromeRows = 2 /* header + spacing */ + 1 /* status */;
@@ -261,6 +303,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         const model = modelParts.join(' ').trim();
         if (!agent) {
           setModelPanel({ column: 0, index: 0 });
+          setModelFilter('');
           return;
         }
         const slot = resolveSlotWord(agent.toLowerCase());
@@ -321,6 +364,69 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     }
 
     if (key.ctrl && input === 'q') return quit();
+
+    if (state.phase === 'selecting-team' && state.discovery && picker) {
+      const discovery = state.discovery;
+      const entries = pickerEntries(discovery);
+      const confirm = (selection: TeamPickerSelection) => {
+        client.selectTeam(selection.one, selection.two, selection.leadSlot);
+      };
+      if (key.return) {
+        confirm(picker.selection);
+        return;
+      }
+      if (key.escape) {
+        // Esc opts out of picking: the proposal (the defaults) starts.
+        confirm(initialSelection(discovery));
+        return;
+      }
+      if (key.leftArrow || key.rightArrow || key.tab) {
+        setPicker((prev) => {
+          if (!prev) return prev;
+          const delta = key.leftArrow ? 2 : 1; // left cycles backwards
+          const column = ((prev.cursor.column + delta) % 3) as TeamPickerCursor['column'];
+          const index =
+            column === 2
+              ? 0
+              : Math.max(
+                  0,
+                  entries.findIndex(
+                    (e) =>
+                      e.harness ===
+                      (column === 0 ? prev.selection.one : prev.selection.two),
+                  ),
+                );
+          return { ...prev, cursor: { column, index } };
+        });
+        return;
+      }
+      if (key.upArrow || key.downArrow) {
+        setPicker((prev) => {
+          if (!prev) return prev;
+          if (prev.cursor.column === 2) {
+            // The lead control is a two-state toggle.
+            const leadSlot = prev.selection.leadSlot === 'one' ? 'two' : 'one';
+            return { ...prev, selection: { ...prev.selection, leadSlot } };
+          }
+          const delta = key.upArrow ? -1 : 1;
+          const index = Math.max(
+            0,
+            Math.min(entries.length - 1, prev.cursor.index + delta),
+          );
+          const entry = entries[index];
+          if (!entry) return prev;
+          const slot = prev.cursor.column === 0 ? 'one' : 'two';
+          // Moving over a selectable entry chooses it; disabled entries can
+          // still be cursored so their reason is readable.
+          const selection = selectable(entry, slot, prev.selection.leadSlot)
+            ? { ...prev.selection, [slot]: entry.harness }
+            : prev.selection;
+          return { cursor: { ...prev.cursor, index }, selection };
+        });
+        return;
+      }
+      return;
+    }
     if (key.ctrl && input === 'c') {
       if (state.turn) {
         cancel();
@@ -344,8 +450,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       return;
     }
     if (key.escape) {
-      if (modelPanel) setModelPanel(null);
-      else if (state.teamPanelOpen) dispatch({ type: 'close-team-panel' });
+      if (modelPanel) {
+        setModelPanel(null);
+        setModelFilter('');
+      } else if (state.teamPanelOpen) dispatch({ type: 'close-team-panel' });
       else if (state.turn) cancel();
       return;
     }
@@ -363,7 +471,8 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       const session = state.session;
       const infoFor = (column: 0 | 1) =>
         column === 0 ? leadInfo(session) : teammateInfo(session);
-      const entryCount = (column: 0 | 1) => modelEntries(infoFor(column).models ?? []).length;
+      const entryCount = (column: 0 | 1) =>
+        filteredModelEntries(infoFor(column).models ?? [], modelFilter).length;
       // Functional updates: batched key events must each see the latest
       // cursor, not the snapshot from this render.
       if (key.upArrow) {
@@ -371,19 +480,22 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       } else if (key.downArrow) {
         setModelPanel(
           (prev) =>
-            prev && { ...prev, index: Math.min(entryCount(prev.column) - 1, prev.index + 1) },
+            prev && {
+              ...prev,
+              index: Math.min(Math.max(0, entryCount(prev.column) - 1), prev.index + 1),
+            },
         );
       } else if (key.leftArrow || key.rightArrow || key.tab) {
         setModelPanel((prev) => {
           if (!prev) return prev;
           const column: 0 | 1 = prev.column === 0 ? 1 : 0;
-          return { column, index: Math.min(prev.index, entryCount(column) - 1) };
+          return { column, index: Math.min(prev.index, Math.max(0, entryCount(column) - 1)) };
         });
       } else if (key.return) {
         setModelPanel((prev) => {
           if (prev) {
             const info = infoFor(prev.column);
-            const entry = modelEntries(info.models ?? [])[prev.index];
+            const entry = filteredModelEntries(info.models ?? [], modelFilter)[prev.index];
             if (entry) {
               client.send({
                 type: 'set_model',
@@ -394,6 +506,14 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           }
           return prev;
         });
+      } else if (key.backspace || key.delete) {
+        // Narrow the filter; the cursor re-clamps against the wider list.
+        setModelFilter((f) => f.slice(0, -1));
+        setModelPanel((prev) => prev && { ...prev, index: 0 });
+      } else if (input && !key.ctrl && !key.meta) {
+        // Type-to-filter: harnesses with long model lists stay navigable.
+        setModelFilter((f) => f + input);
+        setModelPanel((prev) => prev && { ...prev, index: 0 });
       }
       return;
     }

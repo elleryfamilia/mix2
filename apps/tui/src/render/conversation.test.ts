@@ -598,6 +598,15 @@ describe('same-harness team', () => {
     expect(lines.some((l) => l.includes('○ codex (two) — reviewing'))).toBe(true);
   });
 
+  it('adapts the welcome copy — same stock, separate minds', () => {
+    const s = apply(initialState, twins);
+    const joined = text(s, twinCtx).join('\n');
+    expect(joined).toContain('two independent Codex agents');
+    expect(joined).toContain('same stock, separate minds');
+    expect(joined).not.toContain('sworn competitors');
+    expect(joined).toContain('hand to codex to execute');
+  });
+
   it('keys stances by slot so identical harnesses stay distinguishable', () => {
     let s = apply(initialState, twins);
     s = apply(s, { type: 'message.user', turn_id: 't1', text: 'q' }, T);
