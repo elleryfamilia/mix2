@@ -1476,6 +1476,86 @@ fn cancelling_a_turn_kills_a_slow_copilot_consult() {
     core.events_until("turn.completed", LONG);
 }
 
+#[test]
+fn a_teammate_only_pair_cannot_form_a_team() {
+    // Cursor and OpenCode are both teammate-only: whichever leads, the
+    // selection is refused with guidance, and a lead-capable pick recovers.
+    let mut core = Core::start(CoreOptions {
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        opencode_cmd: Some(fixtures_dir().join("fake-opencode").display().to_string()),
+        pick_team: true,
+        ..CoreOptions::default()
+    });
+    core.events_until("harnesses.discovered", LONG);
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "cursor", "two": "opencode", "lead_slot": "one",
+    }));
+    let events = core.events_until("error", LONG);
+    assert!(find(&events, "error").unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .contains("Cursor cannot lead yet"));
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "cursor", "two": "opencode", "lead_slot": "two",
+    }));
+    let events = core.events_until("error", LONG);
+    assert!(find(&events, "error").unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .contains("OpenCode cannot lead yet"));
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "opencode", "lead_slot": "one",
+    }));
+    let events = core.events_until("ready", LONG);
+    assert_eq!(
+        find(&events, "ready").unwrap()["two"]["harness"],
+        "opencode"
+    );
+}
+
+#[test]
+fn codex_lead_consults_a_cursor_teammate() {
+    // The matrix's mixed pairing beyond the claude-lead default: the other
+    // founding lead drives a new-wave teammate end to end.
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        config_extra:
+            "lead = \"one\"\n[slot.one]\nharness = \"codex\"\n[slot.two]\nharness = \"cursor\"\n"
+                .to_owned(),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["one"]["harness"], "codex");
+    assert_eq!(ready["two"]["harness"], "cursor");
+    assert_eq!(ready["lead_slot"], "one");
+
+    core.submit("t1", "SCENARIO:consult compare notes across labs");
+    let events = core.events_until("turn.completed", LONG);
+    let completed = find(&events, "consult.completed").unwrap();
+    assert_eq!(completed["slot"], "two");
+    let text = completed["text"].as_str().unwrap();
+    assert!(text.contains("fake-cursor reply"), "got: {text}");
+    assert!(text.contains("[role:teammate]"), "got: {text}");
+    let final_msg = find(&events, "message.final").unwrap();
+    assert_eq!(final_msg["speaker"], "team");
+    assert!(final_msg["text"].as_str().unwrap().contains("fake-codex"));
+}
+
 fn extract_marker(text: &str, key: &str) -> String {
     let tag = format!("[{key}:");
     let start = text

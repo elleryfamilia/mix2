@@ -126,31 +126,60 @@ Enforced in code, in layers:
 Prompts additionally tell the teammate not to delegate, but the
 authorization does not rest on the model honoring them.
 
-## Provider adapters
+## Provider adapters: slots, descriptors, and the registry
 
-`agents/claude.rs` and `agents/codex.rs` hold *all* provider-specific
-invocation behavior: flags, prompt transport (stdin in both cases), role
-instruction injection (`--append-system-prompt` / `-c
-developer_instructions=…`), session resume, and stream parsing. Parsers
-are tolerant by contract — malformed lines produce parser warnings, and
-unknown event or item types are ignored by design (never panics); the
-shapes were verified
-against claude 2.1.x and codex-cli 0.146.x. Reasoning/thinking deltas are
-consumed and discarded: hidden chain-of-thought never leaves the adapter.
+Participant identity is the **slot** (`SlotId::{One,Two}`) — sessions,
+IPC events, `/model` targeting, disagreement stances, and the TUI's
+colors/glyphs all key on it. Which CLI backs a slot is the separately
+chosen `HarnessKind`, and the same harness on both slots is a supported
+team (the UI names them "Codex (one)" / "Codex (two)").
 
-Honest scope note: today the system is a fixed Claude/Codex pair. Adding
-a third provider means a new adapter *and* touching the `AgentKind` enum,
-its `other()` pairing, the config fields, and the TUI's protocol schema —
-the collaboration machinery and events are provider-neutral, but there is
-no provider registry yet. The `lead`/`teammate` roles and semantic events
-(`consult`, room for `review`/`challenge`) are the parts deliberately
-built not to need rework.
+Each harness is a **descriptor plus a decoder** (`agents/{claude,codex,
+cursor,opencode,copilot}.rs`): metadata and hints, the default binary
+and its env override, structured capability facts, a pure argv builder,
+version/auth probes, an optional live model-listing command, and a
+tolerant stream decoder. One shared runner (`agents/runner.rs`)
+implements the `Agent` trait exactly once — spawn, stream decode,
+cancellation tree-kill, stderr tails, failure shaping — and
+`agents/registry.rs` is the single plug-in point: a new harness is a
+descriptor, a decoder, and one registry arm; the runtime, config, and
+UI stay untouched. Decoders emit identity-free events; the runtime
+stamps the slot from the channel an event arrived on, so a same-harness
+teammate can never be mislabeled.
+
+Parsers are tolerant by contract — malformed lines produce warnings and
+unknown event types are ignored (never panics); shapes were verified
+against claude 2.1.x, codex-cli 0.146.x, cursor-agent 2026.08,
+opencode 1.16.x, and copilot 1.0.x. Reasoning/thinking output is
+consumed and discarded: hidden chain-of-thought never leaves the
+adapter.
+
+**Capabilities are facts, not booleans** (`enforced` / `unverified` /
+`unsupported`): teammate read-only enforcement, lead permission
+scoping, and instruction injection. Role eligibility derives from them
+— a role closes only on `unsupported` — which is why Claude and Codex
+are the lead-capable pair while Cursor (`--mode plan`, but no verified
+lead write-scoping), OpenCode (read-only `plan` agent), and Copilot
+(write/shell denied by documented precedence, personal MCP servers
+still load — disclosed at selection) consult as teammates.
+
+**Discovery and selection.** Startup probes every candidate
+`(harness, command)` pair once — version and sign-in, in parallel,
+quota-free, under a strict timeout, cached — and reports
+`harnesses.discovered` with the configured proposal. An explicit
+`[slot.*]` config (or a non-interactive session) auto-confirms;
+otherwise the TUI's team picker settles the team via `select_team`,
+with invalid selections refused actionably and retryable. Auth is
+five-state (`authenticated`, `unauthenticated`, `configured` — a
+credential inventory, `unsupported` — no probe exists, `probe_failed`);
+only an explicit `unauthenticated` ever blocks.
 
 ## IPC
 
 Newline-delimited JSON on the core's stdin/stdout, versioned
-(`protocol: 1` in `initialize`/`ready`; mismatches are fatal at startup).
-Commands: `initialize`, `submit`, `cancel`, `shutdown`. Events are
+(`protocol: 3` in `initialize`/`ready`; mismatches are fatal at startup).
+Commands: `initialize`, `select_team`, `submit`, `cancel`, `set_model`,
+`shutdown`. Events are
 normalized and semantic (`agent.text_delta`, `agent.tool.started`,
 `consult.started/completed/failed`, `lead.synthesizing`, `message.final`,
 `turn.*`). The UI validates every event with Zod and drops unknown ones,
