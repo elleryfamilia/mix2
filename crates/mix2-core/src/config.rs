@@ -85,6 +85,9 @@ pub struct Config {
     /// Per-harness fallback command (legacy section > descriptor default)
     /// for harnesses picked onto a slot the config didn't assign them to.
     pub fallback_commands: Vec<(HarnessKind, String)>,
+    /// Per-harness fallback model (the legacy section's, if any) for the
+    /// same re-slotting case — models follow their harness like commands.
+    pub fallback_models: Vec<(HarnessKind, Option<String>)>,
     /// Non-fatal configuration conflicts (a slot value shadowing a
     /// differing legacy value), surfaced as warning events at startup.
     pub warnings: Vec<String>,
@@ -121,13 +124,23 @@ impl Config {
         }
     }
 
+    /// The model override a harness carries when no slot assignment ties it
+    /// to more specific settings: its legacy section's model, if any.
+    pub fn fallback_model(&self, harness: HarnessKind) -> Option<String> {
+        self.fallback_models
+            .iter()
+            .find(|(h, _)| *h == harness)
+            .and_then(|(_, m)| m.clone())
+    }
+
     /// The model override for `harness` selected onto `slot` — configured
-    /// models follow their harness, never the bare slot.
+    /// models follow their harness, never the bare slot, mirroring
+    /// [`Config::selection_command`].
     pub fn selection_model(&self, slot: SlotId, harness: HarnessKind) -> Option<String> {
         if self.team.harness(slot) == harness {
             self.slot(slot).model.clone()
         } else {
-            None
+            self.fallback_model(harness)
         }
     }
 
@@ -214,6 +227,10 @@ impl Config {
                 (harness, command)
             })
             .collect();
+        let fallback_models = registry::ALL
+            .into_iter()
+            .map(|harness| (harness, legacy_for(harness).model.clone()))
+            .collect();
 
         Ok(Self {
             team: Team {
@@ -229,6 +246,7 @@ impl Config {
                 .unwrap_or(DEFAULT_MAX_CONSULTS),
             explicit_slots: file.slot.one.is_some() || file.slot.two.is_some(),
             fallback_commands,
+            fallback_models,
             warnings,
         })
     }
@@ -423,6 +441,33 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("does not name exactly one slot"), "{msg}");
         assert!(msg.contains("use 'one' or 'two'"), "{msg}");
+    }
+
+    #[test]
+    fn selection_settings_follow_the_harness_when_reslotted() {
+        // Slot one is configured for claude; the picker moves codex onto it.
+        // Codex's legacy command AND model follow it to the new slot; the
+        // claude-specific slot settings do not leak across harnesses.
+        let cfg = Config::resolve(
+            None,
+            &parse("[claude]\nmodel = \"sonnet\"\n[codex]\ncommand = \"/cc\"\nmodel = \"gpt-5\""),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.selection_command(SlotId::One, HarnessKind::Codex),
+            "/cc"
+        );
+        assert_eq!(
+            cfg.selection_model(SlotId::One, HarnessKind::Codex)
+                .as_deref(),
+            Some("gpt-5")
+        );
+        // Matching harness still prefers the slot-resolved settings.
+        assert_eq!(
+            cfg.selection_model(SlotId::One, HarnessKind::Claude)
+                .as_deref(),
+            Some("sonnet")
+        );
     }
 
     #[test]
