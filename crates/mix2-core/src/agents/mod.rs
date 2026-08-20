@@ -95,14 +95,10 @@ impl FromStr for HarnessKind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "claude" => Ok(HarnessKind::Claude),
-            "codex" => Ok(HarnessKind::Codex),
-            "cursor" | "cursor-agent" => Ok(HarnessKind::Cursor),
-            other => Err(format!(
-                "unknown agent '{other}' (expected 'claude', 'codex', or 'cursor')"
-            )),
-        }
+        // The registry is the single naming authority (labels, display
+        // names, and aliases like "cursor-agent") — parsing here can never
+        // drift from what selection and config validation accept.
+        registry::harness_named(s).ok_or_else(|| registry::unknown_harness_message(s))
     }
 }
 
@@ -136,9 +132,10 @@ impl Team {
     }
 
     /// Resolve a user-facing participant name to a slot. `one`/`two` always
-    /// work; a harness name or display name ("codex", "Claude") works only
-    /// while exactly one slot runs that harness — on a same-harness team the
-    /// name is ambiguous and only the slot ids resolve.
+    /// work; a harness name, display name, or alias ("codex", "Claude",
+    /// "cursor-agent") works only while exactly one slot runs that harness —
+    /// on a same-harness team the name is ambiguous and only the slot ids
+    /// resolve.
     pub fn slot_named(&self, name: &str) -> Option<SlotId> {
         if let Ok(slot) = name.parse::<SlotId>() {
             return Some(slot);
@@ -146,10 +143,7 @@ impl Team {
         let norm = name.to_ascii_lowercase();
         let matches: Vec<SlotId> = SlotId::ALL
             .into_iter()
-            .filter(|&slot| {
-                let harness = self.harness(slot);
-                norm == harness.to_string() || norm == harness.display_name().to_lowercase()
-            })
+            .filter(|&slot| registry::name_matches(self.harness(slot), &norm))
             .collect();
         match matches.as_slice() {
             [slot] => Some(*slot),

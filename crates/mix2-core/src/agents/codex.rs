@@ -29,6 +29,7 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     harness: HarnessKind::Codex,
     label: "codex",
     default_command: "codex",
+    aliases: &[],
     command_env_override: "MIX2_CODEX_CMD",
     install_hint: "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), then run `codex login`",
     login_hint: "run `codex login`",

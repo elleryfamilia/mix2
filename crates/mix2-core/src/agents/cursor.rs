@@ -36,6 +36,7 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     harness: HarnessKind::Cursor,
     label: "cursor",
     default_command: "cursor-agent",
+    aliases: &["cursor-agent"],
     command_env_override: "MIX2_CURSOR_CMD",
     install_hint: "install the Cursor CLI from https://cursor.com/cli, then run `cursor-agent login`",
     login_hint: "run `cursor-agent login`",

@@ -18,13 +18,22 @@ pub fn descriptor(harness: HarnessKind) -> &'static Descriptor {
     }
 }
 
-/// Resolve a user-facing harness name ("codex", "Codex"). The registry —
-/// not the UI — owns harness-name validation, so error text always reflects
-/// what is actually registered.
+/// Whether a (lowercased) user-facing name refers to this harness: its
+/// canonical name, its display name, or a descriptor alias (the binary
+/// name, e.g. "cursor-agent"). The single matching authority — FromStr,
+/// slot resolution, and config validation all route through it.
+pub fn name_matches(harness: HarnessKind, norm: &str) -> bool {
+    norm == harness.to_string()
+        || norm == harness.display_name().to_lowercase()
+        || descriptor(harness).aliases.contains(&norm)
+}
+
+/// Resolve a user-facing harness name ("codex", "Codex", "cursor-agent").
+/// The registry — not the UI — owns harness-name validation, so error text
+/// always reflects what is actually registered.
 pub fn harness_named(name: &str) -> Option<HarnessKind> {
     let norm = name.to_ascii_lowercase();
-    ALL.into_iter()
-        .find(|h| norm == h.to_string() || norm == h.display_name().to_lowercase())
+    ALL.into_iter().find(|h| name_matches(*h, &norm))
 }
 
 /// Error text for a name no registered harness answers to.
@@ -65,5 +74,23 @@ mod tests {
         let msg = unknown_harness_message("gemini");
         assert!(msg.contains("gemini"));
         assert!(msg.contains("claude, codex, cursor"));
+    }
+
+    #[test]
+    fn aliases_resolve_everywhere_names_do() {
+        // The binary name is a first-class alias, consistently: FromStr,
+        // registry lookup, and slot resolution all accept it.
+        assert_eq!(harness_named("cursor-agent"), Some(HarnessKind::Cursor));
+        assert_eq!(
+            "cursor-agent".parse::<HarnessKind>(),
+            Ok(HarnessKind::Cursor)
+        );
+        use crate::agents::{SlotId, Team};
+        let team = Team {
+            one: HarnessKind::Claude,
+            two: HarnessKind::Cursor,
+            lead: SlotId::One,
+        };
+        assert_eq!(team.slot_named("cursor-agent"), Some(SlotId::Two));
     }
 }

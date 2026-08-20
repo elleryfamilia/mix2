@@ -22,6 +22,7 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     harness: HarnessKind::Claude,
     label: "claude",
     default_command: "claude",
+    aliases: &[],
     command_env_override: "MIX2_CLAUDE_CMD",
     install_hint:
         "install Claude Code from https://claude.com/claude-code, then run `claude` once to sign in",
