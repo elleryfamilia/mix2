@@ -13,7 +13,7 @@ import { z } from 'zod';
 export const PROTOCOL_VERSION = 3;
 
 const slotId = z.enum(['one', 'two']);
-const harnessKind = z.enum(['claude', 'codex']);
+const harnessKind = z.enum(['claude', 'codex', 'cursor']);
 const agentRole = z.enum(['lead', 'teammate']);
 const speaker = z.enum(['one', 'two', 'team']);
 const authState = z.enum([
@@ -34,6 +34,7 @@ export const discoveredHarnessSchema = z.object({
   auth: authState,
   available: z.boolean(),
   reason: z.string().optional(),
+  note: z.string().optional(),
   lead_eligible: z.boolean(),
   teammate_eligible: z.boolean(),
   capabilities: z.object({

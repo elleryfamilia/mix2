@@ -322,6 +322,7 @@ mod tests {
                 auth: AuthState::Authenticated,
                 available: true,
                 reason: None,
+                note: None,
                 lead_eligible: true,
                 teammate_eligible: true,
                 capabilities: Capabilities {

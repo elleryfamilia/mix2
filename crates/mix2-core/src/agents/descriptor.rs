@@ -98,12 +98,24 @@ pub struct Descriptor {
     pub label: &'static str,
     /// Binary invoked when neither config nor env override one.
     pub default_command: &'static str,
+    /// Extra user-facing names that resolve to this harness (e.g. the
+    /// binary name when it differs from the label). One matching authority:
+    /// `registry::name_matches` consults these everywhere names appear.
+    pub aliases: &'static [&'static str],
     /// Test/dev env var that overrides the command (fake fixtures).
     pub command_env_override: &'static str,
     /// Actionable fix shown when the CLI is missing.
     pub install_hint: &'static str,
     /// Actionable fix shown when the CLI is signed out.
     pub login_hint: &'static str,
+    /// Disclosure shown in the team picker before this harness can be
+    /// chosen (e.g. a workspace-trust flag the invocation will pass).
+    /// Selecting the harness — or configuring it explicitly — is the
+    /// user's opt-in; nothing here is passed silently.
+    pub selection_note: Option<&'static str>,
+    /// True when the CLI takes the prompt as a positional argument instead
+    /// of stdin; `build_args` then includes it in the argv.
+    pub prompt_in_args: bool,
     pub capabilities: Capabilities,
     /// Curated models for the /model picker; empty means "provider default
     /// only". Swapped for live discovery when a CLI grows a listing command.

@@ -174,7 +174,10 @@ harness = "codex"
 ```
 
 The same harness on both slots is allowed (the UI shows them as e.g.
-"Codex (one)" / "Codex (two)").
+"Codex (one)" / "Codex (two)"). Besides `claude` and `codex`, the
+[Cursor CLI](https://cursor.com/cli) is supported as a teammate
+(`harness = "cursor"`, read-only `--mode plan` consultations; it runs
+with `--trust`, disclosed in the picker).
 
 The legacy harness-keyed schema keeps working unchanged, and the two can
 mix (slot values win; conflicts are reported as warnings at startup):

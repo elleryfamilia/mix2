@@ -27,6 +27,9 @@ struct CoreOptions {
     lead: Option<&'static str>,
     claude_cmd: Option<String>,
     codex_cmd: Option<String>,
+    /// Defaults to a nonexistent path so discovery never probes a real
+    /// cursor-agent install on the dev machine.
+    cursor_cmd: Option<String>,
     max_consults: Option<u32>,
     /// Raw TOML appended to the generated config file (slot tables, legacy
     /// sections) for the config-schema tests.
@@ -42,6 +45,7 @@ impl Default for CoreOptions {
             lead: Some("claude"),
             claude_cmd: Some(fixtures_dir().join("fake-claude").display().to_string()),
             codex_cmd: Some(fixtures_dir().join("fake-codex").display().to_string()),
+            cursor_cmd: Some("/nonexistent/cursor-agent-binary".into()),
             max_consults: None,
             config_extra: String::new(),
             pick_team: false,
@@ -75,12 +79,16 @@ impl Core {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env_remove("MIX2_CLAUDE_CMD")
-            .env_remove("MIX2_CODEX_CMD");
+            .env_remove("MIX2_CODEX_CMD")
+            .env_remove("MIX2_CURSOR_CMD");
         if let Some(claude) = &options.claude_cmd {
             cmd.env("MIX2_CLAUDE_CMD", claude);
         }
         if let Some(codex) = &options.codex_cmd {
             cmd.env("MIX2_CODEX_CMD", codex);
+        }
+        if let Some(cursor) = &options.cursor_cmd {
+            cmd.env("MIX2_CURSOR_CMD", cursor);
         }
         for (key, value) in &options.env {
             cmd.env(key, value);
@@ -1110,6 +1118,148 @@ fn signed_out_harness_reports_unauthenticated_and_refuses_selection() {
         "type": "select_team", "one": "claude", "two": "claude", "lead_slot": "one",
     }));
     core.events_until("ready", LONG);
+}
+
+#[test]
+fn cursor_teammate_full_consult() {
+    // Claude leads (env-injected fixture); slot two runs the cursor fixture
+    // via the canonical slot schema. Explicit slots auto-confirm.
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        config_extra: "[slot.two]\nharness = \"cursor\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["two"]["harness"], "cursor");
+    assert_eq!(ready["two"]["name"], "Cursor");
+    assert_eq!(ready["two"]["auth"], "authenticated");
+
+    core.submit("t1", "SCENARIO:consult what does the team think?");
+    let events = core.events_until("turn.completed", LONG);
+    let completed = find(&events, "consult.completed").unwrap();
+    assert_eq!(completed["slot"], "two");
+    let text = completed["text"].as_str().unwrap();
+    assert!(text.contains("fake-cursor reply"), "got: {text}");
+    assert!(
+        text.contains("[role:teammate]"),
+        "in-band instructions must reach the teammate: {text}"
+    );
+    assert!(text.contains("[mode:plan]"), "read-only mode: {text}");
+    assert!(text.contains("[trust:yes]"), "trust flag passed: {text}");
+    assert_eq!(find(&events, "message.final").unwrap()["speaker"], "team");
+}
+
+#[test]
+fn cursor_named_model_restriction_fails_the_consult_not_the_turn() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        config_extra: "[slot.two]\nharness = \"cursor\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    core.events_until("ready", LONG);
+
+    // The teammate consultation hits the free-plan bare-text refusal.
+    core.submit("t1", "SCENARIO:consult CONSULT_PROMPT:SCENARIO:restricted");
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(count(&events, "consult.completed"), 0);
+    let failed = find(&events, "consult.failed").unwrap();
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("Named models unavailable"),
+        "bare-text refusal must surface: {}",
+        failed["message"]
+    );
+    // The lead still answers solo.
+    let final_msg = find(&events, "message.final").unwrap();
+    assert_eq!(final_msg["speaker"], "one");
+    assert!(final_msg["text"]
+        .as_str()
+        .unwrap()
+        .contains("[consult1:err:"));
+}
+
+#[test]
+fn cursor_is_discoverable_with_note_and_refused_as_lead() {
+    let mut core = Core::start(CoreOptions {
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        pick_team: true,
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let harnesses = find(&startup, "harnesses.discovered").unwrap()["harnesses"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let cursor = harnesses.iter().find(|h| h["harness"] == "cursor").unwrap();
+    assert_eq!(cursor["available"], true);
+    assert_eq!(cursor["auth"], "authenticated");
+    assert_eq!(cursor["lead_eligible"], false);
+    assert_eq!(cursor["teammate_eligible"], true);
+    assert!(
+        cursor["note"].as_str().unwrap().contains("--trust"),
+        "trust disclosure surfaces at selection: {}",
+        cursor["note"]
+    );
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "cursor", "two": "claude", "lead_slot": "one",
+    }));
+    let events = core.events_until("error", LONG);
+    assert!(find(&events, "error").unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .contains("cannot lead yet"));
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "cursor", "lead_slot": "one",
+    }));
+    let events = core.events_until("ready", LONG);
+    assert_eq!(find(&events, "ready").unwrap()["two"]["harness"], "cursor");
+}
+
+#[test]
+fn signed_out_cursor_is_reported_in_discovery() {
+    let core = Core::start(CoreOptions {
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        env: vec![("FAKE_CURSOR_LOGGED_OUT".into(), "1".into())],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let harnesses = find(&startup, "harnesses.discovered").unwrap()["harnesses"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let cursor = harnesses.iter().find(|h| h["harness"] == "cursor").unwrap();
+    assert_eq!(cursor["auth"], "unauthenticated");
+    assert!(cursor["reason"]
+        .as_str()
+        .unwrap()
+        .contains("cursor-agent login"));
 }
 
 fn extract_marker(text: &str, key: &str) -> String {

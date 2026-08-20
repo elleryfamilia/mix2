@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Fake Cursor Agent CLI for mix2 tests.
+
+Speaks the stream-json shape of `cursor-agent -p --output-format
+stream-json --stream-partial-output` (verified against cursor-agent
+2026.08.04): a `system`/`init` line carrying session_id + model, assistant
+envelopes with text chunks, and an authoritative `result` line. The prompt
+arrives as a positional argument (never stdin), with mix2's role
+instructions riding in-band ahead of it.
+
+The invocation contract is asserted hard: missing any of `-p`,
+`--output-format stream-json`, `--stream-partial-output`, `--trust`, or
+`--mode plan` exits 2 — a drifted argv fails the suite loudly.
+
+Scenario markers (first token of any line of the prompt):
+  SCENARIO:fail        exit non-zero with a stderr message
+  SCENARIO:restricted  bare-text ActionRequiredError line (free-plan named
+                       model refusal), no JSON result, exit 1
+  SCENARIO:malformed   emit a garbage line before a valid response
+  SCENARIO:slow        sleep a long time before responding
+
+The final text carries bracketed markers for assertions:
+  [session:<id>] [resumed:yes|no] [role:teammate|none] [model:<m>]
+  [mode:plan] [trust:yes]
+"""
+import json
+import os
+import sys
+import time
+import uuid
+
+VALUE_FLAGS = {"--output-format", "--mode", "--model", "--resume"}
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args or "-v" in args:
+        print("2026.99.9-fake")
+        return 0
+
+    if args[:1] == ["status"]:
+        if os.environ.get("FAKE_CURSOR_LOGGED_OUT") == "1":
+            print("Not logged in")
+            return 1
+        print("✓ Logged in as fake@familia.me")
+        return 0
+
+    if "--list-models" in args:
+        print("Available models\n")
+        print("auto - Auto (current, default)")
+        print("gpt-5.3-codex - Codex 5.3")
+        return 0
+
+    flags = {}
+    positional = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in VALUE_FLAGS and i + 1 < len(args):
+            flags[a] = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("-"):
+            flags[a] = True
+            i += 1
+            continue
+        positional.append(a)
+        i += 1
+
+    required = (
+        flags.get("-p") is True
+        and flags.get("--output-format") == "stream-json"
+        and flags.get("--stream-partial-output") is True
+        and flags.get("--trust") is True
+        and flags.get("--mode") == "plan"
+        and len(positional) == 1
+    )
+    if not required:
+        sys.stderr.write(
+            f"fake-cursor-agent: unexpected argv (contract drift): {args!r}\n"
+        )
+        return 2
+
+    prompt = positional[0]
+    model = flags.get("--model", "auto-default")
+    resume_id = flags.get("--resume")
+    scenarios = _line_scenarios(prompt)
+
+    if "fail" in scenarios:
+        sys.stderr.write("fake-cursor-agent: simulated provider failure\n")
+        return 1
+
+    if "restricted" in scenarios:
+        # Observed live: the refusal is a BARE TEXT line, not JSON.
+        sys.stdout.write(
+            "ActionRequiredError: Named models unavailable on your current "
+            "plan. Use --model auto or upgrade.\n"
+        )
+        sys.stdout.flush()
+        return 1
+
+    session_id = resume_id or str(uuid.uuid4())
+    resumed = "yes" if resume_id else "no"
+    role = "teammate" if "consulting engineer" in prompt else "none"
+
+    out({
+        "type": "system", "subtype": "init",
+        "session_id": session_id, "model": model, "permissionMode": "plan",
+    })
+
+    if "malformed" in scenarios:
+        sys.stdout.write("this is not json at all {{{\n")
+        sys.stdout.flush()
+
+    if "slow" in scenarios:
+        time.sleep(120)
+
+    text = (
+        f"fake-cursor reply [session:{session_id}] [resumed:{resumed}] "
+        f"[role:{role}] [model:{model}] [mode:plan] [trust:yes]"
+    )
+
+    for chunk in (text[i:i + 24] for i in range(0, len(text), 24)):
+        out({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": chunk}]},
+            "session_id": session_id,
+        })
+
+    out({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": text, "session_id": session_id,
+        "usage": {"input_tokens": 11, "output_tokens": len(text) // 4},
+    })
+    return 0
+
+
+def _line_scenarios(prompt):
+    """Markers count when they lead a line: the real consult prompt starts
+    on its own line after the in-band role instructions."""
+    scenarios = set()
+    for line in prompt.splitlines():
+        for token in line.split():
+            if token.startswith("SCENARIO:"):
+                scenarios.add(token[len("SCENARIO:"):])
+            else:
+                break
+    return scenarios
+
+
+if __name__ == "__main__":
+    sys.exit(main())
