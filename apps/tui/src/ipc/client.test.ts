@@ -1,9 +1,35 @@
-import { chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { CoreEvent } from './protocol.js';
-import { CoreClient } from './client.js';
+import { CoreClient, newestFirst } from './client.js';
+
+describe('core locator freshness', () => {
+  it('prefers the most recently built binary over the fixed release/debug order', () => {
+    // Regression: a stale target/release core from before a protocol bump
+    // used to shadow the debug core `pnpm dev` just built, failing the
+    // initialize handshake with an unknown-field serde error.
+    const dir = mkdtempSync(path.join(tmpdir(), 'mix2-locator-'));
+    const release = path.join(dir, 'release-core');
+    const debug = path.join(dir, 'debug-core');
+    writeFileSync(release, '#!/bin/sh\n');
+    writeFileSync(debug, '#!/bin/sh\n');
+    const old = new Date(Date.now() - 60_000);
+    const fresh = new Date();
+    utimesSync(release, old, old);
+    utimesSync(debug, fresh, fresh);
+    expect(newestFirst([release, debug])).toEqual([debug, release]);
+
+    // And the other way round: a fresher release build wins again.
+    utimesSync(release, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+    expect(newestFirst([release, debug])).toEqual([release, debug]);
+
+    // Missing paths sort last instead of throwing.
+    const missing = path.join(dir, 'not-built');
+    expect(newestFirst([missing, debug])).toEqual([debug, missing]);
+  });
+});
 
 describe('CoreClient selection handshake', () => {
   it('surfaces the discovery report and leaves selection to the app', async () => {

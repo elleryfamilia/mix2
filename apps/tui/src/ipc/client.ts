@@ -4,7 +4,7 @@
  * protocol events.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,9 +32,25 @@ export interface CoreClientHandlers {
   onExit: (code: number | null, stderr: string) => void;
 }
 
+/** Order a level's release/debug core candidates by build recency.
+ * A stale `target/release` binary must never shadow the debug core that
+ * `pnpm dev` just produced (or vice versa): a version-skewed core fails
+ * the initialize handshake with a confusing serde error. */
+export function newestFirst(paths: string[]): string[] {
+  const mtime = (p: string): number => {
+    try {
+      return statSync(p).mtimeMs;
+    } catch {
+      return -1; // missing files sort last; existsSync filters them anyway
+    }
+  };
+  return [...paths].sort((a, b) => mtime(b) - mtime(a));
+}
+
 /** Locate the mix2-core binary: explicit option, then $MIX2_CORE_BIN,
  * then alongside this file (release installs ship the core next to the
- * bundled TUI), then dev target dirs walking up from here, then PATH. */
+ * bundled TUI), then dev target dirs walking up from here (whichever of
+ * release/debug was built most recently), then PATH. */
 export function locateCore(explicit?: string): string {
   const env = process.env['MIX2_CORE_BIN'];
   if (explicit) return explicit;
@@ -43,8 +59,12 @@ export function locateCore(explicit?: string): string {
   const candidates: string[] = [path.join(here, 'mix2-core')];
   let dir = here;
   for (let i = 0; i < 6; i++) {
-    candidates.push(path.join(dir, 'target', 'release', 'mix2-core'));
-    candidates.push(path.join(dir, 'target', 'debug', 'mix2-core'));
+    candidates.push(
+      ...newestFirst([
+        path.join(dir, 'target', 'release', 'mix2-core'),
+        path.join(dir, 'target', 'debug', 'mix2-core'),
+      ]),
+    );
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
