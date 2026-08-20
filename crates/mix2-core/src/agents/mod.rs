@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 pub mod descriptor;
 pub mod discovery;
 pub mod events;
@@ -67,6 +68,7 @@ impl FromStr for SlotId {
 pub enum HarnessKind {
     Claude,
     Codex,
+    Cursor,
 }
 
 impl HarnessKind {
@@ -74,6 +76,7 @@ impl HarnessKind {
         match self {
             HarnessKind::Claude => "Claude",
             HarnessKind::Codex => "Codex",
+            HarnessKind::Cursor => "Cursor",
         }
     }
 }
@@ -83,6 +86,7 @@ impl fmt::Display for HarnessKind {
         match self {
             HarnessKind::Claude => write!(f, "claude"),
             HarnessKind::Codex => write!(f, "codex"),
+            HarnessKind::Cursor => write!(f, "cursor"),
         }
     }
 }
@@ -94,8 +98,9 @@ impl FromStr for HarnessKind {
         match s.to_ascii_lowercase().as_str() {
             "claude" => Ok(HarnessKind::Claude),
             "codex" => Ok(HarnessKind::Codex),
+            "cursor" | "cursor-agent" => Ok(HarnessKind::Cursor),
             other => Err(format!(
-                "unknown agent '{other}' (expected 'claude' or 'codex')"
+                "unknown agent '{other}' (expected 'claude', 'codex', or 'cursor')"
             )),
         }
     }

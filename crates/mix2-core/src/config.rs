@@ -163,34 +163,40 @@ impl Config {
         let one_harness = harness_for(SlotId::One, file.slot.one.as_ref(), HarnessKind::Claude)?;
         let two_harness = harness_for(SlotId::Two, file.slot.two.as_ref(), HarnessKind::Codex)?;
 
-        let legacy_for = |harness: HarnessKind| match harness {
-            HarnessKind::Claude => &file.claude,
-            HarnessKind::Codex => &file.codex,
+        // Only the founding pair has legacy harness-keyed sections; newer
+        // harnesses are configured exclusively through the slot tables.
+        let legacy_for = |harness: HarnessKind| -> Option<&ProviderConfig> {
+            match harness {
+                HarnessKind::Claude => Some(&file.claude),
+                HarnessKind::Codex => Some(&file.codex),
+                HarnessKind::Cursor => None,
+            }
         };
 
         let mut settings_for = |slot: SlotId,
                                 harness: HarnessKind,
                                 entry: Option<&SlotEntry>|
          -> SlotSettings {
-            let legacy = legacy_for(harness);
+            let legacy_command = legacy_for(harness).and_then(|l| l.command.clone());
+            let legacy_model = legacy_for(harness).and_then(|l| l.model.clone());
             let conflict = |slot_value: &Option<String>, legacy_value: &Option<String>| matches!((slot_value, legacy_value), (Some(s), Some(l)) if s != l);
             let slot_command = entry.and_then(|e| e.command.clone());
-            if conflict(&slot_command, &legacy.command) {
+            if conflict(&slot_command, &legacy_command) {
                 warnings.push(format!(
                     "config: [slot.{slot}] command overrides the [{harness}] command"
                 ));
             }
             let slot_model = entry.and_then(|e| e.model.clone());
-            if conflict(&slot_model, &legacy.model) {
+            if conflict(&slot_model, &legacy_model) {
                 warnings.push(format!(
                     "config: [slot.{slot}] model overrides the [{harness}] model"
                 ));
             }
             SlotSettings {
                 command: slot_command
-                    .or_else(|| legacy.command.clone())
+                    .or(legacy_command)
                     .unwrap_or_else(|| registry::descriptor(harness).default_command.to_owned()),
-                model: slot_model.or_else(|| legacy.model.clone()),
+                model: slot_model.or(legacy_model),
             }
         };
         let one = settings_for(SlotId::One, one_harness, file.slot.one.as_ref());
@@ -221,15 +227,14 @@ impl Config {
             .into_iter()
             .map(|harness| {
                 let command = legacy_for(harness)
-                    .command
-                    .clone()
+                    .and_then(|l| l.command.clone())
                     .unwrap_or_else(|| registry::descriptor(harness).default_command.to_owned());
                 (harness, command)
             })
             .collect();
         let fallback_models = registry::ALL
             .into_iter()
-            .map(|harness| (harness, legacy_for(harness).model.clone()))
+            .map(|harness| (harness, legacy_for(harness).and_then(|l| l.model.clone())))
             .collect();
 
         Ok(Self {

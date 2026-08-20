@@ -29,6 +29,10 @@ pub struct DiscoveredHarness {
     /// timeout, signed out) — picker copy, not log spam.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Selection disclosure (e.g. a workspace-trust flag the invocation
+    /// passes); picking the harness is the opt-in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub lead_eligible: bool,
     pub teammate_eligible: bool,
     pub capabilities: Capabilities,
@@ -124,7 +128,8 @@ pub async fn discover(candidates: Vec<(HarnessKind, String)>, timeout: Duration)
         .map(|key| {
             let (harness, command) = key;
             let probe = cache.get(key).unwrap_or(&fallback);
-            let capabilities = registry::descriptor(*harness).capabilities;
+            let descriptor = registry::descriptor(*harness);
+            let capabilities = descriptor.capabilities;
             DiscoveredHarness {
                 harness: *harness,
                 command: command.clone(),
@@ -132,6 +137,7 @@ pub async fn discover(candidates: Vec<(HarnessKind, String)>, timeout: Duration)
                 auth: probe.auth,
                 available: probe.version.is_some(),
                 reason: probe.reason.clone(),
+                note: descriptor.selection_note.map(str::to_owned),
                 lead_eligible: capabilities.lead_eligible(),
                 teammate_eligible: capabilities.teammate_eligible(),
                 capabilities,

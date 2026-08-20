@@ -42,12 +42,19 @@ impl HarnessAgent {
             env.insert("PATH".into(), format!("{}:{}", prepend.display(), path));
         }
 
+        // Prompt delivery is descriptor-declared: positional-argument CLIs
+        // (cursor) already carry it in `args`; the rest read stdin.
+        let stdin = if self.descriptor.prompt_in_args {
+            None
+        } else {
+            Some(request.prompt.as_str())
+        };
         let mut child = ChildProcess::spawn(SpawnOptions {
             program: &self.command,
             args: &args,
             cwd: &request.cwd,
             env: &env,
-            stdin: Some(&request.prompt),
+            stdin,
         })?;
 
         let _ = events.send(AgentEvent::Started).await;

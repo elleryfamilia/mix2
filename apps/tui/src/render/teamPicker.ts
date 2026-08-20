@@ -106,6 +106,11 @@ function columnLines(
     if (!enabled) {
       const reason = truncate(disabledLabel(entry, slot, selection.leadSlot), Math.max(8, width - 4));
       lines.push([span('   '), span(reason, { color: theme.text.faint })]);
+    } else if (entry.note && isChosen) {
+      // Selection disclosures (e.g. a trust flag) surface right where the
+      // choice is made — nothing is passed silently.
+      const note = truncate(entry.note, Math.max(8, width - 4));
+      lines.push([span('   '), span(note, { color: theme.text.faint })]);
     }
   });
   return lines;

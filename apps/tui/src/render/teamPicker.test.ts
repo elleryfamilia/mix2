@@ -106,6 +106,20 @@ describe('team picker', () => {
     expect(frame(d).join('\n')).toContain('teammate-only for now');
   });
 
+  it('shows a selection note on the chosen entry — disclosures are visible', () => {
+    const d = discovery({
+      harnesses: [
+        harness({ harness: 'claude' }),
+        harness({
+          harness: 'codex',
+          note: 'runs with --trust: picking it marks this workspace trusted',
+        }),
+      ],
+    });
+    // The note shows where the harness is chosen (slot two in the proposal).
+    expect(frame(d).join('\n')).toContain('runs with --trust');
+  });
+
   it('shows the core refusal and stays within the frame on narrow terminals', () => {
     const lines = frame(
       discovery(),

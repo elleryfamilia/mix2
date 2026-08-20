@@ -32,6 +32,8 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     command_env_override: "MIX2_CODEX_CMD",
     install_hint: "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), then run `codex login`",
     login_hint: "run `codex login`",
+    selection_note: None,
+    prompt_in_args: false,
     capabilities: Capabilities {
         // Teammate consultations run in codex exec's default read-only
         // sandbox, which blocks all file writes — verified empirically.
