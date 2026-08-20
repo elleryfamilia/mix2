@@ -42,6 +42,24 @@ codex: move validation off the hot path | deferred
 team: ship the cache now; file the validation rework as a follow-up
 SPLIT"#;
 
+/// The worked example whose agent lines actually parse for this team:
+/// harness names while they are unambiguous, slot ids on a same-harness
+/// team. `examples_parse_for_their_team` proves both forms parse.
+pub fn example_for(team: &Team) -> String {
+    let (one, two) = if team.one == team.two {
+        (SlotId::One.to_string(), SlotId::Two.to_string())
+    } else {
+        (team.one.to_string(), team.two.to_string())
+    };
+    format!(
+        "mix2-consult disagree <<'SPLIT'\n\
+         {one}: cache the compiled schema in-process | chosen\n\
+         {two}: move validation off the hot path | deferred\n\
+         team: ship the cache now; file the validation rework as a follow-up\n\
+         SPLIT"
+    )
+}
+
 /// Parse a `mix2-consult disagree` payload into a [`DisagreementRecord`].
 ///
 /// Grammar: one line per team slot, `<agent>: <position> | <outcome>`.
@@ -117,10 +135,12 @@ pub fn parse(text: &str, team: &Team) -> Result<DisagreementRecord, String> {
 }
 
 /// Format a parse error as the refusal shown to the lead agent: the error,
-/// a worked example, and a bounded-retry stop condition.
-pub fn refusal(err: &str) -> String {
+/// a worked example that parses for this team, and a bounded-retry stop
+/// condition.
+pub fn refusal(err: &str, team: &Team) -> String {
     format!(
-        "{err}\n\nExample:\n{DISAGREE_EXAMPLE}\n\nIf this fails twice, skip recording and state the disagreement in prose."
+        "{err}\n\nExample:\n{}\n\nIf this fails twice, skip recording and state the disagreement in prose.",
+        example_for(team)
     )
 }
 
@@ -320,5 +340,30 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         parse(&body, &team()).unwrap();
+    }
+
+    #[test]
+    fn examples_parse_for_their_team() {
+        // A mixed team keeps the canonical harness-name example.
+        assert_eq!(example_for(&team()), DISAGREE_EXAMPLE);
+
+        // A same-harness team gets slot ids, and that form parses for it —
+        // harness names would be ambiguous and refused.
+        let same = Team {
+            one: HarnessKind::Codex,
+            two: HarnessKind::Codex,
+            lead: SlotId::One,
+        };
+        let example = example_for(&same);
+        assert!(example.contains("one: "));
+        let body: String = example
+            .lines()
+            .filter(|l| !l.starts_with("mix2-consult") && *l != "SPLIT")
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse(&body, &same).unwrap();
+
+        // The refusal embeds the team-appropriate example.
+        assert!(refusal("bad", &same).contains("one: cache"));
     }
 }

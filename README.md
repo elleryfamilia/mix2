@@ -140,8 +140,9 @@ pnpm dev            # development: run mix2 in the current directory
 ```
 
 ```bash
-mix2                    # coordinator from config, else claude
-mix2 --lead codex       # let codex coordinate (the UI won't tell)
+mix2                    # coordinator from config, else slot one (claude)
+mix2 --lead two         # let slot two coordinate (the UI won't tell)
+mix2 --lead codex       # agent names work too, while unambiguous
 mix2 --cwd ~/src/acme   # run against another project
 mix2 --debug            # verbose logs + IPC trace in /tmp
 ```
@@ -152,22 +153,42 @@ automatically (`MIX2_CORE_BIN` overrides).
 
 ## Configuration
 
-`~/.config/mix2/config.toml` (respects `$XDG_CONFIG_HOME`):
+`~/.config/mix2/config.toml` (respects `$XDG_CONFIG_HOME`). The canonical
+schema is slot-keyed — a team is two slots, and each slot chooses which
+agent CLI backs it:
 
 ```toml
-lead = "claude"                # who coordinates; the UI keeps it secret
+lead = "one"                   # who coordinates; the UI keeps it secret
 
 [collaboration]
 max_consults_per_turn = 2
 
+[slot.one]
+harness = "claude"
+command = "claude"             # optional: a custom path
+model = "sonnet"               # optional: pin a model
+
+[slot.two]
+harness = "codex"
+```
+
+The same harness on both slots is allowed (the UI shows them as e.g.
+"Codex (one)" / "Codex (two)").
+
+The legacy harness-keyed schema keeps working unchanged, and the two can
+mix (slot values win; conflicts are reported as warnings at startup):
+
+```toml
+lead = "claude"                # agent names resolve while unambiguous
+
 [claude]
-command = "claude"             # or a custom path
+command = "claude"
 
 [codex]
 command = "codex"
 ```
 
-Precedence: CLI flags > user config > defaults.
+Precedence: CLI flags > slot tables > legacy sections > defaults.
 
 ## Using it
 
@@ -191,9 +212,10 @@ mix2 doesn't second-guess your setup. `/model` opens a picker showing
 each agent's available models side by side (`↑↓` choose, `←→` switch
 agent, `Enter` apply, `Esc` close), with the active choice marked;
 selections apply to subsequent turns and consultations for this session.
-Power users can skip the picker: `/model claude sonnet`,
-`/model codex gpt-5-codex`, `/model claude default`. Models can also be
-pinned in `config.toml` (`[claude] model = "sonnet"`).
+Power users can skip the picker: `/model one sonnet`,
+`/model two gpt-5-codex`, `/model one default` — agent names like
+`/model claude sonnet` work too while they name exactly one slot. Models
+can also be pinned in `config.toml` (`[slot.one] model = "sonnet"`).
 
 Reading comfort is a feature: answers render markdown natively; the
 prompt you're reading the answer to stays anchored under the header

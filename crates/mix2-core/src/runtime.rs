@@ -51,14 +51,32 @@ pub struct RuntimeOptions {
     pub debug: bool,
 }
 
-fn build_agent(harness: HarnessKind, command: &str) -> Arc<dyn Agent> {
+fn build_agent(slot: SlotId, harness: HarnessKind, command: &str) -> Arc<dyn Agent> {
     let descriptor = registry::descriptor(harness);
-    // Test/dev injection: the descriptor's env override (MIX2_CLAUDE_CMD /
-    // MIX2_CODEX_CMD) points the adapter at fake provider fixtures without
-    // touching user config.
-    let command =
-        std::env::var(descriptor.command_env_override).unwrap_or_else(|_| command.to_owned());
+    // Test/dev injection, slot-targeted first: MIX2_SLOT_ONE_CMD /
+    // MIX2_SLOT_TWO_CMD beat the legacy harness-keyed overrides
+    // (MIX2_CLAUDE_CMD / MIX2_CODEX_CMD), which beat configured commands —
+    // all without touching user config.
+    let slot_env = match slot {
+        SlotId::One => "MIX2_SLOT_ONE_CMD",
+        SlotId::Two => "MIX2_SLOT_TWO_CMD",
+    };
+    let command = std::env::var(slot_env)
+        .or_else(|_| std::env::var(descriptor.command_env_override))
+        .unwrap_or_else(|_| command.to_owned());
     Arc::new(HarnessAgent::new(descriptor, command))
+}
+
+/// Display name for a slot's participant. Distinct harnesses read as the
+/// harness ("Claude"); a same-harness team qualifies each side by slot
+/// ("Codex (one)") so the two participants never become indistinguishable.
+fn slot_display_name(team: Team, slot: SlotId) -> String {
+    let harness = team.harness(slot);
+    if team.one == team.two {
+        format!("{} ({slot})", harness.display_name())
+    } else {
+        harness.display_name().to_owned()
+    }
 }
 
 fn emit(event: &Event) {
@@ -142,8 +160,8 @@ impl Runtime {
             .with_context(|| format!("project directory {} does not exist", cwd.display()))?;
 
         let team = config.team;
-        let one_agent = build_agent(team.one, &config.slot(SlotId::One).command);
-        let two_agent = build_agent(team.two, &config.slot(SlotId::Two).command);
+        let one_agent = build_agent(SlotId::One, team.one, &config.slot(SlotId::One).command);
+        let two_agent = build_agent(SlotId::Two, team.two, &config.slot(SlotId::Two).command);
 
         // Both probes gate readiness, so both get the generous timeout.
         let probe = |agent: Arc<dyn Agent>| async move {
@@ -233,7 +251,7 @@ impl Runtime {
         let one_info = AgentInfo {
             slot: SlotId::One,
             harness: team.one,
-            name: team.one.display_name().to_owned(),
+            name: slot_display_name(team, SlotId::One),
             version: Some(one_version),
             available: true,
             reason: None,
@@ -244,7 +262,7 @@ impl Runtime {
         let two_info = AgentInfo {
             slot: SlotId::Two,
             harness: team.two,
-            name: team.two.display_name().to_owned(),
+            name: slot_display_name(team, SlotId::Two),
             version: Some(two_version),
             available: true,
             reason: None,
@@ -317,8 +335,7 @@ impl Runtime {
             turn_id: turn_uuid,
             model: self.lead_model.clone(),
             instructions: crate::collaboration::prompts::lead_instructions(
-                self.team().lead_harness(),
-                self.team().teammate_harness(),
+                self.team(),
                 self.project,
             ),
             env: self.mix2_env(turn_uuid, AgentRole::Lead, Some(&consult_token)),
@@ -692,6 +709,11 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         cwd: runtime.session.cwd.display().to_string(),
         project: runtime.project,
     });
+    for message in &runtime.config.warnings {
+        emit(&Event::Warning {
+            message: message.clone(),
+        });
+    }
 
     let mut active: Option<TurnState> = None;
 
