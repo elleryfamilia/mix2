@@ -143,6 +143,7 @@ pnpm dev            # development: run mix2 in the current directory
 mix2                    # coordinator from config, else slot one (claude)
 mix2 --lead two         # let slot two coordinate (the UI won't tell)
 mix2 --lead codex       # agent names work too, while unambiguous
+mix2 --pick-team        # choose the team at startup even when configured
 mix2 --cwd ~/src/acme   # run against another project
 mix2 --debug            # verbose logs + IPC trace in /tmp
 ```

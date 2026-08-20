@@ -1,5 +1,49 @@
-import { describe, expect, it } from 'vitest';
+import { chmodSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import type { CoreEvent } from './protocol.js';
 import { CoreClient } from './client.js';
+
+describe('CoreClient selection handshake', () => {
+  it('auto-confirms the proposal while no picker exists', async () => {
+    // A stand-in core that reports discovery awaiting selection, then
+    // stays alive long enough to receive the reply.
+    const script = path.join(tmpdir(), `mix2-fake-core-${process.pid}.sh`);
+    writeFileSync(
+      script,
+      '#!/bin/sh\n' +
+        `echo '{"type":"harnesses.discovered","harnesses":[],"proposal":{"one":"claude","two":"codex","lead_slot":"two"},"auto":false}'\n` +
+        'sleep 1\n',
+    );
+    chmodSync(script, 0o755);
+
+    const events: CoreEvent[] = [];
+    const client = new CoreClient(
+      { corePath: script },
+      { onEvent: (e) => events.push(e), onExit: () => {} },
+    );
+    const send = vi.spyOn(client, 'send');
+    client.start();
+    // Poll instead of a fixed sleep: spawn latency varies under load.
+    const deadline = Date.now() + 4000;
+    while (
+      !events.some((e) => e.type === 'harnesses.discovered') &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(events.some((e) => e.type === 'harnesses.discovered')).toBe(true);
+    expect(send).toHaveBeenCalledWith({
+      type: 'select_team',
+      one: 'claude',
+      two: 'codex',
+      lead_slot: 'two',
+    });
+    client.shutdown();
+  });
+});
 
 describe('CoreClient lifecycle', () => {
   it('shutdown is idempotent and never throws after the stream ends', async () => {

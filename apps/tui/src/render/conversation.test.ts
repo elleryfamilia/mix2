@@ -11,12 +11,12 @@ function apply(state: AppState, event: CoreEvent, now = T): AppState {
   return reduce(state, { type: 'core-event', event, now });
 }
 
-const ready: CoreEvent = {
+const ready: Extract<CoreEvent, { type: 'ready' }> = {
   type: 'ready',
   protocol: 2,
   session_id: 's1',
-  one: { slot: 'one', harness: 'claude', name: 'Claude', available: true },
-  two: { slot: 'two', harness: 'codex', name: 'Codex', available: true },
+  one: { slot: 'one', harness: 'claude', name: 'Claude', auth: 'authenticated', available: true },
+  two: { slot: 'two', harness: 'codex', name: 'Codex', auth: 'authenticated', available: true },
   lead_slot: 'one',
   cwd: '/repo',
   project: true,
@@ -573,8 +573,8 @@ describe('reversed lead', () => {
 describe('same-harness team', () => {
   const twins: CoreEvent = {
     ...ready,
-    one: { slot: 'one', harness: 'codex', name: 'Codex (one)', available: true },
-    two: { slot: 'two', harness: 'codex', name: 'Codex (two)', available: true },
+    one: { slot: 'one', harness: 'codex', name: 'Codex (one)', auth: 'authenticated', available: true },
+    two: { slot: 'two', harness: 'codex', name: 'Codex (two)', auth: 'authenticated', available: true },
     lead_slot: 'one',
   };
   const twinCtx: RenderContext = {
@@ -665,7 +665,7 @@ describe('team panel', () => {
   it('shows the teammate as unavailable when it is', () => {
     const notReady: CoreEvent = {
       ...ready,
-      two: { slot: 'two', harness: 'codex', name: 'Codex', available: false, reason: 'not installed' },
+      two: { slot: 'two', harness: 'codex', name: 'Codex', auth: 'authenticated', available: false, reason: 'not installed' },
     };
     const s = apply(initialState, notReady);
     const lines = renderTeamPanel(s, 100, T).map(lineText);

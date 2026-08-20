@@ -2,6 +2,7 @@ pub mod agent;
 pub mod claude;
 pub mod codex;
 pub mod descriptor;
+pub mod discovery;
 pub mod events;
 pub mod registry;
 pub mod runner;

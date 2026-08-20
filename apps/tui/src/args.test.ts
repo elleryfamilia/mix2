@@ -4,13 +4,13 @@ import { VERSION } from './version.js';
 
 describe('parseArgs', () => {
   it('runs the app with defaults when given nothing', () => {
-    expect(parseArgs([])).toEqual({ kind: 'run', args: { debug: false } });
+    expect(parseArgs([])).toEqual({ kind: 'run', args: { debug: false, pickTeam: false } });
   });
 
   it('collects the run options', () => {
     expect(parseArgs(['--lead', 'codex', '--cwd', '/x', '--debug', '--core', '/c'])).toEqual({
       kind: 'run',
-      args: { lead: 'codex', cwd: '/x', debug: true, core: '/c' },
+      args: { lead: 'codex', cwd: '/x', debug: true, pickTeam: false, core: '/c' },
     });
   });
 

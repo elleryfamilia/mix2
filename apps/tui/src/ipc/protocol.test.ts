@@ -11,13 +11,25 @@ describe('parseEventLine', () => {
 
   it('parses ready with slot-keyed participants, same-harness included', () => {
     const event = parseEventLine(
-      '{"type":"ready","protocol":2,"session_id":"s1","one":{"slot":"one","harness":"codex","name":"Codex (one)","available":true},"two":{"slot":"two","harness":"codex","name":"Codex (two)","available":true},"lead_slot":"two","cwd":"/repo","project":true}',
+      '{"type":"ready","protocol":3,"session_id":"s1","one":{"slot":"one","harness":"codex","name":"Codex (one)","auth":"authenticated","available":true},"two":{"slot":"two","harness":"codex","name":"Codex (two)","auth":"probe_failed","available":true},"lead_slot":"two","cwd":"/repo","project":true}',
     );
     expect(event).toMatchObject({
       type: 'ready',
       lead_slot: 'two',
       one: { slot: 'one', harness: 'codex', name: 'Codex (one)' },
       two: { slot: 'two', harness: 'codex', name: 'Codex (two)' },
+    });
+  });
+
+  it('parses the discovery report', () => {
+    const event = parseEventLine(
+      '{"type":"harnesses.discovered","harnesses":[{"harness":"codex","command":"codex","version":"0.146.0","auth":"authenticated","available":true,"lead_eligible":true,"teammate_eligible":true,"capabilities":{"teammate_read_only":"enforced","lead_permission_scoping":"unverified","instruction_injection":"enforced"}}],"proposal":{"one":"claude","two":"codex","lead_slot":"one"},"auto":true}',
+    );
+    expect(event).toMatchObject({
+      type: 'harnesses.discovered',
+      auto: true,
+      proposal: { one: 'claude', two: 'codex', lead_slot: 'one' },
+      harnesses: [{ harness: 'codex', auth: 'authenticated', available: true }],
     });
   });
 

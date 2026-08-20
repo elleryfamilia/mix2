@@ -8,6 +8,7 @@
 
 use super::agent::AgentRequest;
 use super::{AgentEvent, HarnessKind};
+use serde::{Deserialize, Serialize};
 
 /// How firmly a capability holds for a harness.
 ///
@@ -17,7 +18,8 @@ use super::{AgentEvent, HarnessKind};
 /// harness has no way to provide it. Role eligibility derives from these —
 /// they are facts, not booleans, so a future harness can be honest about
 /// partial support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CapabilityLevel {
     Enforced,
     Unverified,
@@ -25,7 +27,7 @@ pub enum CapabilityLevel {
 }
 
 /// The capability facts that decide what roles a harness may hold.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     /// A teammate consultation cannot write to the project.
     pub teammate_read_only: CapabilityLevel,
@@ -34,6 +36,21 @@ pub struct Capabilities {
     /// mix2's role instructions reach the model on top of the CLI's own
     /// system prompt.
     pub instruction_injection: CapabilityLevel,
+}
+
+impl Capabilities {
+    /// Role eligibility derives from capability facts: a role is open
+    /// unless some capability it depends on is outright unsupported.
+    /// `Unverified` does not disqualify — it surfaces as information.
+    pub fn lead_eligible(&self) -> bool {
+        self.instruction_injection != CapabilityLevel::Unsupported
+            && self.lead_permission_scoping != CapabilityLevel::Unsupported
+    }
+
+    pub fn teammate_eligible(&self) -> bool {
+        self.instruction_injection != CapabilityLevel::Unsupported
+            && self.teammate_read_only != CapabilityLevel::Unsupported
+    }
 }
 
 /// Quota-free sign-in probes, declaratively. The runner interprets these;
@@ -45,6 +62,9 @@ pub enum AuthProbe {
     JsonLoggedIn { args: &'static [&'static str] },
     /// Run the CLI with `args`; exit 0 means signed in, non-zero signed out.
     ExitStatus { args: &'static [&'static str] },
+    /// No quota-free probe exists; auth state is `Unsupported` and runtime
+    /// failures must surface cleanly instead (never trial prompts).
+    None,
 }
 
 /// Terminal state a decoder accumulated over one invocation's stream,

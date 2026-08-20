@@ -80,6 +80,8 @@ const client = new CoreClient(
     lead: args.lead,
     cwd,
     debug: args.debug,
+    interactive: Boolean(process.stdout.isTTY && process.stdin.isTTY),
+    pickTeam: args.pickTeam,
     corePath: args.core,
     logPath: args.debug ? `/tmp/mix2-tui-${process.pid}.log` : undefined,
   },

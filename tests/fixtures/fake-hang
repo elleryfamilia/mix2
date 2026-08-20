@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""A harness binary that never answers: sleeps through any invocation.
+
+Used to prove discovery's strict probe timeout marks a wedged CLI
+unavailable (with an actionable reason) instead of stalling startup.
+"""
+import time
+
+time.sleep(60)

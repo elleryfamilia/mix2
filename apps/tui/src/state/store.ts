@@ -4,7 +4,14 @@
  * local UI actions. Components render this state; they never interpret
  * provider behavior.
  */
-import type { AgentInfo, CoreEvent, Disagreement, Stance } from '../ipc/protocol.js';
+import type {
+  AgentInfo,
+  CoreEvent,
+  Disagreement,
+  DiscoveredHarness,
+  Stance,
+  TeamProposal,
+} from '../ipc/protocol.js';
 import type { SlotName, SpeakerName } from '../theme/theme.js';
 
 export interface ToolActivity {
@@ -133,10 +140,19 @@ export function speakerLabel(session: SessionInfo | undefined, slot: SpeakerName
   return speakerName(session, slot).toLowerCase();
 }
 
+/** The startup discovery report, kept for the team picker. */
+export interface DiscoveryState {
+  harnesses: DiscoveredHarness[];
+  proposal: TeamProposal;
+  /** True when the core auto-confirmed the proposal (no picker needed). */
+  auto: boolean;
+}
+
 export interface AppState {
   phase: 'starting' | 'ready' | 'fatal';
   fatalMessage?: string;
   session?: SessionInfo;
+  discovery?: DiscoveryState;
   items: ConversationItem[];
   turn?: ActiveTurn;
   lastTurn?: TurnRecord;
@@ -251,6 +267,15 @@ export function reduce(state: AppState, action: Action): AppState {
 
 function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
   switch (event.type) {
+    case 'harnesses.discovered':
+      return {
+        ...state,
+        discovery: {
+          harnesses: event.harnesses,
+          proposal: event.proposal,
+          auto: event.auto,
+        },
+      };
     case 'ready':
       return {
         ...state,

@@ -3,7 +3,7 @@
 //! (tree kill), stderr tails, failure shaping — lives here exactly once;
 //! per-harness modules contribute only pure builders, probes, and decoders.
 
-use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthStatus};
+use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthState};
 use super::descriptor::{AuthProbe, Descriptor};
 use super::{AgentEvent, HarnessKind};
 use crate::process::child::{ChildProcess, SpawnOptions};
@@ -156,9 +156,12 @@ impl Agent for HarnessAgent {
             .collect()
     }
 
-    async fn auth_status(&self) -> AuthStatus {
+    async fn auth_status(&self) -> AuthState {
         let args = match self.descriptor.auth_probe {
             AuthProbe::JsonLoggedIn { args } | AuthProbe::ExitStatus { args } => args,
+            // No probe exists — never burn quota with trial prompts; surface
+            // run-time auth failures cleanly instead.
+            AuthProbe::None => return AuthState::Unsupported,
         };
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -169,14 +172,15 @@ impl Agent for HarnessAgent {
         )
         .await;
         let Ok(Ok(out)) = out else {
-            return AuthStatus::Unknown;
+            return AuthState::ProbeFailed;
         };
         match self.descriptor.auth_probe {
+            AuthProbe::None => unreachable!("handled above"),
             AuthProbe::ExitStatus { .. } => {
                 if out.status.success() {
-                    AuthStatus::Authenticated
+                    AuthState::Authenticated
                 } else {
-                    AuthStatus::Unauthenticated
+                    AuthState::Unauthenticated
                 }
             }
             AuthProbe::JsonLoggedIn { .. } => {
@@ -185,15 +189,15 @@ impl Agent for HarnessAgent {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let json_start = match stdout.find('{') {
                     Some(i) => i,
-                    None => return AuthStatus::Unknown,
+                    None => return AuthState::ProbeFailed,
                 };
                 match serde_json::from_str::<Value>(&stdout[json_start..]) {
                     Ok(v) => match v.get("loggedIn").and_then(Value::as_bool) {
-                        Some(true) => AuthStatus::Authenticated,
-                        Some(false) => AuthStatus::Unauthenticated,
-                        None => AuthStatus::Unknown,
+                        Some(true) => AuthState::Authenticated,
+                        Some(false) => AuthState::Unauthenticated,
+                        None => AuthState::ProbeFailed,
                     },
-                    Err(_) => AuthStatus::Unknown,
+                    Err(_) => AuthState::ProbeFailed,
                 }
             }
         }
