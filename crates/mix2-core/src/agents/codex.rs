@@ -1,154 +1,103 @@
-use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthStatus};
-use super::claude::friendly_failure;
+//! Adapter for the OpenAI Codex CLI: a descriptor plus pure builders and a
+//! decoder. All process handling lives in the shared runner.
+//!
+//! Invocation shape (verified against codex-cli 0.146.x):
+//!   codex exec --json --skip-git-repo-check [-c developer_instructions=...] -
+//!   codex exec resume <thread-id> --json --skip-git-repo-check ... -
+//! with the prompt on stdin and the working directory set on the child
+//! process. `-c developer_instructions=...` layers mix2's role instructions
+//! on top of Codex's built-in agent instructions per run, without touching
+//! the user's `~/.codex/config.toml`.
+//!
+//! Sandbox note: `codex exec` defaults to a read-only sandbox that blocks
+//! both Unix-socket connects and all file writes (verified empirically), so
+//! a Codex *lead* could never reach the consult helper. Leads therefore run
+//! with `sandbox_mode="workspace-write"` — Codex's standard interactive
+//! sandbox level (workspace-writable, still no network) — plus the mix2
+//! runtime dir added to writable roots for consult file IPC. Teammate
+//! consultations keep the user's default sandbox untouched.
+
+use super::agent::AgentRequest;
+use super::descriptor::{
+    AuthProbe, Capabilities, CapabilityLevel, DecodeOutcome, Decoder, Descriptor,
+};
 use super::{AgentEvent, AgentRole, HarnessKind};
-use crate::process::child::{ChildProcess, SpawnOptions};
-use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio::sync::mpsc::Sender;
-use tokio_util::sync::CancellationToken;
 
-/// Adapter for the OpenAI Codex CLI.
-///
-/// Invocation shape (verified against codex-cli 0.146.x):
-///   codex exec --json --skip-git-repo-check [-c developer_instructions=...] -
-///   codex exec resume <thread-id> --json --skip-git-repo-check ... -
-/// with the prompt on stdin and the working directory set on the child
-/// process. `-c developer_instructions=...` layers mix2's role instructions
-/// on top of Codex's built-in agent instructions per run, without touching
-/// the user's `~/.codex/config.toml`.
-///
-/// Sandbox note: `codex exec` defaults to a read-only sandbox that blocks
-/// both Unix-socket connects and all file writes (verified empirically), so
-/// a Codex *lead* could never reach the consult helper. Leads therefore run
-/// with `sandbox_mode="workspace-write"` — Codex's standard interactive
-/// sandbox level (workspace-writable, still no network) — plus the mix2
-/// runtime dir added to writable roots for consult file IPC. Teammate
-/// consultations keep the user's default sandbox untouched.
-pub struct CodexAgent {
-    pub command: String,
+pub static DESCRIPTOR: Descriptor = Descriptor {
+    harness: HarnessKind::Codex,
+    label: "codex",
+    default_command: "codex",
+    command_env_override: "MIX2_CODEX_CMD",
+    install_hint: "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), then run `codex login`",
+    login_hint: "run `codex login`",
+    capabilities: Capabilities {
+        // Teammate consultations run in codex exec's default read-only
+        // sandbox, which blocks all file writes — verified empirically.
+        teammate_read_only: CapabilityLevel::Enforced,
+        // Leads run workspace-write for consult IPC, so the sandbox allows
+        // project writes; the `.mix2/`-only rule is instruction-enforced.
+        lead_permission_scoping: CapabilityLevel::Unverified,
+        instruction_injection: CapabilityLevel::Enforced,
+    },
+    // Curated: the models codex's `-m` commonly accepts. Replace with a
+    // provider listing when the CLI grows one.
+    known_models: &["gpt-5.3-codex", "gpt-5-codex", "gpt-5", "gpt-5-codex-mini"],
+    version_args: &["--version"],
+    parse_version,
+    // `codex login status` exits 0 when signed in, non-zero otherwise.
+    auth_probe: AuthProbe::ExitStatus {
+        args: &["login", "status"],
+    },
+    build_args,
+    new_decoder,
+};
+
+fn new_decoder() -> Box<dyn Decoder> {
+    Box::new(CodexStreamParser::default())
 }
 
-impl CodexAgent {
-    pub fn new(command: impl Into<String>) -> Self {
-        Self {
-            command: command.into(),
-        }
-    }
+fn parse_version(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("unknown")
+        .to_owned()
+}
 
-    fn build_args(&self, request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
-        let mut args: Vec<String> = vec!["exec".into()];
-        if let Some(id) = resume {
-            args.push("resume".into());
-            args.push(id.into());
-        }
-        args.push("--json".into());
-        args.push("--skip-git-repo-check".into());
-        if let Some(model) = &request.model {
-            args.push("-c".into());
-            args.push(format!("model={}", toml_string(model)));
-        }
-        if !request.instructions.is_empty() {
+fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = vec!["exec".into()];
+    if let Some(id) = resume {
+        args.push("resume".into());
+        args.push(id.into());
+    }
+    args.push("--json".into());
+    args.push("--skip-git-repo-check".into());
+    if let Some(model) = &request.model {
+        args.push("-c".into());
+        args.push(format!("model={}", toml_string(model)));
+    }
+    if !request.instructions.is_empty() {
+        args.push("-c".into());
+        args.push(format!(
+            "developer_instructions={}",
+            toml_string(&request.instructions)
+        ));
+    }
+    if request.role == AgentRole::Lead {
+        args.push("-c".into());
+        args.push("sandbox_mode=\"workspace-write\"".into());
+        if let Some(rt) = &request.runtime_dir {
             args.push("-c".into());
             args.push(format!(
-                "developer_instructions={}",
-                toml_string(&request.instructions)
+                "sandbox_workspace_write.writable_roots=[{}]",
+                toml_string(&rt.display().to_string())
             ));
         }
-        if request.role == AgentRole::Lead {
-            args.push("-c".into());
-            args.push("sandbox_mode=\"workspace-write\"".into());
-            if let Some(rt) = &request.runtime_dir {
-                args.push("-c".into());
-                args.push(format!(
-                    "sandbox_workspace_write.writable_roots=[{}]",
-                    toml_string(&rt.display().to_string())
-                ));
-            }
-        }
-        args.push("-".into());
-        args
     }
-
-    async fn run(
-        &self,
-        request: AgentRequest,
-        resume: Option<&str>,
-        events: Sender<AgentEvent>,
-        cancel: CancellationToken,
-    ) -> Result<AgentResult> {
-        let args = self.build_args(&request, resume);
-        let mut env = request.env.clone();
-        if let Some(prepend) = &request.path_prepend {
-            let path = std::env::var("PATH").unwrap_or_default();
-            env.insert("PATH".into(), format!("{}:{}", prepend.display(), path));
-        }
-
-        let mut child = ChildProcess::spawn(SpawnOptions {
-            program: &self.command,
-            args: &args,
-            cwd: &request.cwd,
-            env: &env,
-            stdin: Some(&request.prompt),
-        })?;
-
-        let _ = events.send(AgentEvent::Started).await;
-
-        let mut lines = child.stdout_lines()?;
-        let stderr = child.stderr_tail()?;
-        let mut parser = CodexStreamParser::default();
-
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    child.kill_tree().await;
-                    bail!("cancelled");
-                }
-                line = lines.next_line() => {
-                    match line {
-                        Ok(Some(line)) => {
-                            for ev in parser.parse_line(&line) {
-                                let _ = events.send(ev).await;
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            tracing::warn!("codex stdout read error: {e}");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        let status = child.wait().await?;
-        let stderr_tail = stderr.await.unwrap_or_default();
-
-        if let Some(err) = parser.error.take() {
-            let _ = events
-                .send(AgentEvent::Failed {
-                    message: err.clone(),
-                })
-                .await;
-            bail!("codex failed: {err}");
-        }
-        if !status.success() && parser.final_text.is_none() {
-            let msg = friendly_failure("codex", &status, &stderr_tail);
-            let _ = events
-                .send(AgentEvent::Failed {
-                    message: msg.clone(),
-                })
-                .await;
-            bail!("{msg}");
-        }
-
-        let _ = events.send(AgentEvent::Completed).await;
-        Ok(AgentResult {
-            text: parser.final_text.take().unwrap_or_default(),
-            session_id: parser.thread_id.clone(),
-        })
-    }
+    args.push("-".into());
+    args
 }
 
 /// Encode a string as a TOML basic string (codex `-c` values are parsed as
@@ -171,79 +120,6 @@ fn toml_string(s: &str) -> String {
     out
 }
 
-#[async_trait]
-impl Agent for CodexAgent {
-    fn harness(&self) -> HarnessKind {
-        HarnessKind::Codex
-    }
-
-    async fn version(&self) -> Result<AgentVersion> {
-        let out = tokio::process::Command::new(&self.command)
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .output()
-            .await
-            .with_context(|| format!("`{}` not found or not executable", self.command))?;
-        if !out.status.success() {
-            bail!("`{} --version` failed", self.command);
-        }
-        let raw = String::from_utf8_lossy(&out.stdout);
-        let line = raw
-            .lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty())
-            .unwrap_or("unknown");
-        Ok(AgentVersion {
-            raw: line.to_owned(),
-        })
-    }
-
-    fn known_models(&self) -> Vec<String> {
-        // Curated: the models codex's `-m` commonly accepts. Replace with a
-        // provider listing when the CLI grows one.
-        ["gpt-5.3-codex", "gpt-5-codex", "gpt-5", "gpt-5-codex-mini"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    }
-
-    async fn auth_status(&self) -> AuthStatus {
-        // `codex login status` exits 0 when signed in, non-zero otherwise.
-        let out = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            tokio::process::Command::new(&self.command)
-                .args(["login", "status"])
-                .stdin(std::process::Stdio::null())
-                .output(),
-        )
-        .await;
-        match out {
-            Ok(Ok(out)) if out.status.success() => AuthStatus::Authenticated,
-            Ok(Ok(_)) => AuthStatus::Unauthenticated,
-            _ => AuthStatus::Unknown,
-        }
-    }
-
-    async fn start(
-        &self,
-        request: AgentRequest,
-        events: Sender<AgentEvent>,
-        cancel: CancellationToken,
-    ) -> Result<AgentResult> {
-        self.run(request, None, events, cancel).await
-    }
-
-    async fn resume(
-        &self,
-        session: &AgentSession,
-        request: AgentRequest,
-        events: Sender<AgentEvent>,
-        cancel: CancellationToken,
-    ) -> Result<AgentResult> {
-        self.run(request, Some(&session.id), events, cancel).await
-    }
-}
-
 /// Tolerant parser for `codex exec --json` JSONL events.
 /// Unknown item and event types must never panic the application.
 #[derive(Default)]
@@ -256,6 +132,21 @@ pub struct CodexStreamParser {
     /// extraction O(delta) instead of O(total²) over a long answer.
     message_progress: HashMap<String, usize>,
     running_commands: HashMap<String, String>,
+}
+
+impl Decoder for CodexStreamParser {
+    fn parse_line(&mut self, line: &str) -> Vec<AgentEvent> {
+        CodexStreamParser::parse_line(self, line)
+    }
+
+    fn finish(&mut self) -> DecodeOutcome {
+        DecodeOutcome {
+            error: self.error.take(),
+            final_text: self.final_text.take(),
+            fallback_text: String::new(),
+            session_id: self.thread_id.clone(),
+        }
+    }
 }
 
 impl CodexStreamParser {
@@ -416,6 +307,120 @@ fn short_detail(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::agent::AgentRequest;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn request(
+        role: AgentRole,
+        model: Option<&str>,
+        instructions: &str,
+        runtime_dir: Option<&str>,
+    ) -> AgentRequest {
+        AgentRequest {
+            prompt: "the prompt".into(),
+            cwd: PathBuf::from("/repo"),
+            role,
+            turn_id: Uuid::nil(),
+            model: model.map(str::to_owned),
+            instructions: instructions.into(),
+            env: HashMap::new(),
+            path_prepend: None,
+            runtime_dir: runtime_dir.map(PathBuf::from),
+        }
+    }
+
+    #[test]
+    fn build_args_lead_start_golden() {
+        // Instructions with a newline and quote pin the TOML quoting.
+        assert_eq!(
+            build_args(
+                &request(
+                    AgentRole::Lead,
+                    Some("gpt-5-codex"),
+                    "ROLE\nsays \"hi\"",
+                    Some("/tmp/mix2/s1")
+                ),
+                None
+            ),
+            vec![
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "-c",
+                "model=\"gpt-5-codex\"",
+                "-c",
+                "developer_instructions=\"ROLE\\nsays \\\"hi\\\"\"",
+                "-c",
+                "sandbox_mode=\"workspace-write\"",
+                "-c",
+                "sandbox_workspace_write.writable_roots=[\"/tmp/mix2/s1\"]",
+                "-",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_args_teammate_keeps_default_sandbox() {
+        // No sandbox override, no writable roots: the read-only default is
+        // the teammate's enforcement.
+        assert_eq!(
+            build_args(&request(AgentRole::Teammate, None, "ROLE", None), None),
+            vec![
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "-c",
+                "developer_instructions=\"ROLE\"",
+                "-",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_args_resume_golden() {
+        // `resume <id>` comes immediately after `exec`, before the flags.
+        assert_eq!(
+            build_args(&request(AgentRole::Lead, None, "", None), Some("01a-b")),
+            vec![
+                "exec",
+                "resume",
+                "01a-b",
+                "--json",
+                "--skip-git-repo-check",
+                "-c",
+                "sandbox_mode=\"workspace-write\"",
+                "-",
+            ]
+        );
+    }
+
+    #[test]
+    fn version_parser_takes_first_nonempty_line() {
+        assert_eq!(parse_version("\ncodex-cli 0.146.0\n"), "codex-cli 0.146.0");
+        assert_eq!(parse_version(""), "unknown");
+    }
+
+    #[test]
+    fn decoder_finish_carries_thread_and_error() {
+        let mut p = CodexStreamParser::default();
+        p.parse_line(r#"{"type":"thread.started","thread_id":"01a"}"#);
+        p.parse_line(
+            r#"{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"OK"}}"#,
+        );
+        let outcome = Decoder::finish(&mut p);
+        assert_eq!(outcome.final_text.as_deref(), Some("OK"));
+        assert_eq!(outcome.session_id.as_deref(), Some("01a"));
+        assert_eq!(outcome.fallback_text, "");
+
+        let mut p = CodexStreamParser::default();
+        p.parse_line(r#"{"type":"turn.failed","error":{"message":"rate limited"}}"#);
+        assert_eq!(
+            Decoder::finish(&mut p).error.as_deref(),
+            Some("rate limited")
+        );
+    }
 
     #[test]
     fn parses_thread_id() {
