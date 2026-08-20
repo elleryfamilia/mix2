@@ -581,7 +581,7 @@ async fn record_disagreement(shared: &Arc<Shared>, request: &ConsultRequest) -> 
             &shared.team,
         ) {
             Ok(record) => record,
-            Err(e) => return refuse(disagreement::refusal(&e)),
+            Err(e) => return refuse(disagreement::refusal(&e, &shared.team)),
         };
 
         let mut slot = lock_disagreement(&turn.disagreement);
@@ -641,11 +641,7 @@ async fn run_consultation(
         role: AgentRole::Teammate,
         turn_id,
         model: shared.teammate_model.read().await.clone(),
-        instructions: prompts::teammate_instructions(
-            shared.team.lead_harness(),
-            shared.team.teammate_harness(),
-            shared.project,
-        ),
+        instructions: prompts::teammate_instructions(shared.team, shared.project),
         env,
         path_prepend: shared.helper_dir.clone(),
         runtime_dir: None,

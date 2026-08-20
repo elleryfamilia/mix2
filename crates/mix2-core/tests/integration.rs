@@ -28,7 +28,10 @@ struct CoreOptions {
     claude_cmd: Option<String>,
     codex_cmd: Option<String>,
     max_consults: Option<u32>,
-    env: Vec<(&'static str, &'static str)>,
+    /// Raw TOML appended to the generated config file (slot tables, legacy
+    /// sections) for the config-schema tests.
+    config_extra: String,
+    env: Vec<(String, String)>,
 }
 
 impl Default for CoreOptions {
@@ -38,6 +41,7 @@ impl Default for CoreOptions {
             claude_cmd: Some(fixtures_dir().join("fake-claude").display().to_string()),
             codex_cmd: Some(fixtures_dir().join("fake-codex").display().to_string()),
             max_consults: None,
+            config_extra: String::new(),
             env: Vec::new(),
         }
     }
@@ -52,8 +56,11 @@ impl Core {
         let config_dir = tempfile::tempdir().expect("tempdir");
         let config_path = config_dir.path().join("config.toml");
         let mut config = String::new();
+        config.push_str(&options.config_extra);
         if let Some(max) = options.max_consults {
-            config.push_str(&format!("[collaboration]\nmax_consults_per_turn = {max}\n"));
+            config.push_str(&format!(
+                "\n[collaboration]\nmax_consults_per_turn = {max}\n"
+            ));
         }
         std::fs::write(&config_path, config).expect("write config");
         // Leak the tempdir so the config outlives the child.
@@ -495,7 +502,7 @@ fn missing_teammate_is_fatal_with_install_hint() {
 #[test]
 fn unauthenticated_lead_is_fatal_with_instructions() {
     let core = Core::start(CoreOptions {
-        env: vec![("FAKE_CLAUDE_LOGGED_OUT", "1")],
+        env: vec![("FAKE_CLAUDE_LOGGED_OUT".into(), "1".into())],
         ..CoreOptions::default()
     });
     let events = core.events_until("fatal", LONG);
@@ -511,7 +518,7 @@ fn unauthenticated_lead_is_fatal_with_instructions() {
 #[test]
 fn unauthenticated_teammate_is_fatal_with_login_hint() {
     let core = Core::start(CoreOptions {
-        env: vec![("FAKE_CODEX_LOGGED_OUT", "1")],
+        env: vec![("FAKE_CODEX_LOGGED_OUT".into(), "1".into())],
         ..CoreOptions::default()
     });
     let events = core.events_until("fatal", LONG);
@@ -789,6 +796,140 @@ fn disagree_without_consult_is_refused() {
     let fin = find(&events, "message.final").unwrap();
     assert!(fin.get("disagreement").is_none());
     assert!(fin["text"].as_str().unwrap().contains("[disagree:2:"));
+}
+
+#[test]
+fn legacy_config_file_launches_identically() {
+    // A pure legacy file — harness-keyed sections, harness-named lead, no
+    // env overrides — resolves exactly as it always has: claude on slot
+    // one, codex leading from slot two.
+    let config = format!(
+        "lead = \"codex\"\n[claude]\ncommand = \"{}\"\n[codex]\ncommand = \"{}\"\n",
+        fixtures_dir().join("fake-claude").display(),
+        fixtures_dir().join("fake-codex").display(),
+    );
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        claude_cmd: None,
+        codex_cmd: None,
+        config_extra: config,
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["lead_slot"], "two");
+    assert_eq!(ready["one"]["harness"], "claude");
+    assert_eq!(ready["one"]["name"], "Claude");
+    assert_eq!(ready["two"]["harness"], "codex");
+
+    core.submit("t1", "hi");
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(find(&events, "message.final").unwrap()["speaker"], "two");
+}
+
+#[test]
+fn slot_config_selects_harnesses_and_lead() {
+    let config = format!(
+        "lead = \"two\"\n[slot.one]\nharness = \"claude\"\ncommand = \"{}\"\n[slot.two]\nharness = \"codex\"\ncommand = \"{}\"\n",
+        fixtures_dir().join("fake-claude").display(),
+        fixtures_dir().join("fake-codex").display(),
+    );
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        claude_cmd: None,
+        codex_cmd: None,
+        config_extra: config,
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["lead_slot"], "two");
+    assert_eq!(ready["one"]["harness"], "claude");
+    assert_eq!(ready["two"]["harness"], "codex");
+
+    core.submit("t1", "hi");
+    let events = core.events_until("turn.completed", LONG);
+    let text = find(&events, "message.final").unwrap()["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("fake-codex"), "codex must lead: {text}");
+}
+
+#[test]
+fn same_harness_team_launches_with_slot_qualified_names() {
+    let fake_codex = fixtures_dir().join("fake-codex").display().to_string();
+    let config = format!(
+        "lead = \"one\"\n[slot.one]\nharness = \"codex\"\ncommand = \"{fake_codex}\"\n[slot.two]\nharness = \"codex\"\ncommand = \"{fake_codex}\"\n",
+    );
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        claude_cmd: None,
+        codex_cmd: None,
+        config_extra: config,
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["one"]["harness"], "codex");
+    assert_eq!(ready["two"]["harness"], "codex");
+    assert_eq!(ready["one"]["name"], "Codex (one)");
+    assert_eq!(ready["two"]["name"], "Codex (two)");
+    assert_eq!(ready["lead_slot"], "one");
+
+    // A full consult round works with both slots on the same harness.
+    core.submit("t1", "SCENARIO:consult compare notes");
+    let events = core.events_until("turn.completed", LONG);
+    let completed = find(&events, "consult.completed").unwrap();
+    assert_eq!(completed["slot"], "two");
+    assert!(completed["text"]
+        .as_str()
+        .unwrap()
+        .contains("fake-codex reply"));
+    assert_eq!(find(&events, "message.final").unwrap()["speaker"], "team");
+}
+
+#[test]
+fn slot_env_override_beats_legacy_env_override() {
+    // MIX2_SLOT_TWO_CMD wins over MIX2_CODEX_CMD; if it didn't, slot two
+    // would point at a nonexistent binary and startup would be fatal.
+    let core = Core::start(CoreOptions {
+        codex_cmd: Some("/nonexistent/codex-binary".into()),
+        env: vec![(
+            "MIX2_SLOT_TWO_CMD".into(),
+            fixtures_dir().join("fake-codex").display().to_string(),
+        )],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    assert_eq!(find(&startup, "ready").unwrap()["two"]["harness"], "codex");
+}
+
+#[test]
+fn mixed_config_prefers_slot_values_and_warns() {
+    // The legacy [codex] section points at a broken binary; the slot table
+    // overrides it. Startup succeeding proves precedence, and the conflict
+    // is surfaced as a warning right after ready.
+    let config = format!(
+        "[codex]\ncommand = \"/nonexistent/codex-binary\"\n[slot.two]\ncommand = \"{}\"\n[slot.one]\ncommand = \"{}\"\n",
+        fixtures_dir().join("fake-codex").display(),
+        fixtures_dir().join("fake-claude").display(),
+    );
+    let core = Core::start(CoreOptions {
+        lead: None,
+        claude_cmd: None,
+        codex_cmd: None,
+        config_extra: config,
+        ..CoreOptions::default()
+    });
+    let events = core.events_until("warning", LONG);
+    assert!(find(&events, "ready").is_some(), "warnings follow ready");
+    let warning = find(&events, "warning").unwrap()["message"]
+        .as_str()
+        .unwrap();
+    assert!(
+        warning.contains("[slot.two] command overrides"),
+        "got: {warning}"
+    );
 }
 
 fn extract_marker(text: &str, key: &str) -> String {

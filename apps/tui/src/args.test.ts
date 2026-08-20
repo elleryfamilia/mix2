@@ -50,8 +50,18 @@ describe('parseArgs', () => {
     }
   });
 
-  it('rejects unknown options and bad leads with exit code 2', () => {
+  it('rejects unknown options with exit code 2', () => {
     expect(parseArgs(['--bogus'])).toMatchObject({ kind: 'exit', code: 2 });
-    expect(parseArgs(['--lead', 'gemini'])).toMatchObject({ kind: 'exit', code: 2 });
+  });
+
+  it('passes lead values through — the core registry owns validation', () => {
+    expect(parseArgs(['--lead', 'one'])).toMatchObject({
+      kind: 'run',
+      args: { lead: 'one' },
+    });
+    expect(parseArgs(['--lead', 'gemini'])).toMatchObject({
+      kind: 'run',
+      args: { lead: 'gemini' },
+    });
   });
 });

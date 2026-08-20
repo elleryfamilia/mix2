@@ -11,7 +11,8 @@ Usage:
   mix2 update          Update to the latest release
 
 Options:
-  -l, --lead <agent>   Lead agent: claude or codex (default: configured, else claude)
+  -l, --lead <slot>    Lead slot: one or two; agent names like claude/codex
+                       also work while unambiguous (default: configured)
       --cwd <path>     Project directory (default: current directory)
       --debug          Verbose runtime logging (IPC log in /tmp/mix2)
       --core <path>    Path to the mix2-core binary
@@ -77,12 +78,8 @@ export function parseArgs(argv: string[]): ParseResult {
         return { kind: 'exit', code: 2, stderr: `unknown option: ${arg}\n\n${HELP}` };
     }
   }
-  if (args.lead && !['claude', 'codex'].includes(args.lead)) {
-    return {
-      kind: 'exit',
-      code: 2,
-      stderr: `invalid --lead '${args.lead}' (expected claude or codex)\n`,
-    };
-  }
+  // --lead values are passed through as-is: the core's registry owns
+  // harness-name validation, so its error text always reflects what is
+  // actually registered (surfaced as a fatal event before ready).
   return { kind: 'run', args };
 }

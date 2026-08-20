@@ -16,7 +16,7 @@ struct Cli {
 enum Cmd {
     /// Serve the JSONL IPC protocol on stdin/stdout (default).
     Serve {
-        /// Lead agent: claude or codex.
+        /// Lead slot: one or two (a harness name works while unambiguous).
         #[arg(short, long)]
         lead: Option<String>,
         /// Project working directory.

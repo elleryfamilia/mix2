@@ -6,8 +6,16 @@ use std::path::{Path, PathBuf};
 
 /// User configuration, loaded from `~/.config/mix2/config.toml`
 /// (respecting `$XDG_CONFIG_HOME`). Everything is optional; precedence is
-/// CLI > user config > defaults. Project-level config can slot in between
-/// later without changing this shape.
+/// CLI > user config > defaults.
+///
+/// Two schemas coexist and are never auto-migrated:
+/// - canonical, slot-keyed: `lead = "one"` plus `[slot.one]`/`[slot.two]`
+///   tables choosing a harness (and optional command/model) per slot;
+/// - legacy, harness-keyed: `lead = "claude"` plus `[claude]`/`[codex]`
+///   sections. An unchanged legacy file resolves exactly as it always has.
+///
+/// Per-slot precedence: slot values > the legacy section matching the
+/// slot's harness > the registry's descriptor default.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FileConfig {
@@ -18,6 +26,8 @@ pub struct FileConfig {
     pub claude: ProviderConfig,
     #[serde(default)]
     pub codex: ProviderConfig,
+    #[serde(default)]
+    pub slot: SlotTables,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -26,11 +36,30 @@ pub struct CollaborationConfig {
     pub max_consults_per_turn: Option<u32>,
 }
 
+/// Legacy harness-keyed section (`[claude]` / `[codex]`).
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     pub command: Option<String>,
     /// Model override passed to the CLI; None uses the provider's default.
+    pub model: Option<String>,
+}
+
+/// Canonical slot-keyed tables (`[slot.one]` / `[slot.two]`).
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SlotTables {
+    pub one: Option<SlotEntry>,
+    pub two: Option<SlotEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SlotEntry {
+    /// Which harness backs the slot; defaults to the slot's legacy pairing
+    /// (one = claude, two = codex).
+    pub harness: Option<String>,
+    pub command: Option<String>,
     pub model: Option<String>,
 }
 
@@ -41,16 +70,17 @@ pub struct SlotSettings {
     pub model: Option<String>,
 }
 
-/// Fully-resolved runtime configuration. The legacy config syntax names
-/// harnesses, but it resolves to slots here: slot one is Claude, slot two is
-/// Codex, and `lead = "codex"` picks slot two as lead. Everything downstream
-/// keys on [`SlotId`].
+/// Fully-resolved runtime configuration. Everything downstream keys on
+/// [`SlotId`].
 #[derive(Debug, Clone)]
 pub struct Config {
     pub team: Team,
     pub one: SlotSettings,
     pub two: SlotSettings,
     pub max_consults_per_turn: u32,
+    /// Non-fatal configuration conflicts (a slot value shadowing a
+    /// differing legacy value), surfaced as warning events at startup.
+    pub warnings: Vec<String>,
 }
 
 pub const DEFAULT_MAX_CONSULTS: u32 = 2;
@@ -65,45 +95,90 @@ impl Config {
 
     /// Resolve from an optional CLI lead override plus a parsed config file.
     pub fn resolve(cli_lead: Option<&str>, file: &FileConfig) -> Result<Self> {
-        let lead_str = cli_lead
-            .map(str::to_owned)
-            .or_else(|| file.lead.clone())
-            .unwrap_or_else(|| "claude".to_owned());
-        let lead_harness: HarnessKind = lead_str
-            .parse()
-            .map_err(|e: String| anyhow::anyhow!("invalid lead: {e}"))?;
-        let team = Team {
-            one: HarnessKind::Claude,
-            two: HarnessKind::Codex,
-            lead: match lead_harness {
-                HarnessKind::Claude => SlotId::One,
-                HarnessKind::Codex => SlotId::Two,
+        let mut warnings = Vec::new();
+
+        let harness_for =
+            |slot: SlotId, entry: Option<&SlotEntry>, default: HarnessKind| match entry
+                .and_then(|e| e.harness.as_deref())
+            {
+                Some(name) => registry::harness_named(name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "invalid [slot.{slot}] harness: {}",
+                        registry::unknown_harness_message(name)
+                    )
+                }),
+                None => Ok(default),
+            };
+        let one_harness = harness_for(SlotId::One, file.slot.one.as_ref(), HarnessKind::Claude)?;
+        let two_harness = harness_for(SlotId::Two, file.slot.two.as_ref(), HarnessKind::Codex)?;
+
+        let legacy_for = |harness: HarnessKind| match harness {
+            HarnessKind::Claude => &file.claude,
+            HarnessKind::Codex => &file.codex,
+        };
+
+        let mut settings_for = |slot: SlotId,
+                                harness: HarnessKind,
+                                entry: Option<&SlotEntry>|
+         -> SlotSettings {
+            let legacy = legacy_for(harness);
+            let conflict = |slot_value: &Option<String>, legacy_value: &Option<String>| matches!((slot_value, legacy_value), (Some(s), Some(l)) if s != l);
+            let slot_command = entry.and_then(|e| e.command.clone());
+            if conflict(&slot_command, &legacy.command) {
+                warnings.push(format!(
+                    "config: [slot.{slot}] command overrides the [{harness}] command"
+                ));
+            }
+            let slot_model = entry.and_then(|e| e.model.clone());
+            if conflict(&slot_model, &legacy.model) {
+                warnings.push(format!(
+                    "config: [slot.{slot}] model overrides the [{harness}] model"
+                ));
+            }
+            SlotSettings {
+                command: slot_command
+                    .or_else(|| legacy.command.clone())
+                    .unwrap_or_else(|| registry::descriptor(harness).default_command.to_owned()),
+                model: slot_model.or_else(|| legacy.model.clone()),
+            }
+        };
+        let one = settings_for(SlotId::One, one_harness, file.slot.one.as_ref());
+        let two = settings_for(SlotId::Two, two_harness, file.slot.two.as_ref());
+
+        // Lead: `one`/`two` canonical; a harness name still works while
+        // exactly one slot runs it. The default stays slot one (claude in
+        // an unchanged legacy setup).
+        let shape = Team {
+            one: one_harness,
+            two: two_harness,
+            lead: SlotId::One,
+        };
+        let lead = match cli_lead.map(str::to_owned).or_else(|| file.lead.clone()) {
+            None => SlotId::One,
+            Some(name) => match shape.slot_named(&name) {
+                Some(slot) => slot,
+                None if registry::harness_named(&name).is_some() => anyhow::bail!(
+                    "invalid lead: '{name}' does not name exactly one slot on this team — use 'one' or 'two'"
+                ),
+                None => anyhow::bail!(
+                    "invalid lead: unknown slot '{name}' (expected 'one', 'two', or a harness name)"
+                ),
             },
         };
-        let default_command =
-            |harness: HarnessKind| registry::descriptor(harness).default_command.to_owned();
+
         Ok(Self {
-            one: SlotSettings {
-                command: file
-                    .claude
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| default_command(team.one)),
-                model: file.claude.model.clone(),
+            team: Team {
+                one: one_harness,
+                two: two_harness,
+                lead,
             },
-            two: SlotSettings {
-                command: file
-                    .codex
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| default_command(team.two)),
-                model: file.codex.model.clone(),
-            },
-            team,
+            one,
+            two,
             max_consults_per_turn: file
                 .collaboration
                 .max_consults_per_turn
                 .unwrap_or(DEFAULT_MAX_CONSULTS),
+            warnings,
         })
     }
 }
@@ -140,6 +215,8 @@ mod tests {
         toml::from_str(s).expect("valid toml")
     }
 
+    // ---------------------------------------------------------- legacy-only
+
     #[test]
     fn default_lead_is_slot_one_claude() {
         let cfg = Config::resolve(None, &FileConfig::default()).unwrap();
@@ -150,14 +227,24 @@ mod tests {
         assert_eq!(cfg.max_consults_per_turn, DEFAULT_MAX_CONSULTS);
         assert_eq!(cfg.one.command, "claude");
         assert_eq!(cfg.two.command, "codex");
+        assert!(cfg.warnings.is_empty());
     }
 
     #[test]
-    fn file_lead_resolves_to_slot_two() {
-        let cfg = Config::resolve(None, &parse("lead = \"codex\"")).unwrap();
+    fn legacy_file_resolves_identically() {
+        let cfg = Config::resolve(
+            None,
+            &parse(
+                "lead = \"codex\"\n[claude]\ncommand = \"/custom/claude\"\nmodel = \"sonnet\"\n[codex]\ncommand = \"/custom/codex\"",
+            ),
+        )
+        .unwrap();
         assert_eq!(cfg.team.lead, SlotId::Two);
         assert_eq!(cfg.team.lead_harness(), HarnessKind::Codex);
-        assert_eq!(cfg.team.teammate_harness(), HarnessKind::Claude);
+        assert_eq!(cfg.slot(SlotId::One).command, "/custom/claude");
+        assert_eq!(cfg.slot(SlotId::One).model.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.slot(SlotId::Two).command, "/custom/codex");
+        assert!(cfg.warnings.is_empty());
     }
 
     #[test]
@@ -170,24 +257,7 @@ mod tests {
     fn invalid_lead_rejected() {
         let err = Config::resolve(Some("gemini"), &FileConfig::default()).unwrap_err();
         assert!(err.to_string().contains("invalid lead"));
-    }
-
-    #[test]
-    fn provider_command_override_lands_on_slots() {
-        let cfg = Config::resolve(
-            None,
-            &parse("[claude]\ncommand = \"/custom/claude\"\n[codex]\ncommand = \"/custom/codex\""),
-        )
-        .unwrap();
-        assert_eq!(cfg.slot(SlotId::One).command, "/custom/claude");
-        assert_eq!(cfg.slot(SlotId::Two).command, "/custom/codex");
-    }
-
-    #[test]
-    fn provider_model_override_lands_on_slots() {
-        let cfg = Config::resolve(None, &parse("[claude]\nmodel = \"sonnet\"")).unwrap();
-        assert_eq!(cfg.slot(SlotId::One).model.as_deref(), Some("sonnet"));
-        assert_eq!(cfg.slot(SlotId::Two).model, None);
+        assert!(err.to_string().contains("'one', 'two'"));
     }
 
     #[test]
@@ -195,5 +265,122 @@ mod tests {
         let cfg =
             Config::resolve(None, &parse("[collaboration]\nmax_consults_per_turn = 1")).unwrap();
         assert_eq!(cfg.max_consults_per_turn, 1);
+    }
+
+    // ------------------------------------------------------------- new-only
+
+    #[test]
+    fn slot_schema_selects_harnesses_and_lead() {
+        let cfg = Config::resolve(
+            None,
+            &parse(
+                "lead = \"two\"\n[slot.one]\nharness = \"codex\"\ncommand = \"/x\"\n[slot.two]\nharness = \"claude\"\nmodel = \"opus\"",
+            ),
+        )
+        .unwrap();
+        assert_eq!(cfg.team.one, HarnessKind::Codex);
+        assert_eq!(cfg.team.two, HarnessKind::Claude);
+        assert_eq!(cfg.team.lead, SlotId::Two);
+        assert_eq!(cfg.slot(SlotId::One).command, "/x");
+        // No slot/legacy command: descriptor default for the slot's harness.
+        assert_eq!(cfg.slot(SlotId::Two).command, "claude");
+        assert_eq!(cfg.slot(SlotId::Two).model.as_deref(), Some("opus"));
+        assert!(cfg.warnings.is_empty());
+    }
+
+    #[test]
+    fn same_harness_team_is_expressible() {
+        let cfg = Config::resolve(
+            None,
+            &parse(
+                "lead = \"two\"\n[slot.one]\nharness = \"codex\"\n[slot.two]\nharness = \"codex\"",
+            ),
+        )
+        .unwrap();
+        assert_eq!(cfg.team.one, HarnessKind::Codex);
+        assert_eq!(cfg.team.two, HarnessKind::Codex);
+        assert_eq!(cfg.team.lead, SlotId::Two);
+    }
+
+    #[test]
+    fn slot_entry_without_harness_keeps_the_legacy_pairing() {
+        let cfg = Config::resolve(None, &parse("[slot.two]\nmodel = \"gpt-5\"")).unwrap();
+        assert_eq!(cfg.team.two, HarnessKind::Codex);
+        assert_eq!(cfg.slot(SlotId::Two).model.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn unknown_slot_harness_is_a_registry_error() {
+        let err = Config::resolve(None, &parse("[slot.one]\nharness = \"gemini\"")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("[slot.one]"), "{msg}");
+        assert!(msg.contains("unknown harness 'gemini'"), "{msg}");
+        assert!(msg.contains("claude, codex"), "{msg}");
+    }
+
+    // ---------------------------------------------------------------- mixed
+
+    #[test]
+    fn slot_values_shadow_legacy_with_a_warning() {
+        let cfg = Config::resolve(
+            None,
+            &parse(
+                "[claude]\ncommand = \"/legacy\"\nmodel = \"sonnet\"\n[slot.one]\ncommand = \"/slot\"\nmodel = \"opus\"",
+            ),
+        )
+        .unwrap();
+        assert_eq!(cfg.slot(SlotId::One).command, "/slot");
+        assert_eq!(cfg.slot(SlotId::One).model.as_deref(), Some("opus"));
+        assert_eq!(cfg.warnings.len(), 2);
+        assert!(cfg.warnings[0].contains("[slot.one] command overrides"));
+        assert!(cfg.warnings[1].contains("[slot.one] model overrides"));
+    }
+
+    #[test]
+    fn identical_slot_and_legacy_values_do_not_warn() {
+        let cfg = Config::resolve(
+            None,
+            &parse("[claude]\ncommand = \"/same\"\n[slot.one]\ncommand = \"/same\""),
+        )
+        .unwrap();
+        assert!(cfg.warnings.is_empty());
+    }
+
+    #[test]
+    fn legacy_section_matches_by_harness_not_by_slot() {
+        // Slot one runs codex, so the [codex] section feeds it.
+        let cfg = Config::resolve(
+            None,
+            &parse("[codex]\ncommand = \"/cc\"\n[slot.one]\nharness = \"codex\""),
+        )
+        .unwrap();
+        assert_eq!(cfg.slot(SlotId::One).command, "/cc");
+    }
+
+    // ---------------------------------------------------- lead disambiguation
+
+    #[test]
+    fn legacy_lead_name_resolves_only_when_unambiguous() {
+        let cfg = Config::resolve(None, &parse("lead = \"codex\"")).unwrap();
+        assert_eq!(cfg.team.lead, SlotId::Two);
+
+        let err = Config::resolve(
+            Some("codex"),
+            &parse("[slot.one]\nharness = \"codex\"\n[slot.two]\nharness = \"codex\""),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("does not name exactly one slot"), "{msg}");
+        assert!(msg.contains("use 'one' or 'two'"), "{msg}");
+    }
+
+    #[test]
+    fn canonical_lead_slots_always_resolve() {
+        let cfg = Config::resolve(
+            Some("two"),
+            &parse("[slot.one]\nharness = \"codex\"\n[slot.two]\nharness = \"codex\""),
+        )
+        .unwrap();
+        assert_eq!(cfg.team.lead, SlotId::Two);
     }
 }
