@@ -9,7 +9,7 @@
 export const REPO = 'elleryfamilia/mix2';
 export const LATEST_RELEASE_URL = `https://github.com/${REPO}/releases/latest`;
 /** The README's install command — the manual fallback when self-update can't. */
-export const INSTALL_ONE_LINER = `curl -fsSL https://raw.githubusercontent.com/${REPO}/feat/mvp/install.sh | sh`;
+export const INSTALL_ONE_LINER = `curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh`;
 
 export interface Release {
   /** Git tag, e.g. `v0.4.0`. */

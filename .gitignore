@@ -13,3 +13,5 @@ CLAUDE.local.md
 .loadout/logs/
 .loadout/local.toml
 .claude/commands/loadout/
+.cursor/rules/loadout.mdc
+.cursor/skills/loadout/

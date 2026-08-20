@@ -1,7 +1,7 @@
 #!/bin/sh
 # mix2 installer — https://github.com/elleryfamilia/mix2
 #
-#   curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/feat/mvp/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/main/install.sh | sh
 #
 # Downloads a release for this platform, verifies its checksum, installs it
 # to ~/.local/share/mix2, and links ~/.local/bin/mix2. `mix2 update` runs
