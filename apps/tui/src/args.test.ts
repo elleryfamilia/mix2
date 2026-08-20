@@ -14,6 +14,17 @@ describe('parseArgs', () => {
     });
   });
 
+  it('rejects a value-taking flag with no value', () => {
+    for (const flag of ['--lead', '-l', '--cwd', '--core']) {
+      const r = parseArgs([flag]);
+      expect(r.kind).toBe('exit');
+      if (r.kind === 'exit') {
+        expect(r.code).toBe(2);
+        expect(r.stderr).toContain(`missing value for ${flag}`);
+      }
+    }
+  });
+
   it('recognises the update subcommand', () => {
     expect(parseArgs(['update'])).toEqual({ kind: 'update' });
   });

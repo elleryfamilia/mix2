@@ -55,6 +55,17 @@ describe('offerUpdateAtStartup', () => {
     expect(readCache(cachePath)).toBeUndefined();
   });
 
+  it('still checks when MIX2_NO_UPDATE_CHECK is an off value', async () => {
+    for (const value of ['0', 'false', '']) {
+      // Each iteration writes the daily-check cache; clear it so the next
+      // one is throttle-free.
+      rmSync(cachePath, { force: true });
+      const { d } = deps({ env: { MIX2_NO_UPDATE_CHECK: value } });
+      await offerUpdateAtStartup([], d);
+      expect(d.fetchLatest, `value ${JSON.stringify(value)}`).toHaveBeenCalled();
+    }
+  });
+
   it('does nothing when not attached to a terminal', async () => {
     const { d } = deps({ interactive: false });
     await expect(offerUpdateAtStartup([], d)).resolves.toEqual({ action: 'continue' });

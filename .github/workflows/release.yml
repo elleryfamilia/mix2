@@ -40,7 +40,9 @@ jobs:
         run: |
           set -eu
           tag="${GITHUB_REF_NAME#v}"
-          cargo="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          # Anchored to [workspace.package]: a plain first-match grab could
+          # pick up a dependency's version line instead.
+          cargo="$(awk -F'"' '/^\[workspace\.package\]$/{f=1; next} /^\[/{f=0} f && /^version = /{print $2; exit}' Cargo.toml)"
           pkg="$(node -p 'require("./apps/tui/package.json").version')"
           ts="$(sed -n "s/^export const VERSION = '\(.*\)';/\1/p" apps/tui/src/version.ts)"
           echo "tag=$tag cargo=$cargo package.json=$pkg version.ts=$ts"
