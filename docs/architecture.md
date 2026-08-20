@@ -2,11 +2,14 @@
 
 ```text
         Ink UI  (apps/tui — TypeScript, React, Ink)
-            ↕  JSONL over stdin/stdout (protocol v1)
+            ↕  JSONL over stdin/stdout (protocol v3)
         Rust core  (crates/mix2-core)
           ↙                      ↘
-   claude CLI                codex CLI
-   (lead or teammate)        (teammate or lead)
+    slot one CLI             slot two CLI
+   (lead or teammate)      (teammate or lead)
+
+   each slot runs any registered harness:
+   claude · codex · cursor-agent · opencode · copilot
 ```
 
 The TypeScript layer is presentation: rendering, input, interaction state.
