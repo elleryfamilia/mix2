@@ -620,6 +620,17 @@ describe('same-harness team', () => {
     const lines = text(s, twinCtx);
     expect(lines.some((l) => l.includes('● codex (one)') && l.includes('plan A'))).toBe(true);
     expect(lines.some((l) => l.includes('○ codex (two)') && l.includes('plan B'))).toBe(true);
+    // Labels longer than the minimum name field widen the shared column
+    // instead of pushing the row past the frame: arrows stay right-aligned
+    // at the content edge (width 100 caps to MAX_CONTENT_WIDTH, 92).
+    const shipped = lines.find((l) => l.includes('← shipped'));
+    expect(shipped).toHaveLength(92);
+    expect(shipped!.endsWith('shipped')).toBe(true);
+    const aside = lines.find((l) => l.includes('→ set aside'));
+    expect(aside).toHaveLength(92);
+    for (const line of lines) {
+      expect(displayWidth(line)).toBeLessThanOrEqual(92);
+    }
   });
 });
 

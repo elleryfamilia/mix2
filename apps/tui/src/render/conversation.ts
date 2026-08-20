@@ -153,13 +153,11 @@ function chip(label: string, bg: string, fg: string): Span {
 
 // ----------------------------------------------------------- stance block
 
-// Width of the glyph+name field a stance row shares with the team row
-// below it, so their positions line up: "claude"/"codex"/"team" all fit
-// with room to spare.
+// Minimum width of the glyph+name field a stance row shares with the team
+// row below it, so their positions line up: "claude"/"codex"/"team" all fit
+// with room to spare. Longer labels (same-harness names like "codex (one)")
+// widen the shared field instead of overflowing the row.
 const STANCE_NAME_WIDTH = 9;
-// Columns spent before a row's position text starts: 2-space indent, the
-// glyph, and the padded name field (its own leading space + the field).
-const STANCE_PREFIX_WIDTH = INDENT + 1 + 1 + STANCE_NAME_WIDTH;
 // Minimum columns always kept between a truncated position and its arrow.
 const STANCE_MIN_GAP = 2;
 
@@ -169,8 +167,8 @@ export const STANCE_ARROWS: Record<Stance['outcome'], string> = {
   dropped: '→ set aside',
 };
 
-function stanceNameField(name: string): string {
-  return ' ' + name.padEnd(STANCE_NAME_WIDTH);
+function stanceNameField(name: string, fieldWidth: number): string {
+  return ' ' + name.padEnd(fieldWidth);
 }
 
 /** Right-aligns `right` against `left` like `spread`, but measures both by
@@ -192,27 +190,34 @@ function stanceSpread(left: Line, right: Line, width: number): Line {
  * docs/superpowers/plans/2026-08-15-disagreement-layer-spec.md. */
 function stanceLines(d: Disagreement, ctx: RenderContext): Line[] {
   const width = Math.min(ctx.width, MAX_CONTENT_WIDTH);
+  // One shared name-field width per block, sized to the longest label, so
+  // the position column stays aligned and the row math never overflows.
+  const labels = d.stances.map((s) => slotLabel(ctx, s.slot));
+  const nameWidth = Math.max(STANCE_NAME_WIDTH, ...labels.map((l) => displayWidth(l)));
+  // Columns spent before a row's position text starts: 2-space indent, the
+  // glyph, and the padded name field (its own leading space + the field).
+  const prefixWidth = INDENT + 1 + 1 + nameWidth;
   const lines: Line[] = [
     pad(span(`${glyphs.disagree} where we split`, { color: theme.agent.team, bold: true })),
   ];
-  for (const stance of d.stances) {
+  d.stances.forEach((stance, i) => {
     const arrow = STANCE_ARROWS[stance.outcome];
-    const room = Math.max(0, width - STANCE_PREFIX_WIDTH - displayWidth(arrow) - STANCE_MIN_GAP);
+    const room = Math.max(0, width - prefixWidth - displayWidth(arrow) - STANCE_MIN_GAP);
     const left = pad(
       span(agentGlyph(stance.slot), { color: agentColor(stance.slot) }),
-      span(stanceNameField(slotLabel(ctx, stance.slot)), {
+      span(stanceNameField(labels[i]!, nameWidth), {
         color: agentColor(stance.slot),
         bold: true,
       }),
       span(truncateDisplay(stance.position, room), { color: theme.text.secondary }),
     );
     lines.push(stanceSpread(left, [span(arrow, { color: theme.text.faint })], width));
-  }
-  const teamRoom = Math.max(0, width - STANCE_PREFIX_WIDTH);
+  });
+  const teamRoom = Math.max(0, width - prefixWidth);
   lines.push(
     pad(
       span(agentGlyph('team'), { color: agentColor('team') }),
-      span(stanceNameField('team'), { color: agentColor('team'), bold: true }),
+      span(stanceNameField('team', nameWidth), { color: agentColor('team'), bold: true }),
       span(truncateDisplay(d.resolution, teamRoom), { color: theme.text.secondary }),
     ),
   );
