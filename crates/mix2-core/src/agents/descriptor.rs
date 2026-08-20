@@ -62,6 +62,10 @@ pub enum AuthProbe {
     JsonLoggedIn { args: &'static [&'static str] },
     /// Run the CLI with `args`; exit 0 means signed in, non-zero signed out.
     ExitStatus { args: &'static [&'static str] },
+    /// Run the CLI with `args` to inventory stored credentials; success
+    /// proves configuration, not live validity, so it maps to `Configured`
+    /// and never to `Authenticated` or `Unauthenticated`.
+    CredentialInventory { args: &'static [&'static str] },
     /// No quota-free probe exists; auth state is `Unsupported` and runtime
     /// failures must surface cleanly instead (never trial prompts).
     None,
@@ -118,8 +122,12 @@ pub struct Descriptor {
     pub prompt_in_args: bool,
     pub capabilities: Capabilities,
     /// Curated models for the /model picker; empty means "provider default
-    /// only". Swapped for live discovery when a CLI grows a listing command.
+    /// only". When `models_args` is set this is only the fallback.
     pub known_models: &'static [&'static str],
+    /// Arguments of a live model-listing command (e.g. `models`). The
+    /// runner fetches it bounded at startup; failure falls back to
+    /// `known_models` and never marks the harness unavailable.
+    pub models_args: Option<&'static [&'static str]>,
     /// Arguments of the version probe (typically `--version`).
     pub version_args: &'static [&'static str],
     /// Extract the version line from the probe's stdout.

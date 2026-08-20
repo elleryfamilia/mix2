@@ -13,7 +13,7 @@ import { z } from 'zod';
 export const PROTOCOL_VERSION = 3;
 
 const slotId = z.enum(['one', 'two']);
-const harnessKind = z.enum(['claude', 'codex', 'cursor']);
+const harnessKind = z.enum(['claude', 'codex', 'cursor', 'opencode']);
 const agentRole = z.enum(['lead', 'teammate']);
 const speaker = z.enum(['one', 'two', 'team']);
 const authState = z.enum([

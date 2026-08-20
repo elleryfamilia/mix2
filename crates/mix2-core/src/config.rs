@@ -169,7 +169,7 @@ impl Config {
             match harness {
                 HarnessKind::Claude => Some(&file.claude),
                 HarnessKind::Codex => Some(&file.codex),
-                HarnessKind::Cursor => None,
+                HarnessKind::Cursor | HarnessKind::Opencode => None,
             }
         };
 

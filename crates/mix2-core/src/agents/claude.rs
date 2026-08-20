@@ -42,6 +42,7 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     // The documented `--model` aliases (each resolves to the latest in its
     // family), plus explicit latest names.
     known_models: &["fable", "opus", "sonnet", "haiku"],
+    models_args: None,
     version_args: &["--version"],
     parse_version,
     // `claude auth status` prints JSON with a `loggedIn` field.

@@ -283,6 +283,10 @@ impl Runtime {
 
         let one_agent = build_agent(team.one, one_command);
         let two_agent = build_agent(team.two, two_command);
+        // Model lists in parallel with everything else that gates ready;
+        // live enumeration is bounded and quota-free, and failure falls
+        // back to the curated list inside the agent.
+        let (one_models, two_models) = tokio::join!(one_agent.models(), two_agent.models());
 
         fn ready_for_duty(probe: &discovery::Probe) -> bool {
             probe.version.is_some() && probe.auth != AuthState::Unauthenticated
@@ -359,7 +363,7 @@ impl Runtime {
             reason: None,
             auth: one_probe.auth,
             model: config.selection_model(SlotId::One, team.one),
-            models: one_agent.known_models(),
+            models: one_models,
         };
         let two_info = AgentInfo {
             slot: SlotId::Two,
@@ -370,7 +374,7 @@ impl Runtime {
             reason: None,
             auth: two_probe.auth,
             model: config.selection_model(SlotId::Two, team.two),
-            models: two_agent.known_models(),
+            models: two_models,
         };
 
         Ok(Self {

@@ -8,13 +8,19 @@ use super::descriptor::Descriptor;
 use super::HarnessKind;
 
 /// Every registered harness, in display order.
-pub const ALL: [HarnessKind; 3] = [HarnessKind::Claude, HarnessKind::Codex, HarnessKind::Cursor];
+pub const ALL: [HarnessKind; 4] = [
+    HarnessKind::Claude,
+    HarnessKind::Codex,
+    HarnessKind::Cursor,
+    HarnessKind::Opencode,
+];
 
 pub fn descriptor(harness: HarnessKind) -> &'static Descriptor {
     match harness {
         HarnessKind::Claude => &super::claude::DESCRIPTOR,
         HarnessKind::Codex => &super::codex::DESCRIPTOR,
         HarnessKind::Cursor => &super::cursor::DESCRIPTOR,
+        HarnessKind::Opencode => &super::opencode::DESCRIPTOR,
     }
 }
 
@@ -73,7 +79,7 @@ mod tests {
         assert_eq!(harness_named("gemini"), None);
         let msg = unknown_harness_message("gemini");
         assert!(msg.contains("gemini"));
-        assert!(msg.contains("claude, codex, cursor"));
+        assert!(msg.contains("claude, codex, cursor, opencode"));
     }
 
     #[test]

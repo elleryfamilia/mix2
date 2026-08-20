@@ -81,10 +81,16 @@ pub trait Agent: Send + Sync {
     }
 
     /// Models this provider's CLI accepts, for the /model picker. Curated
-    /// per adapter today; swap for a provider discovery call when one
-    /// exists. Empty means "unknown — provider default only".
+    /// per adapter; empty means "unknown — provider default only".
     fn known_models(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// The model list actually offered at startup: live enumeration when
+    /// the CLI supports it (bounded, quota-free), else `known_models`.
+    /// Enumeration failure falls back — it never gates availability.
+    async fn models(&self) -> Vec<String> {
+        self.known_models()
     }
 
     /// Start a fresh provider session.
