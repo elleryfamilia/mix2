@@ -19,8 +19,8 @@ import {
   isEmptySelection,
   type Selection,
 } from '../render/selection.js';
-import { initialState, reduce, type AppState } from '../state/store.js';
-import { glyphs, spinnerFrames, teamSpinnerFrames, theme } from '../theme/theme.js';
+import { initialState, leadInfo, reduce, slotInfo, teammateInfo, type AppState } from '../state/store.js';
+import { glyphs, spinnerFrames, teamSpinnerFrames, theme, type SlotName } from '../theme/theme.js';
 import { copyToClipboard } from '../util/clipboard.js';
 import { Composer, composerHeight } from './Composer.js';
 import {
@@ -106,7 +106,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const width = size.columns;
 
   const { lines, anchors } = useMemo((): { lines: Line[]; anchors: PromptAnchor[] } => {
-    const ctx = { width, spinner, teamGlyph, now: Date.now() };
+    const names = state.session
+      ? { one: state.session.one.name, two: state.session.two.name }
+      : undefined;
+    const ctx = { width, spinner, teamGlyph, now: Date.now(), names };
     if (modelPanel && state.session) {
       return { lines: renderModelPanel(state.session, modelPanel, width), anchors: [] };
     }
@@ -228,6 +231,19 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     dispatch({ type: 'local-notice', text: 'nothing to copy yet' });
   };
 
+  /** Resolve a user-typed participant word to a slot: `one`/`two` always;
+   * a harness name or display name while exactly one slot matches it. */
+  const resolveSlotWord = (word: string): SlotName | null => {
+    if (word === 'one' || word === 'two') return word;
+    const session = state.session;
+    if (!session) return null;
+    const matches = (['one', 'two'] as const).filter((slot) => {
+      const info = slotInfo(session, slot);
+      return info.harness === word || info.name.toLowerCase() === word;
+    });
+    return matches.length === 1 ? matches[0]! : null;
+  };
+
   const runSlashCommand = (text: string) => {
     const command = text.slice(1).split(/\s+/)[0]?.toLowerCase() ?? '';
     setEditor(emptyEditor);
@@ -247,13 +263,17 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           setModelPanel({ column: 0, index: 0 });
           return;
         }
-        if (agent !== 'claude' && agent !== 'codex') {
-          dispatch({ type: 'local-notice', text: `unknown agent '${agent}' — /model claude <name> or /model codex <name>` });
+        const slot = resolveSlotWord(agent.toLowerCase());
+        if (!slot) {
+          dispatch({
+            type: 'local-notice',
+            text: `unknown agent '${agent}' — /model one <name> or /model two <name> (agent names work too)`,
+          });
           return;
         }
         client.send({
           type: 'set_model',
-          agent,
+          slot,
           model: !model || model === 'default' ? null : model,
         });
         return;
@@ -341,7 +361,8 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
 
     if (modelPanel && state.session) {
       const session = state.session;
-      const infoFor = (column: 0 | 1) => (column === 0 ? session.lead : session.teammate);
+      const infoFor = (column: 0 | 1) =>
+        column === 0 ? leadInfo(session) : teammateInfo(session);
       const entryCount = (column: 0 | 1) => modelEntries(infoFor(column).models ?? []).length;
       // Functional updates: batched key events must each see the latest
       // cursor, not the snapshot from this render.
@@ -366,7 +387,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
             if (entry) {
               client.send({
                 type: 'set_model',
-                agent: info.kind,
+                slot: info.slot,
                 model: entry === PROVIDER_DEFAULT ? null : entry,
               });
             }

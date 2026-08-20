@@ -4,16 +4,9 @@
  * Hidden model reasoning is never available here — only written output.
  */
 import type { Stance } from '../ipc/protocol.js';
-import type { AppState, ConsultState } from '../state/store.js';
-import { formatElapsed } from '../state/store.js';
-import {
-  MAX_CONTENT_WIDTH,
-  agentColor,
-  agentGlyph,
-  displayName,
-  glyphs,
-  theme,
-} from '../theme/theme.js';
+import type { AppState, ConsultState, SessionInfo } from '../state/store.js';
+import { formatElapsed, otherSlot, speakerLabel, teammateInfo } from '../state/store.js';
+import { MAX_CONTENT_WIDTH, agentColor, agentGlyph, glyphs, theme } from '../theme/theme.js';
 import { STANCE_ARROWS } from './conversation.js';
 import { BLANK, Line, span, spread, truncate, wrapText } from './lines.js';
 
@@ -60,14 +53,15 @@ export function renderTeamPanel(
       }
     : state.lastTurn;
 
-  const lead = session.lead;
-  const teammate = session.teammate;
+  const leadSlot = session.leadSlot;
+  const teammateSlot = otherSlot(leadSlot);
+  const teammate = teammateInfo(session);
 
-  const leadName = lead.kind;
+  const leadName = speakerLabel(session, leadSlot);
   lines.push(
     pad(
-      span(agentGlyph(leadName), { color: agentColor(leadName) }),
-      span(` ${leadName.padEnd(7)}`, { color: agentColor(leadName), bold: true }),
+      span(agentGlyph(leadSlot), { color: agentColor(leadSlot) }),
+      span(` ${leadName.padEnd(7)}`, { color: agentColor(leadSlot), bold: true }),
       span(
         `  ${record ? formatElapsed(record.durationMs) : '—'}${state.turn ? ' active' : ''}   ${
           record ? `${record.toolsCompleted} tool${record.toolsCompleted === 1 ? '' : 's'}` : ''
@@ -76,15 +70,15 @@ export function renderTeamPanel(
       ),
     ),
   );
-  const teammateName = teammate.kind;
+  const teammateName = speakerLabel(session, teammateSlot);
   if (teammate.available) {
     const consults = record?.consults ?? [];
     const teammateMs = consults.reduce((sum, c) => sum + (c.durationMs ?? 0), 0);
     const teammateTools = consults.reduce((sum, c) => sum + c.tools.filter((t) => t.done).length, 0);
     lines.push(
       pad(
-        span(agentGlyph(teammateName), { color: agentColor(teammateName) }),
-        span(` ${teammateName.padEnd(7)}`, { color: agentColor(teammateName), bold: true }),
+        span(agentGlyph(teammateSlot), { color: agentColor(teammateSlot) }),
+        span(` ${teammateName.padEnd(7)}`, { color: agentColor(teammateSlot), bold: true }),
         span(
           `  ${consults.length > 0 ? formatElapsed(teammateMs) : '—'}   ${
             consults.length > 0 ? `${teammateTools} tool${teammateTools === 1 ? '' : 's'}` : 'on standby'
@@ -96,8 +90,8 @@ export function renderTeamPanel(
   } else {
     lines.push(
       pad(
-        span(agentGlyph(teammateName), { color: agentColor(teammateName) }),
-        span(` ${teammateName.padEnd(7)}`, { color: agentColor(teammateName), bold: true }),
+        span(agentGlyph(teammateSlot), { color: agentColor(teammateSlot) }),
+        span(` ${teammateName.padEnd(7)}`, { color: agentColor(teammateSlot), bold: true }),
         span(
           `  offline — ${truncate(teammate.reason ?? 'not found', contentW - 24)}`,
           { color: theme.text.muted },
@@ -119,7 +113,7 @@ export function renderTeamPanel(
   );
 
   if (record?.disagreement) {
-    lines.push(...ledgerLines(record.disagreement, contentW));
+    lines.push(...ledgerLines(record.disagreement, session, contentW));
   }
 
   if (consults.length === 0) {
@@ -131,7 +125,7 @@ export function renderTeamPanel(
   lines.push(BLANK);
   lines.push(pad(span('exchange', { color: theme.text.muted })));
   for (const consult of consults) {
-    lines.push(...exchangeLines(consult, session.lead.kind, contentW));
+    lines.push(...exchangeLines(consult, session, contentW));
   }
 
   for (const consult of done) {
@@ -139,8 +133,8 @@ export function renderTeamPanel(
     lines.push(BLANK);
     lines.push(
       pad(
-        span(`${consult.agent} — consultation ${consult.index} response`, {
-          color: agentColor(consult.agent),
+        span(`${speakerLabel(session, consult.slot)} — consultation ${consult.index} response`, {
+          color: agentColor(consult.slot),
           bold: true,
         }),
         span(consult.durationMs ? `  ${formatElapsed(consult.durationMs)}` : '', {
@@ -165,7 +159,11 @@ export function renderTeamPanel(
  * unlike the conversation view's stance block) plus the team's resolution.
  * Renders whenever a disagreement was recorded, live or settled, even when
  * this turn had no consultations to show above it. */
-function ledgerLines(d: { stances: Stance[]; resolution: string }, contentW: number): Line[] {
+function ledgerLines(
+  d: { stances: Stance[]; resolution: string },
+  session: SessionInfo,
+  contentW: number,
+): Line[] {
   const lines: Line[] = [
     BLANK,
     pad(span(`${glyphs.disagree} disagreement`, { color: theme.agent.team, bold: true })),
@@ -174,8 +172,11 @@ function ledgerLines(d: { stances: Stance[]; resolution: string }, contentW: num
     lines.push(BLANK);
     lines.push(
       pad(
-        span(agentGlyph(stance.agent), { color: agentColor(stance.agent) }),
-        span(` ${stance.agent}`, { color: agentColor(stance.agent), bold: true }),
+        span(agentGlyph(stance.slot), { color: agentColor(stance.slot) }),
+        span(` ${speakerLabel(session, stance.slot)}`, {
+          color: agentColor(stance.slot),
+          bold: true,
+        }),
       ),
     );
     for (const line of wrapText(stance.position, contentW - 2)) {
@@ -196,13 +197,13 @@ function ledgerLines(d: { stances: Stance[]; resolution: string }, contentW: num
   return lines;
 }
 
-function exchangeLines(consult: ConsultState, lead: string, contentW: number): Line[] {
+function exchangeLines(consult: ConsultState, session: SessionInfo, contentW: number): Line[] {
   const out: Line[] = [];
-  const leadName = lead as 'claude' | 'codex';
+  const leadSlot = session.leadSlot;
   if (consult.prompt) {
     out.push(
       pad(
-        span(agentGlyph(leadName), { color: agentColor(leadName) }),
+        span(agentGlyph(leadSlot), { color: agentColor(leadSlot) }),
         span(`  ${truncate(firstLine(consult.prompt), contentW - 4)}`, {
           color: theme.text.secondary,
         }),
@@ -212,7 +213,7 @@ function exchangeLines(consult: ConsultState, lead: string, contentW: number): L
   if (consult.status === 'done' && consult.text) {
     out.push(
       pad(
-        span(agentGlyph(consult.agent), { color: agentColor(consult.agent) }),
+        span(agentGlyph(consult.slot), { color: agentColor(consult.slot) }),
         span(`  ${truncate(firstLine(consult.text), contentW - 4)}`, {
           color: theme.text.secondary,
         }),
@@ -221,7 +222,7 @@ function exchangeLines(consult: ConsultState, lead: string, contentW: number): L
   } else if (consult.status === 'failed') {
     out.push(
       pad(
-        span(agentGlyph(consult.agent), { color: agentColor(consult.agent) }),
+        span(agentGlyph(consult.slot), { color: agentColor(consult.slot) }),
         span(`  failed — ${truncate(consult.message ?? 'unknown', contentW - 14)}`, {
           color: theme.text.muted,
         }),
@@ -230,7 +231,7 @@ function exchangeLines(consult: ConsultState, lead: string, contentW: number): L
   } else if (consult.status === 'running') {
     out.push(
       pad(
-        span(agentGlyph(consult.agent), { color: agentColor(consult.agent) }),
+        span(agentGlyph(consult.slot), { color: agentColor(consult.slot) }),
         span('  reviewing…', { color: theme.text.muted }),
       ),
     );
@@ -247,5 +248,5 @@ function firstLine(text: string): string {
 }
 
 export function teamPanelTitle(state: AppState): string {
-  return state.turn ? `${displayName('team')} — live` : `${displayName('team')} — this run`;
+  return state.turn ? 'Team — live' : 'Team — this run';
 }

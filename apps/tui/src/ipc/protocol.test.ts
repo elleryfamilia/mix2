@@ -4,9 +4,21 @@ import { parseEventLine } from './protocol.js';
 describe('parseEventLine', () => {
   it('parses known events', () => {
     const event = parseEventLine(
-      '{"type":"consult.started","turn_id":"t1","agent":"codex","index":1,"max":2,"prompt":"evaluate"}',
+      '{"type":"consult.started","turn_id":"t1","slot":"two","index":1,"max":2,"prompt":"evaluate"}',
     );
-    expect(event).toMatchObject({ type: 'consult.started', agent: 'codex', index: 1 });
+    expect(event).toMatchObject({ type: 'consult.started', slot: 'two', index: 1 });
+  });
+
+  it('parses ready with slot-keyed participants, same-harness included', () => {
+    const event = parseEventLine(
+      '{"type":"ready","protocol":2,"session_id":"s1","one":{"slot":"one","harness":"codex","name":"Codex (one)","available":true},"two":{"slot":"two","harness":"codex","name":"Codex (two)","available":true},"lead_slot":"two","cwd":"/repo","project":true}',
+    );
+    expect(event).toMatchObject({
+      type: 'ready',
+      lead_slot: 'two',
+      one: { slot: 'one', harness: 'codex', name: 'Codex (one)' },
+      two: { slot: 'two', harness: 'codex', name: 'Codex (two)' },
+    });
   });
 
   it('rejects malformed json without throwing', () => {
@@ -22,17 +34,28 @@ describe('parseEventLine', () => {
     expect(parseEventLine('{"type":"message.final","turn_id":1}')).toBeNull();
   });
 
+  it('rejects v1 harness-keyed events (protocol break, not a silent remap)', () => {
+    expect(
+      parseEventLine(
+        '{"type":"consult.started","turn_id":"t1","agent":"codex","index":1,"max":2}',
+      ),
+    ).toBeNull();
+    expect(
+      parseEventLine('{"type":"agent.model","agent":"claude","model":"sonnet","source":"selected"}'),
+    ).toBeNull();
+  });
+
   it('parses disagreement.recorded', () => {
     const event = parseEventLine(
-      '{"type":"disagreement.recorded","turn_id":"t1","stances":[{"agent":"claude","position":"use approach A","outcome":"chosen"},{"agent":"codex","position":"use approach B","outcome":"dropped"}],"resolution":"went with approach A for simplicity","revision":1}',
+      '{"type":"disagreement.recorded","turn_id":"t1","stances":[{"slot":"one","position":"use approach A","outcome":"chosen"},{"slot":"two","position":"use approach B","outcome":"dropped"}],"resolution":"went with approach A for simplicity","revision":1}',
     );
     expect(event).toMatchObject({
       type: 'disagreement.recorded',
       turn_id: 't1',
       revision: 1,
       stances: [
-        { agent: 'claude', position: 'use approach A', outcome: 'chosen' },
-        { agent: 'codex', position: 'use approach B', outcome: 'dropped' },
+        { slot: 'one', position: 'use approach A', outcome: 'chosen' },
+        { slot: 'two', position: 'use approach B', outcome: 'dropped' },
       ],
       resolution: 'went with approach A for simplicity',
     });
@@ -40,23 +63,23 @@ describe('parseEventLine', () => {
 
   it('parses message.final with disagreement payload', () => {
     const event = parseEventLine(
-      '{"type":"message.final","turn_id":"t1","speaker":"team","lead":"claude","text":"done","consultations":1,"duration_ms":10,"disagreement":{"stances":[{"agent":"claude","position":"A","outcome":"chosen"},{"agent":"codex","position":"B","outcome":"deferred"}],"resolution":"picked A"}}',
+      '{"type":"message.final","turn_id":"t1","speaker":"team","lead_slot":"one","text":"done","consultations":1,"duration_ms":10,"disagreement":{"stances":[{"slot":"one","position":"A","outcome":"chosen"},{"slot":"two","position":"B","outcome":"deferred"}],"resolution":"picked A"}}',
     );
     expect(event).toMatchObject({
       type: 'message.final',
       disagreement: {
         stances: [
-          { agent: 'claude', position: 'A', outcome: 'chosen' },
-          { agent: 'codex', position: 'B', outcome: 'deferred' },
+          { slot: 'one', position: 'A', outcome: 'chosen' },
+          { slot: 'two', position: 'B', outcome: 'deferred' },
         ],
         resolution: 'picked A',
       },
     });
   });
 
-  it('parses message.final without the field (old core)', () => {
+  it('parses message.final without the field (no disagreement)', () => {
     const event = parseEventLine(
-      '{"type":"message.final","turn_id":"t1","speaker":"team","lead":"claude","text":"done","consultations":1,"duration_ms":10}',
+      '{"type":"message.final","turn_id":"t1","speaker":"team","lead_slot":"one","text":"done","consultations":1,"duration_ms":10}',
     );
     expect(event).toMatchObject({ type: 'message.final', turn_id: 't1' });
     expect(event && 'disagreement' in event ? event.disagreement : undefined).toBeUndefined();

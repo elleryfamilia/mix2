@@ -12,10 +12,11 @@ function apply(state: AppState, event: CoreEvent, now = T): AppState {
 
 const ready: CoreEvent = {
   type: 'ready',
-  protocol: 1,
+  protocol: 2,
   session_id: 's1',
-  lead: { kind: 'claude', name: 'Claude', available: true },
-  teammate: { kind: 'codex', name: 'Codex', available: true },
+  one: { slot: 'one', harness: 'claude', name: 'Claude', available: true },
+  two: { slot: 'two', harness: 'codex', name: 'Codex', available: true },
+  lead_slot: 'one',
   cwd: '/repo',
   project: true,
 };
@@ -31,7 +32,7 @@ describe('team panel disagreement ledger', () => {
     s = apply(s, {
       type: 'consult.started',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       max: 2,
       prompt: 'Should we use a GSI?',
@@ -40,8 +41,8 @@ describe('team panel disagreement ledger', () => {
       type: 'disagreement.recorded',
       turn_id: 't1',
       stances: [
-        { agent: 'claude', position: 'Add a second GSI on user_id.', outcome: 'chosen' },
-        { agent: 'codex', position: 'Denormalize instead of indexing.', outcome: 'dropped' },
+        { slot: 'one', position: 'Add a second GSI on user_id.', outcome: 'chosen' },
+        { slot: 'two', position: 'Denormalize instead of indexing.', outcome: 'dropped' },
       ],
       resolution: 'Ship the GSI now, revisit denormalization later.',
       revision: 1,
@@ -64,12 +65,12 @@ describe('team panel disagreement ledger', () => {
       type: 'message.final',
       turn_id: 't1',
       speaker: 'team',
-      lead: 'claude',
+      lead_slot: 'one',
       text: 'Done.',
       consultations: 1,
       duration_ms: 500,
       disagreement: {
-        stances: [{ agent: 'claude', position: 'Use retries.', outcome: 'chosen' }],
+        stances: [{ slot: 'one', position: 'Use retries.', outcome: 'chosen' }],
         resolution: 'Retry with backoff.',
       },
     });
@@ -90,7 +91,7 @@ describe('team panel disagreement ledger', () => {
     s = apply(s, {
       type: 'disagreement.recorded',
       turn_id: 't1',
-      stances: [{ agent: 'claude', position: longPosition, outcome: 'chosen' }],
+      stances: [{ slot: 'one', position: longPosition, outcome: 'chosen' }],
       resolution: 'ok',
       revision: 1,
     });
@@ -111,8 +112,9 @@ describe('team panel disagreement ledger', () => {
       phase: 'ready',
       session: {
         sessionId: 's1',
-        lead: { kind: 'claude', name: 'Claude', available: true },
-        teammate: { kind: 'codex', name: 'Codex', available: true },
+        one: { slot: 'one', harness: 'claude', name: 'Claude', available: true },
+        two: { slot: 'two', harness: 'codex', name: 'Codex', available: true },
+        leadSlot: 'one',
         cwd: '/repo',
         project: true,
       },
@@ -123,7 +125,7 @@ describe('team panel disagreement ledger', () => {
         toolsCompleted: 0,
         outcome: 'completed',
         disagreement: {
-          stances: [{ agent: 'claude', position: 'Solo call, still logged.', outcome: 'chosen' }],
+          stances: [{ slot: 'one', position: 'Solo call, still logged.', outcome: 'chosen' }],
           resolution: 'Went with it.',
         },
       },
@@ -141,8 +143,8 @@ describe('team panel disagreement ledger', () => {
     s = apply(s, {
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'Sure.',
       consultations: 0,
       duration_ms: 100,

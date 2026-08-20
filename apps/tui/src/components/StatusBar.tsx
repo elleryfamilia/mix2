@@ -1,7 +1,7 @@
 import { Text } from 'ink';
 import React from 'react';
 import type { AppState } from '../state/store.js';
-import { formatDuration } from '../state/store.js';
+import { formatDuration, speakerLabel } from '../state/store.js';
 import { agentColor, glyphs, spinnerFrames, theme } from '../theme/theme.js';
 
 interface Piece {
@@ -52,9 +52,9 @@ export function statusSegments(
     if (running && leadBusy) {
       return {
         left: [
-          { text: spinner, color: agentColor(turn.leadAgent) },
+          { text: spinner, color: agentColor(turn.leadSlot) },
           { text: ` ${glyphs.dot} `, color: muted },
-          { text: spinner2, color: agentColor(running.agent) },
+          { text: spinner2, color: agentColor(running.slot) },
           { text: ' working in parallel', color: muted },
         ],
         right,
@@ -62,7 +62,12 @@ export function statusSegments(
     }
     if (running) {
       return {
-        left: [{ text: `${spinner} ${running.agent} reviewing`, color: agentColor(running.agent) }],
+        left: [
+          {
+            text: `${spinner} ${speakerLabel(state.session, running.slot)} reviewing`,
+            color: agentColor(running.slot),
+          },
+        ],
         right,
       };
     }

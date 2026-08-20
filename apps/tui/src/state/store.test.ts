@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { CoreEvent, Disagreement } from '../ipc/protocol.js';
+import type { AgentInfo, CoreEvent, Disagreement } from '../ipc/protocol.js';
 import {
   formatDuration,
   formatElapsed,
   initialState,
+  leadInfo,
   reduce,
+  speakerLabel,
+  teammateInfo,
   type AppState,
 } from './store.js';
 
@@ -14,12 +17,28 @@ function apply(state: AppState, event: CoreEvent, now = T): AppState {
   return reduce(state, { type: 'core-event', event, now });
 }
 
+const infoOne: AgentInfo = {
+  slot: 'one',
+  harness: 'claude',
+  name: 'Claude',
+  version: '2.1',
+  available: true,
+};
+const infoTwo: AgentInfo = {
+  slot: 'two',
+  harness: 'codex',
+  name: 'Codex',
+  version: '0.146',
+  available: true,
+};
+
 const ready: CoreEvent = {
   type: 'ready',
-  protocol: 1,
+  protocol: 2,
   session_id: 's1',
-  lead: { kind: 'claude', name: 'Claude', version: '2.1', available: true },
-  teammate: { kind: 'codex', name: 'Codex', version: '0.146', available: true },
+  one: infoOne,
+  two: infoTwo,
+  lead_slot: 'one',
   cwd: '/repo',
 };
 
@@ -30,11 +49,36 @@ function startedTurn(state = initialState): AppState {
 }
 
 describe('startup', () => {
-  it('reaches ready with session info', () => {
+  it('reaches ready with slot-keyed session info', () => {
     const s = apply(initialState, ready);
     expect(s.phase).toBe('ready');
-    expect(s.session?.lead.kind).toBe('claude');
-    expect(s.session?.teammate.available).toBe(true);
+    expect(s.session?.leadSlot).toBe('one');
+    expect(s.session?.one.harness).toBe('claude');
+    expect(s.session?.two.available).toBe(true);
+    expect(leadInfo(s.session!).name).toBe('Claude');
+    expect(teammateInfo(s.session!).name).toBe('Codex');
+  });
+
+  it('reversed lead keeps the harness-to-slot mapping stable', () => {
+    const s = apply(initialState, { ...ready, lead_slot: 'two' } as CoreEvent);
+    expect(s.session?.leadSlot).toBe('two');
+    expect(s.session?.one.harness).toBe('claude');
+    expect(leadInfo(s.session!).name).toBe('Codex');
+    expect(teammateInfo(s.session!).name).toBe('Claude');
+    const turn = apply(s, { type: 'message.user', turn_id: 't1', text: 'hi' });
+    expect(turn.turn?.leadSlot).toBe('two');
+  });
+
+  it('same-harness teams keep distinct slot identities', () => {
+    const s = apply(initialState, {
+      ...ready,
+      one: { ...infoOne, harness: 'codex', name: 'Codex (one)' },
+      two: { ...infoTwo, name: 'Codex (two)' },
+      lead_slot: 'two',
+    } as CoreEvent);
+    expect(speakerLabel(s.session, 'one')).toBe('codex (one)');
+    expect(leadInfo(s.session!).name).toBe('Codex (two)');
+    expect(teammateInfo(s.session!).slot).toBe('one');
   });
 
   it('fatal event switches to fatal phase', () => {
@@ -69,23 +113,23 @@ describe('single-agent turn', () => {
 
   it('streams lead deltas', () => {
     let s = startedTurn();
-    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', agent: 'claude', role: 'lead', text: 'Hel' });
-    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', agent: 'claude', role: 'lead', text: 'lo' });
+    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', slot: 'one', role: 'lead', text: 'Hel' });
+    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', slot: 'one', role: 'lead', text: 'lo' });
     expect(s.turn?.streamText).toBe('Hello');
   });
 
   it('tool start settles the open stream segment as interim text', () => {
     let s = startedTurn();
-    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', agent: 'claude', role: 'lead', text: 'Looking…' });
+    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', slot: 'one', role: 'lead', text: 'Looking…' });
     s = apply(s, {
       type: 'agent.tool.started',
       turn_id: 't1',
-      agent: 'claude',
+      slot: 'one',
       role: 'lead',
       name: 'Read',
       detail: 'src/db.ts',
     });
-    expect(s.items.at(-1)).toEqual({ kind: 'interim', agent: 'claude', text: 'Looking…' });
+    expect(s.items.at(-1)).toEqual({ kind: 'interim', slot: 'one', text: 'Looking…' });
     expect(s.turn?.streamText).toBe('');
     expect(s.turn?.tools).toHaveLength(1);
   });
@@ -95,8 +139,8 @@ describe('single-agent turn', () => {
     s = apply(s, {
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'Hey. What are we working on?',
       consultations: 0,
       duration_ms: 900,
@@ -104,7 +148,7 @@ describe('single-agent turn', () => {
     s = apply(s, { type: 'turn.completed', turn_id: 't1', duration_ms: 900, consultations: 0 });
     expect(s.turn).toBeUndefined();
     const final = s.items.at(-1);
-    expect(final).toMatchObject({ kind: 'final', speaker: 'claude', consultations: 0 });
+    expect(final).toMatchObject({ kind: 'final', speaker: 'one', consultations: 0 });
     expect(s.lastSummary).toEqual({ durationMs: 900, consultations: 0, disagreements: 0 });
   });
 });
@@ -115,7 +159,7 @@ describe('consultation flow', () => {
     s = apply(s, {
       type: 'consult.started',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       max: 2,
       prompt: 'Independently evaluate DynamoDB.',
@@ -126,26 +170,26 @@ describe('consultation flow', () => {
   it('tracks consult lifecycle and team attribution', () => {
     let s = consultingTurn();
     expect(s.turn?.phase).toBe('consulting');
-    expect(s.turn?.consults[0]).toMatchObject({ status: 'running', agent: 'codex', index: 1 });
+    expect(s.turn?.consults[0]).toMatchObject({ status: 'running', slot: 'two', index: 1 });
 
     s = apply(s, {
       type: 'consult.completed',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       duration_ms: 8120,
       text: 'DynamoDB fits writes, not your joins.',
     });
     expect(s.turn?.consults[0]).toMatchObject({ status: 'done', durationMs: 8120 });
 
-    s = apply(s, { type: 'lead.synthesizing', turn_id: 't1', agent: 'claude' });
+    s = apply(s, { type: 'lead.synthesizing', turn_id: 't1', slot: 'one' });
     expect(s.turn?.phase).toBe('synthesizing');
 
     s = apply(s, {
       type: 'message.final',
       turn_id: 't1',
       speaker: 'team',
-      lead: 'claude',
+      lead_slot: 'one',
       text: "I wouldn't replace Postgres wholesale.",
       consultations: 1,
       duration_ms: 20_000,
@@ -161,12 +205,12 @@ describe('consultation flow', () => {
     s = apply(s, {
       type: 'agent.tool.started',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       role: 'teammate',
       name: 'shell',
       detail: 'rg SessionManager',
     });
-    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', agent: 'codex', role: 'teammate', text: 'checking' });
+    s = apply(s, { type: 'agent.text_delta', turn_id: 't1', slot: 'two', role: 'teammate', text: 'checking' });
     expect(s.turn?.consults[0]?.tools).toHaveLength(1);
     expect(s.turn?.consults[0]?.streamText).toBe('checking');
     // The lead's stream stays untouched.
@@ -178,7 +222,7 @@ describe('consultation flow', () => {
     s = apply(s, {
       type: 'consult.failed',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       message: 'Codex is unavailable',
     });
@@ -187,13 +231,13 @@ describe('consultation flow', () => {
     s = apply(s, {
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'Continuing alone.',
       consultations: 0,
       duration_ms: 5000,
     });
-    expect(s.items.at(-1)).toMatchObject({ kind: 'final', speaker: 'claude' });
+    expect(s.items.at(-1)).toMatchObject({ kind: 'final', speaker: 'one' });
   });
 });
 
@@ -210,12 +254,12 @@ describe('failure and cancellation', () => {
     s = apply(s, {
       type: 'agent.tool.started',
       turn_id: 't1',
-      agent: 'claude',
+      slot: 'one',
       role: 'lead',
       name: 'Read',
       detail: 'a.ts',
     });
-    s = apply(s, { type: 'agent.tool.finished', turn_id: 't1', agent: 'claude', role: 'lead', name: 'Read' });
+    s = apply(s, { type: 'agent.tool.finished', turn_id: 't1', slot: 'one', role: 'lead', name: 'Read' });
     s = apply(s, { type: 'turn.cancelled', turn_id: 't1' });
     expect(s.turn).toBeUndefined();
     expect(s.items.at(-1)).toEqual({ kind: 'cancelled' });
@@ -225,21 +269,21 @@ describe('failure and cancellation', () => {
 
   it('events for stale turns are ignored', () => {
     let s = startedTurn();
-    s = apply(s, { type: 'agent.text_delta', turn_id: 'OLD', agent: 'claude', role: 'lead', text: 'x' });
+    s = apply(s, { type: 'agent.text_delta', turn_id: 'OLD', slot: 'one', role: 'lead', text: 'x' });
     expect(s.turn?.streamText).toBe('');
   });
 });
 
 describe('disagreement', () => {
   const liveDisagreement = {
-    stances: [{ agent: 'claude' as const, position: 'Use Postgres (live)', outcome: 'chosen' as const }],
+    stances: [{ slot: 'one' as const, position: 'Use Postgres (live)', outcome: 'chosen' as const }],
     resolution: 'Leaning Postgres.',
   };
 
   const finalDisagreement: Disagreement = {
     stances: [
-      { agent: 'claude', position: 'Use Postgres', outcome: 'chosen' },
-      { agent: 'codex', position: 'Use DynamoDB', outcome: 'dropped' },
+      { slot: 'one', position: 'Use Postgres', outcome: 'chosen' },
+      { slot: 'two', position: 'Use DynamoDB', outcome: 'dropped' },
     ],
     resolution: 'Went with Postgres for join support.',
   };
@@ -300,7 +344,7 @@ describe('disagreement', () => {
       type: 'message.final',
       turn_id: 't1',
       speaker: 'team',
-      lead: 'claude',
+      lead_slot: 'one',
       text: 'Final answer.',
       consultations: 1,
       duration_ms: 5000,
@@ -324,8 +368,8 @@ describe('disagreement', () => {
     s = apply(s, {
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'Never mind, no disagreement after all.',
       consultations: 0,
       duration_ms: 1000,
@@ -343,8 +387,8 @@ describe('disagreement', () => {
     s = apply(s, {
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'Final.',
       consultations: 0,
       duration_ms: 1000,
@@ -360,8 +404,8 @@ describe('disagreement', () => {
     s = apply(s, {
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'No disagreement here.',
       consultations: 0,
       duration_ms: 900,
