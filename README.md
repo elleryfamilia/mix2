@@ -232,7 +232,7 @@ Precedence: CLI flags > slot tables > legacy sections > defaults.
 | `Ctrl+Q` | quit |
 
 Slash commands: `/exit` (also `/quit`), `/clear`, `/copy`, `/model`,
-`/activity`, `/help` — recognized commands light up as you type, and `/`
+`/team` (pick a new team — starts a fresh session), `/activity`, `/help` — recognized commands light up as you type, and `/`
 surfaces the list in the status bar.
 
 Models: by default each agent uses its own CLI's configured default —

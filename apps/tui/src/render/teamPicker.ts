@@ -69,6 +69,14 @@ export function initialSelection(discovery: DiscoveryState): TeamPickerSelection
   };
 }
 
+/** Where a harness sits in the picker's entry list (cursor seeding). */
+export function entryIndexOf(discovery: DiscoveryState, harness: string): number {
+  return Math.max(
+    0,
+    pickerEntries(discovery).findIndex((e) => e.harness === harness),
+  );
+}
+
 function columnLines(
   discovery: DiscoveryState,
   slot: SlotName,
@@ -132,7 +140,7 @@ export function renderTeamPicker(
         span('◐ pick your team', { color: theme.agent.team, bold: true }),
         span(' — two slots, any agents', { color: theme.text.faint }),
       ],
-      [span('enter start ', { color: theme.text.faint })],
+      [span('esc defaults ', { color: theme.text.faint })],
       w,
     ),
   );
@@ -185,11 +193,12 @@ export function renderTeamPicker(
   }
 
   lines.push(BLANK);
-  lines.push([
-    span(' '.repeat(INDENT)),
-    span('↑↓ choose · ←→ switch · enter start · esc defaults', {
-      color: theme.text.faint,
-    }),
-  ]);
+  // The hint follows the focused control: slot columns equip, the
+  // coordinator control is where the team actually starts.
+  const hint =
+    cursor.column === 2
+      ? '↑↓ coordinator · enter start · ←→ back · esc defaults'
+      : '↑↓ choose · enter equip · ←→ switch · esc defaults';
+  lines.push([span(' '.repeat(INDENT)), span(hint, { color: theme.text.faint })]);
   return lines;
 }

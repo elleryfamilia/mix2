@@ -373,7 +373,7 @@ plus the standing "the UI keeps it secret" wink). The configured proposal
 arrives preselected with the `●` mark.
 
 ```text
-  ◐ pick your team — two slots, any agents          enter start
+  ◐ pick your team — two slots, any agents          esc defaults
 
   ● slot one  · coordinates        ○ slot two
   › claude  2.1.232 ●                claude  2.1.232
@@ -381,19 +381,33 @@ arrives preselected with the `●` mark.
 
   ⇄ coordinator: slot one  (the UI keeps it secret)
 
-  ↑↓ choose · ←→ switch · enter start · esc defaults
+  ↑↓ choose · enter equip · ←→ switch · esc defaults
 ```
 
-Rules: moving the cursor over a selectable entry chooses it for that slot;
-the same harness on both slots is a supported choice, not an error.
+Interaction is **pick → equip → advance**: arrows only move the
+highlight; enter equips the highlighted harness for the focused slot and
+advances focus to the next control (slot one → slot two → coordinator),
+seeding the cursor on that slot's currently-equipped entry. The `●` mark
+shows what each slot has equipped; the same harness on both slots is a
+supported choice, not an error. On the coordinator control `↑↓` toggles
+the lead slot and **enter starts the team** — the footer hint follows
+the focused control (`enter equip` vs `enter start`), so the commit
+point is always explicit. Esc opts out at any point and starts the
+defaults.
+
 Unavailable, signed-out, or role-ineligible entries stay visible but
 disabled, each with its actionable reason on a faint line beneath
 (`not installed: …`, `not signed in: …`, `teammate-only for now`) — they
-can be cursored to read the reason, never selected. `↑↓` on the
-coordinator control toggles the lead slot. Enter confirms; esc opts out
-and starts the defaults. A core refusal (`select_team` rejected) renders
-in place in the error color and the picker stays interactive — the core
-keeps waiting, so retrying is free.
+can be highlighted to read the reason, but enter refuses to equip them.
+A core refusal (`select_team` rejected) renders in place in the error
+color with focus still on the coordinator, so retrying is one enter —
+the core keeps waiting.
+
+**Switching teams later** — `/team` relaunches the runtime with the
+picker forced. It is a fresh session by design: a re-slotted team cannot
+inherit the previous lead's provider conversation, so the transcript
+clears and startup (discovery → picker → ready) runs again. Refused
+while a turn is running, like `/clear`.
 
 ## Model picker (/model)
 

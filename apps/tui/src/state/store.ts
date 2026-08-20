@@ -176,7 +176,10 @@ export type Action =
   /** Local notice from the UI itself (slash command feedback, /help). */
   | { type: 'local-notice'; text: string }
   /** /clear: empty the visible conversation; the session continues. */
-  | { type: 'clear-conversation' };
+  | { type: 'clear-conversation' }
+  /** /team: the core is being relaunched with the picker — everything
+   * session-bound resets and startup runs again. */
+  | { type: 'reset-session' };
 
 /** Settle the lead's open stream segment into a persistent interim item.
  * Called when activity interrupts the lead's speech (tools, consultation).
@@ -251,6 +254,8 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, items: [...state.items, { kind: 'notice', text: action.text }] };
     case 'clear-conversation':
       return { ...state, items: [], lastSummary: undefined };
+    case 'reset-session':
+      return { ...initialState };
     case 'core-exited': {
       if (state.phase === 'fatal') return state;
       // Surface the core's stderr tail — for a binary that can't run at
