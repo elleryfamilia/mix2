@@ -14,6 +14,10 @@ export interface CoreClientOptions {
   lead?: string;
   cwd?: string;
   debug?: boolean;
+  /** A human is at the terminal (enables the selection handshake). */
+  interactive?: boolean;
+  /** Force the team-selection handshake even with an explicit config. */
+  pickTeam?: boolean;
   /** Explicit path to the mix2-core binary (MIX2_CORE_BIN wins). */
   corePath?: string;
   /** Path to append raw IPC traffic to, for debugging. */
@@ -85,7 +89,19 @@ export class CoreClient {
         this.buffer = this.buffer.slice(index + 1);
         this.log('<<', line);
         const event = parseEventLine(line);
-        if (event) this.handlers.onEvent(event);
+        if (!event) continue;
+        // Until the visual team picker lands, a core waiting on selection
+        // gets the proposal confirmed automatically — the handshake runs,
+        // the defaults win, startup behavior stays unchanged.
+        if (event.type === 'harnesses.discovered' && !event.auto) {
+          this.send({
+            type: 'select_team',
+            one: event.proposal.one,
+            two: event.proposal.two,
+            lead_slot: event.proposal.lead_slot,
+          });
+        }
+        this.handlers.onEvent(event);
       }
     });
     child.stderr.setEncoding('utf8');
@@ -116,6 +132,8 @@ export class CoreClient {
       lead: this.options.lead,
       cwd: this.options.cwd ?? process.cwd(),
       debug: this.options.debug ?? false,
+      interactive: this.options.interactive ?? false,
+      pick_team: this.options.pickTeam ?? false,
     });
   }
 

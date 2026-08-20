@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
-    /// Must be the first command. The core probes providers and replies with
-    /// `ready` or `fatal`.
+    /// Must be the first command. The core runs discovery and replies with
+    /// `harnesses.discovered`, then `ready` (after auto-confirmation or a
+    /// `select_team`) or `fatal`.
     Initialize {
         protocol: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -15,6 +16,21 @@ pub enum Command {
         cwd: Option<String>,
         #[serde(default)]
         debug: bool,
+        /// A human is present: without an explicit `[slot.*]` config, the
+        /// core waits for `select_team` instead of auto-confirming.
+        #[serde(default)]
+        interactive: bool,
+        /// Force the selection handshake even with an explicit config.
+        #[serde(default)]
+        pick_team: bool,
+    },
+    /// Settle the team while the core is awaiting selection: a harness per
+    /// slot plus the lead slot. Slot ids are canonical (`one`/`two`);
+    /// harness values are registry names.
+    SelectTeam {
+        one: String,
+        two: String,
+        lead_slot: String,
     },
     /// Start a user turn. `id` is the UI's correlation id, echoed as
     /// `turn_id` on every event for this turn.
@@ -43,16 +59,34 @@ mod tests {
     #[test]
     fn parses_initialize() {
         let cmd: Command = serde_json::from_str(
-            r#"{"type":"initialize","protocol":2,"lead":"claude","cwd":"/r"}"#,
+            r#"{"type":"initialize","protocol":3,"lead":"claude","cwd":"/r","interactive":true}"#,
         )
         .unwrap();
         assert_eq!(
             cmd,
             Command::Initialize {
-                protocol: 2,
+                protocol: 3,
                 lead: Some("claude".into()),
                 cwd: Some("/r".into()),
-                debug: false
+                debug: false,
+                interactive: true,
+                pick_team: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_select_team() {
+        let cmd: Command = serde_json::from_str(
+            r#"{"type":"select_team","one":"codex","two":"codex","lead_slot":"two"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::SelectTeam {
+                one: "codex".into(),
+                two: "codex".into(),
+                lead_slot: "two".into(),
             }
         );
     }

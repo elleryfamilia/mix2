@@ -22,17 +22,17 @@ const infoOne: AgentInfo = {
   harness: 'claude',
   name: 'Claude',
   version: '2.1',
-  available: true,
+  auth: 'authenticated', available: true,
 };
 const infoTwo: AgentInfo = {
   slot: 'two',
   harness: 'codex',
   name: 'Codex',
   version: '0.146',
-  available: true,
+  auth: 'authenticated', available: true,
 };
 
-const ready: CoreEvent = {
+const ready: Extract<CoreEvent, { type: 'ready' }> = {
   type: 'ready',
   protocol: 2,
   session_id: 's1',

@@ -31,6 +31,8 @@ struct CoreOptions {
     /// Raw TOML appended to the generated config file (slot tables, legacy
     /// sections) for the config-schema tests.
     config_extra: String,
+    /// Sent on initialize: forces the selection handshake.
+    pick_team: bool,
     env: Vec<(String, String)>,
 }
 
@@ -42,6 +44,7 @@ impl Default for CoreOptions {
             codex_cmd: Some(fixtures_dir().join("fake-codex").display().to_string()),
             max_consults: None,
             config_extra: String::new(),
+            pick_team: false,
             env: Vec::new(),
         }
     }
@@ -103,11 +106,14 @@ impl Core {
             events: rx,
         };
         let mut init = serde_json::json!({
-            "type": "initialize", "protocol": 2,
+            "type": "initialize", "protocol": 3,
             "cwd": std::env::current_dir().unwrap().display().to_string(),
         });
         if let Some(lead) = options.lead {
             init["lead"] = serde_json::json!(lead);
+        }
+        if options.pick_team {
+            init["pick_team"] = serde_json::json!(true);
         }
         core.send(&init);
         core
@@ -930,6 +936,180 @@ fn mixed_config_prefers_slot_values_and_warns() {
         warning.contains("[slot.two] command overrides"),
         "got: {warning}"
     );
+}
+
+#[test]
+fn discovery_report_precedes_ready() {
+    let core = Core::start(CoreOptions::default());
+    let startup = core.events_until("ready", LONG);
+    let discovered = find(&startup, "harnesses.discovered").unwrap();
+    assert_eq!(discovered["auto"], true);
+    assert_eq!(discovered["proposal"]["one"], "claude");
+    assert_eq!(discovered["proposal"]["two"], "codex");
+    assert_eq!(discovered["proposal"]["lead_slot"], "one");
+    let harnesses = discovered["harnesses"].as_array().unwrap();
+    let claude = harnesses.iter().find(|h| h["harness"] == "claude").unwrap();
+    assert_eq!(claude["available"], true);
+    assert_eq!(claude["auth"], "authenticated");
+    assert!(claude["version"].is_string());
+    assert_eq!(claude["lead_eligible"], true);
+    assert_eq!(claude["capabilities"]["instruction_injection"], "enforced");
+    // The discovered report always precedes ready.
+    let discovered_idx = startup
+        .iter()
+        .position(|e| e["type"] == "harnesses.discovered")
+        .unwrap();
+    let ready_idx = startup.iter().position(|e| e["type"] == "ready").unwrap();
+    assert!(discovered_idx < ready_idx);
+}
+
+#[test]
+fn pick_team_handshake_selects_a_same_harness_team() {
+    let mut core = Core::start(CoreOptions {
+        pick_team: true,
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let discovered = find(&startup, "harnesses.discovered").unwrap();
+    assert_eq!(discovered["auto"], false);
+    assert!(
+        find(&startup, "ready").is_none(),
+        "core must wait for select_team"
+    );
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "codex", "two": "codex", "lead_slot": "two",
+    }));
+    let events = core.events_until("ready", LONG);
+    let ready = find(&events, "ready").unwrap();
+    assert_eq!(ready["one"]["harness"], "codex");
+    assert_eq!(ready["two"]["harness"], "codex");
+    assert_eq!(ready["one"]["name"], "Codex (one)");
+    assert_eq!(ready["lead_slot"], "two");
+}
+
+#[test]
+fn invalid_selection_is_refused_and_recoverable() {
+    let mut core = Core::start(CoreOptions {
+        pick_team: true,
+        ..CoreOptions::default()
+    });
+    core.events_until("harnesses.discovered", LONG);
+
+    // Unknown harness: registry-owned error, selection stays open.
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "gemini", "two": "codex", "lead_slot": "one",
+    }));
+    let events = core.events_until("error", LONG);
+    let message = find(&events, "error").unwrap()["message"].as_str().unwrap();
+    assert!(
+        message.contains("unknown harness 'gemini'"),
+        "got: {message}"
+    );
+
+    // Commands other than select_team are refused while waiting.
+    core.submit("t1", "hello?");
+    let events = core.events_until("error", LONG);
+    assert!(find(&events, "error").unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .contains("no team selected yet"));
+
+    // A valid selection still goes through.
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "codex", "lead_slot": "one",
+    }));
+    core.events_until("ready", LONG);
+}
+
+#[test]
+fn selecting_an_unavailable_harness_is_refused_with_its_reason() {
+    let mut core = Core::start(CoreOptions {
+        codex_cmd: Some("/nonexistent/codex-binary".into()),
+        pick_team: true,
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let harnesses = find(&startup, "harnesses.discovered").unwrap()["harnesses"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let codex = harnesses.iter().find(|h| h["harness"] == "codex").unwrap();
+    assert_eq!(codex["available"], false);
+    assert!(codex["reason"].as_str().unwrap().contains("not installed"));
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "codex", "lead_slot": "one",
+    }));
+    let events = core.events_until("error", LONG);
+    assert!(find(&events, "error").unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .contains("not installed"));
+
+    // The still-working harness carries the session on both slots.
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "claude", "lead_slot": "one",
+    }));
+    let events = core.events_until("ready", LONG);
+    assert_eq!(
+        find(&events, "ready").unwrap()["two"]["name"],
+        "Claude (two)"
+    );
+}
+
+#[test]
+fn wedged_binary_times_out_in_discovery_without_stalling_startup() {
+    let mut core = Core::start(CoreOptions {
+        claude_cmd: Some(fixtures_dir().join("fake-hang").display().to_string()),
+        pick_team: true,
+        env: vec![("MIX2_DISCOVERY_TIMEOUT_MS".into(), "1500".into())],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let harnesses = find(&startup, "harnesses.discovered").unwrap()["harnesses"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let claude = harnesses.iter().find(|h| h["harness"] == "claude").unwrap();
+    assert_eq!(claude["available"], false);
+    assert!(claude["reason"].as_str().unwrap().contains("timed out"));
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "codex", "two": "codex", "lead_slot": "one",
+    }));
+    core.events_until("ready", LONG);
+}
+
+#[test]
+fn signed_out_harness_reports_unauthenticated_and_refuses_selection() {
+    let mut core = Core::start(CoreOptions {
+        pick_team: true,
+        env: vec![("FAKE_CODEX_LOGGED_OUT".into(), "1".into())],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let harnesses = find(&startup, "harnesses.discovered").unwrap()["harnesses"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let codex = harnesses.iter().find(|h| h["harness"] == "codex").unwrap();
+    assert_eq!(codex["auth"], "unauthenticated");
+    assert!(codex["reason"].as_str().unwrap().contains("not signed in"));
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "codex", "lead_slot": "one",
+    }));
+    let events = core.events_until("error", LONG);
+    assert!(find(&events, "error").unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .contains("not signed in"));
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "claude", "lead_slot": "one",
+    }));
+    core.events_until("ready", LONG);
 }
 
 fn extract_marker(text: &str, key: &str) -> String {

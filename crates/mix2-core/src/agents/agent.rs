@@ -1,6 +1,7 @@
 use super::{AgentEvent, AgentRole, HarnessKind};
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::mpsc::Sender;
@@ -12,13 +13,21 @@ pub struct AgentVersion {
     pub raw: String,
 }
 
-/// Result of a cheap, quota-free sign-in probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthStatus {
+/// Result of a cheap, quota-free sign-in probe. Only an explicit
+/// `Unauthenticated` blocks startup; every other state surfaces as
+/// information (reasons in discovery, picker labels) without gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthState {
     Authenticated,
     Unauthenticated,
-    /// The probe failed or the CLI has no status command; don't block on it.
-    Unknown,
+    /// Credentials are present but their live validity is unverified
+    /// (an inventory listing, not a session check).
+    Configured,
+    /// The CLI has no quota-free probe; sign-in state is unknowable here.
+    Unsupported,
+    /// The probe errored or timed out; don't block on it.
+    ProbeFailed,
 }
 
 #[derive(Debug, Clone)]
@@ -66,9 +75,9 @@ pub trait Agent: Send + Sync {
     /// Resolve and report the installed CLI version, or fail if missing.
     async fn version(&self) -> Result<AgentVersion>;
 
-    /// Cheap sign-in probe (no model quota). Defaults to Unknown.
-    async fn auth_status(&self) -> AuthStatus {
-        AuthStatus::Unknown
+    /// Cheap sign-in probe (no model quota). Defaults to Unsupported.
+    async fn auth_status(&self) -> AuthState {
+        AuthState::Unsupported
     }
 
     /// Models this provider's CLI accepts, for the /model picker. Curated

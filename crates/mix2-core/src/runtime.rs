@@ -1,6 +1,6 @@
-use crate::agents::agent::{Agent, AgentRequest, AgentResult, AgentSession, AuthStatus};
-use crate::agents::registry;
+use crate::agents::agent::{Agent, AgentRequest, AgentResult, AgentSession, AuthState};
 use crate::agents::runner::HarnessAgent;
+use crate::agents::{discovery, registry};
 use crate::agents::{AgentEvent, AgentRole, HarnessKind, SlotId, Team};
 use crate::collaboration::consult::{ActiveTurn, ConsultServer, ConsultUpdate};
 use crate::collaboration::ConsultBudget;
@@ -51,20 +51,120 @@ pub struct RuntimeOptions {
     pub debug: bool,
 }
 
-fn build_agent(slot: SlotId, harness: HarnessKind, command: &str) -> Arc<dyn Agent> {
-    let descriptor = registry::descriptor(harness);
-    // Test/dev injection, slot-targeted first: MIX2_SLOT_ONE_CMD /
-    // MIX2_SLOT_TWO_CMD beat the legacy harness-keyed overrides
-    // (MIX2_CLAUDE_CMD / MIX2_CODEX_CMD), which beat configured commands —
-    // all without touching user config.
-    let slot_env = match slot {
+/// Resolve the command a harness actually runs with. Test/dev env
+/// injection wins, slot-targeted first: MIX2_SLOT_ONE_CMD /
+/// MIX2_SLOT_TWO_CMD beat the legacy harness-keyed overrides
+/// (MIX2_CLAUDE_CMD / MIX2_CODEX_CMD), which beat configured commands —
+/// all without touching user config. Discovery and slot construction share
+/// this so probe cache keys always match the commands slots run with.
+fn effective_command(slot: Option<SlotId>, harness: HarnessKind, configured: &str) -> String {
+    let slot_env = slot.map(|s| match s {
         SlotId::One => "MIX2_SLOT_ONE_CMD",
         SlotId::Two => "MIX2_SLOT_TWO_CMD",
+    });
+    slot_env
+        .and_then(|key| std::env::var(key).ok())
+        .or_else(|| std::env::var(registry::descriptor(harness).command_env_override).ok())
+        .unwrap_or_else(|| configured.to_owned())
+}
+
+fn build_agent(harness: HarnessKind, command: String) -> Arc<dyn Agent> {
+    Arc::new(HarnessAgent::new(registry::descriptor(harness), command))
+}
+
+/// Every `(harness, command)` pair discovery should probe: each configured
+/// slot at its effective command, plus every registered harness at its
+/// fallback command so a picker can offer harnesses no slot currently runs.
+fn discovery_candidates(config: &Config) -> Vec<(HarnessKind, String)> {
+    let mut out: Vec<(HarnessKind, String)> = Vec::new();
+    for slot in SlotId::ALL {
+        let harness = config.team.harness(slot);
+        out.push((
+            harness,
+            effective_command(Some(slot), harness, &config.slot(slot).command),
+        ));
+    }
+    for harness in registry::ALL {
+        out.push((
+            harness,
+            effective_command(None, harness, &config.fallback_command(harness)),
+        ));
+    }
+    out.dedup();
+    out
+}
+
+/// The env value controlling discovery probe timeouts (tests shrink it to
+/// keep timeout fixtures fast).
+fn discovery_timeout() -> Duration {
+    std::env::var("MIX2_DISCOVERY_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(discovery::DEFAULT_PROBE_TIMEOUT)
+}
+
+/// Validate a `select_team` request against discovery results. Returns the
+/// settled team or an actionable refusal for the picker to display.
+fn validate_selection(
+    config: &Config,
+    report: &discovery::Discovery,
+    one: &str,
+    two: &str,
+    lead_slot: &str,
+) -> std::result::Result<Team, String> {
+    let resolve = |name: &str| {
+        registry::harness_named(name).ok_or_else(|| registry::unknown_harness_message(name))
     };
-    let command = std::env::var(slot_env)
-        .or_else(|_| std::env::var(descriptor.command_env_override))
-        .unwrap_or_else(|_| command.to_owned());
-    Arc::new(HarnessAgent::new(descriptor, command))
+    let one = resolve(one)?;
+    let two = resolve(two)?;
+    let lead: SlotId = lead_slot
+        .parse()
+        .map_err(|_| format!("invalid lead_slot '{lead_slot}' (expected 'one' or 'two')"))?;
+    let team = Team { one, two, lead };
+
+    for slot in SlotId::ALL {
+        let harness = team.harness(slot);
+        let command = effective_command(
+            Some(slot),
+            harness,
+            &config.selection_command(slot, harness),
+        );
+        let Some(probe) = report.probe(harness, &command) else {
+            return Err(format!(
+                "{} was not discovered at `{command}` — restart mix2 to re-probe",
+                harness.display_name()
+            ));
+        };
+        if probe.version.is_none() {
+            return Err(probe
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("{} is unavailable", harness.display_name())));
+        }
+        if probe.auth == AuthState::Unauthenticated {
+            return Err(format!(
+                "{} — not signed in: {}",
+                harness.display_name(),
+                registry::descriptor(harness).login_hint
+            ));
+        }
+    }
+    let lead_caps = registry::descriptor(team.lead_harness()).capabilities;
+    if !lead_caps.lead_eligible() {
+        return Err(format!(
+            "{} cannot lead yet — pick it as the teammate instead",
+            team.lead_harness().display_name()
+        ));
+    }
+    let teammate_caps = registry::descriptor(team.teammate_harness()).capabilities;
+    if !teammate_caps.teammate_eligible() {
+        return Err(format!(
+            "{} cannot serve as the teammate",
+            team.teammate_harness().display_name()
+        ));
+    }
+    Ok(team)
 }
 
 /// Display name for a slot's participant. Distinct harnesses read as the
@@ -150,55 +250,57 @@ impl Runtime {
     /// fix for each agent.
     async fn initialize(
         config: Config,
+        team: Team,
         cwd: PathBuf,
         debug: bool,
         consult_updates: mpsc::Sender<ConsultUpdate>,
         lead_msgs: mpsc::Sender<LeadMsg>,
+        report: &discovery::Discovery,
     ) -> Result<Self> {
         let cwd = cwd
             .canonicalize()
             .with_context(|| format!("project directory {} does not exist", cwd.display()))?;
 
-        let team = config.team;
-        let one_agent = build_agent(SlotId::One, team.one, &config.slot(SlotId::One).command);
-        let two_agent = build_agent(SlotId::Two, team.two, &config.slot(SlotId::Two).command);
-
-        // Both probes gate readiness, so both get the generous timeout.
-        let probe = |agent: Arc<dyn Agent>| async move {
-            tokio::time::timeout(Duration::from_secs(20), agent.version()).await
+        // Selected-slot probes come from the discovery cache (keyed by
+        // harness + effective command); a cold key is probed on demand.
+        let slot_probe = |slot: SlotId| {
+            let harness = team.harness(slot);
+            let command = effective_command(
+                Some(slot),
+                harness,
+                &config.selection_command(slot, harness),
+            );
+            async move {
+                let probe = match report.probe(harness, &command) {
+                    Some(cached) => cached.clone(),
+                    None => discovery::probe_one(harness, &command, discovery_timeout()).await,
+                };
+                (command, probe)
+            }
         };
-        let (one_version, two_version) =
-            tokio::join!(probe(Arc::clone(&one_agent)), probe(Arc::clone(&two_agent)));
+        let ((one_command, one_probe), (two_command, two_probe)) =
+            tokio::join!(slot_probe(SlotId::One), slot_probe(SlotId::Two));
 
-        let one_installed = match one_version {
-            Ok(Ok(v)) => Some(v.raw),
-            _ => None,
-        };
-        let two_installed = match two_version {
-            Ok(Ok(v)) => Some(v.raw),
-            _ => None,
-        };
+        let one_agent = build_agent(team.one, one_command);
+        let two_agent = build_agent(team.two, two_command);
 
-        // Sign-in probes are local and quota-free.
-        let (one_auth, two_auth) = tokio::join!(one_agent.auth_status(), two_agent.auth_status());
-
-        fn ready_for_duty(installed: &Option<String>, auth: AuthStatus) -> bool {
-            installed.is_some() && auth != AuthStatus::Unauthenticated
+        fn ready_for_duty(probe: &discovery::Probe) -> bool {
+            probe.version.is_some() && probe.auth != AuthState::Unauthenticated
         }
 
         // mix2 is the two-agent team — there is no solo mode. If either
         // agent is missing or signed out, refuse to start and say exactly
         // what fixes each one.
-        if !ready_for_duty(&one_installed, one_auth) || !ready_for_duty(&two_installed, two_auth) {
-            let status = |harness: HarnessKind, installed: &Option<String>, auth: AuthStatus| {
+        if !ready_for_duty(&one_probe) || !ready_for_duty(&two_probe) {
+            let status = |harness: HarnessKind, probe: &discovery::Probe| {
                 let descriptor = registry::descriptor(harness);
-                if installed.is_none() {
+                if probe.version.is_none() {
                     format!(
                         "{} — not installed: {}",
                         harness.display_name(),
                         descriptor.install_hint
                     )
-                } else if auth == AuthStatus::Unauthenticated {
+                } else if probe.auth == AuthState::Unauthenticated {
                     format!(
                         "{} — not signed in: {}",
                         harness.display_name(),
@@ -210,12 +312,12 @@ impl Runtime {
             };
             anyhow::bail!(
                 "mix2 needs both agents installed and signed in.\n{}\n{}\nFix the above, then restart mix2.",
-                status(team.one, &one_installed, one_auth),
-                status(team.two, &two_installed, two_auth),
+                status(team.one, &one_probe),
+                status(team.two, &two_probe),
             );
         }
-        let one_version = one_installed.expect("slot one ready implies installed");
-        let two_version = two_installed.expect("slot two ready implies installed");
+        let one_version = one_probe.version.clone().expect("ready implies installed");
+        let two_version = two_probe.version.clone().expect("ready implies installed");
 
         let session = Mix2Session::new(team, cwd);
         let project = detect_project(&session.cwd);
@@ -227,8 +329,8 @@ impl Runtime {
             let _ = std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700));
         }
 
-        let lead_model = config.slot(team.lead).model.clone();
-        let teammate_model = config.slot(team.teammate()).model.clone();
+        let lead_model = config.selection_model(team.lead, team.lead_harness());
+        let teammate_model = config.selection_model(team.teammate(), team.teammate_harness());
 
         let (lead_agent, teammate_agent) = match team.lead {
             SlotId::One => (Arc::clone(&one_agent), Arc::clone(&two_agent)),
@@ -255,8 +357,8 @@ impl Runtime {
             version: Some(one_version),
             available: true,
             reason: None,
-            authenticated: auth_flag(one_auth),
-            model: config.slot(SlotId::One).model.clone(),
+            auth: one_probe.auth,
+            model: config.selection_model(SlotId::One, team.one),
             models: one_agent.known_models(),
         };
         let two_info = AgentInfo {
@@ -266,8 +368,8 @@ impl Runtime {
             version: Some(two_version),
             available: true,
             reason: None,
-            authenticated: auth_flag(two_auth),
-            model: config.slot(SlotId::Two).model.clone(),
+            auth: two_probe.auth,
+            model: config.selection_model(SlotId::Two, team.two),
             models: two_agent.known_models(),
         };
 
@@ -287,7 +389,7 @@ impl Runtime {
     }
 
     fn team(&self) -> Team {
-        self.config.team
+        self.session.team
     }
 
     fn mix2_env(
@@ -610,14 +712,6 @@ impl Runtime {
     }
 }
 
-fn auth_flag(status: AuthStatus) -> Option<bool> {
-    match status {
-        AuthStatus::Authenticated => Some(true),
-        AuthStatus::Unauthenticated => Some(false),
-        AuthStatus::Unknown => None,
-    }
-}
-
 /// Serve the JSONL protocol over stdin/stdout until shutdown or EOF.
 pub async fn serve(options: RuntimeOptions) -> Result<()> {
     let stdin = BufReader::new(tokio::io::stdin());
@@ -640,13 +734,22 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
             return Ok(());
         }
     };
-    let (protocol, cmd_lead, cmd_cwd, debug) = match init {
+    let (protocol, cmd_lead, cmd_cwd, debug, interactive, pick_team) = match init {
         Command::Initialize {
             protocol,
             lead,
             cwd,
             debug,
-        } => (protocol, lead, cwd, debug || options.debug),
+            interactive,
+            pick_team,
+        } => (
+            protocol,
+            lead,
+            cwd,
+            debug || options.debug,
+            interactive,
+            pick_team,
+        ),
         other => {
             emit(&Event::Fatal {
                 message: format!("expected initialize, got {other:?}"),
@@ -687,18 +790,70 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         .or(options.cwd)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
+    // Discovery: probe every candidate once, report, then either
+    // auto-confirm the configured proposal or wait for a selection.
+    let report = discovery::discover(discovery_candidates(&config), discovery_timeout()).await;
+    let auto = !pick_team && (config.explicit_slots || !interactive);
+    let proposal = config.team;
+    emit(&Event::HarnessesDiscovered {
+        harnesses: report.harnesses.clone(),
+        proposal: crate::ipc::TeamProposal {
+            one: proposal.one,
+            two: proposal.two,
+            lead_slot: proposal.lead,
+        },
+        auto,
+    });
+
+    let team = if auto {
+        proposal
+    } else {
+        // Awaiting selection: only select_team (or shutdown) makes
+        // progress; an invalid selection is refused with an actionable
+        // reason and the core keeps waiting, so a picker can retry.
+        loop {
+            let Some(line) = lines.next_line().await? else {
+                return Ok(());
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Command>(&line) {
+                Ok(Command::SelectTeam {
+                    one,
+                    two,
+                    lead_slot,
+                }) => match validate_selection(&config, &report, &one, &two, &lead_slot) {
+                    Ok(team) => break team,
+                    Err(message) => emit(&Event::Error { message }),
+                },
+                Ok(Command::Shutdown) => return Ok(()),
+                Ok(Command::Initialize { .. }) => emit(&Event::Error {
+                    message: "already initialized".to_owned(),
+                }),
+                Ok(_) => emit(&Event::Error {
+                    message: "no team selected yet — send select_team first".to_owned(),
+                }),
+                Err(e) => emit(&Event::Error {
+                    message: format!("invalid command: {e}"),
+                }),
+            }
+        }
+    };
+
     let (consult_tx, mut consult_rx) = mpsc::channel::<ConsultUpdate>(256);
     let (lead_tx, mut lead_rx) = mpsc::channel::<LeadMsg>(256);
 
-    let mut runtime = match Runtime::initialize(config, cwd, debug, consult_tx, lead_tx).await {
-        Ok(r) => r,
-        Err(e) => {
-            emit(&Event::Fatal {
-                message: format!("{e:#}"),
-            });
-            return Ok(());
-        }
-    };
+    let mut runtime =
+        match Runtime::initialize(config, team, cwd, debug, consult_tx, lead_tx, &report).await {
+            Ok(r) => r,
+            Err(e) => {
+                emit(&Event::Fatal {
+                    message: format!("{e:#}"),
+                });
+                return Ok(());
+            }
+        };
 
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,
@@ -765,6 +920,11 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
                             message: "already initialized".to_owned(),
                         });
                     }
+                    Ok(Command::SelectTeam { .. }) => {
+                        emit(&Event::Error {
+                            message: "the team is already selected for this session".to_owned(),
+                        });
+                    }
                     Err(e) => {
                         emit(&Event::Error {
                             message: format!("invalid command: {e}"),
@@ -824,7 +984,29 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
     let (consult_tx, mut consult_rx) = mpsc::channel::<ConsultUpdate>(256);
     let (lead_tx, mut lead_rx) = mpsc::channel::<LeadMsg>(256);
 
-    let mut runtime = Runtime::initialize(config, cwd, options.debug, consult_tx, lead_tx).await?;
+    // Scripted path: discovery still runs (informational) and the
+    // configured proposal is always auto-confirmed.
+    let report = discovery::discover(discovery_candidates(&config), discovery_timeout()).await;
+    let team = config.team;
+    emit(&Event::HarnessesDiscovered {
+        harnesses: report.harnesses.clone(),
+        proposal: crate::ipc::TeamProposal {
+            one: team.one,
+            two: team.two,
+            lead_slot: team.lead,
+        },
+        auto: true,
+    });
+    let mut runtime = Runtime::initialize(
+        config,
+        team,
+        cwd,
+        options.debug,
+        consult_tx,
+        lead_tx,
+        &report,
+    )
+    .await?;
 
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,

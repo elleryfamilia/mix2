@@ -71,13 +71,20 @@ pub struct SlotSettings {
 }
 
 /// Fully-resolved runtime configuration. Everything downstream keys on
-/// [`SlotId`].
+/// [`SlotId`]. `team` is the configured *proposal*; the session's actual
+/// team is settled by the discovery/selection handshake.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub team: Team,
     pub one: SlotSettings,
     pub two: SlotSettings,
     pub max_consults_per_turn: u32,
+    /// Whether the file used the canonical `[slot.*]` schema — an explicit
+    /// team choice that auto-confirms the selection handshake.
+    pub explicit_slots: bool,
+    /// Per-harness fallback command (legacy section > descriptor default)
+    /// for harnesses picked onto a slot the config didn't assign them to.
+    pub fallback_commands: Vec<(HarnessKind, String)>,
     /// Non-fatal configuration conflicts (a slot value shadowing a
     /// differing legacy value), surfaced as warning events at startup.
     pub warnings: Vec<String>,
@@ -90,6 +97,37 @@ impl Config {
         match id {
             SlotId::One => &self.one,
             SlotId::Two => &self.two,
+        }
+    }
+
+    /// The command a harness runs with when no slot assignment ties it to
+    /// more specific settings.
+    pub fn fallback_command(&self, harness: HarnessKind) -> String {
+        self.fallback_commands
+            .iter()
+            .find(|(h, _)| *h == harness)
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(|| registry::descriptor(harness).default_command.to_owned())
+    }
+
+    /// The command for `harness` when it is *selected* onto `slot`: the
+    /// slot's configured command applies only while the selection matches
+    /// the configured harness; otherwise the harness-level fallback.
+    pub fn selection_command(&self, slot: SlotId, harness: HarnessKind) -> String {
+        if self.team.harness(slot) == harness {
+            self.slot(slot).command.clone()
+        } else {
+            self.fallback_command(harness)
+        }
+    }
+
+    /// The model override for `harness` selected onto `slot` — configured
+    /// models follow their harness, never the bare slot.
+    pub fn selection_model(&self, slot: SlotId, harness: HarnessKind) -> Option<String> {
+        if self.team.harness(slot) == harness {
+            self.slot(slot).model.clone()
+        } else {
+            None
         }
     }
 
@@ -166,6 +204,17 @@ impl Config {
             },
         };
 
+        let fallback_commands = registry::ALL
+            .into_iter()
+            .map(|harness| {
+                let command = legacy_for(harness)
+                    .command
+                    .clone()
+                    .unwrap_or_else(|| registry::descriptor(harness).default_command.to_owned());
+                (harness, command)
+            })
+            .collect();
+
         Ok(Self {
             team: Team {
                 one: one_harness,
@@ -178,6 +227,8 @@ impl Config {
                 .collaboration
                 .max_consults_per_turn
                 .unwrap_or(DEFAULT_MAX_CONSULTS),
+            explicit_slots: file.slot.one.is_some() || file.slot.two.is_some(),
+            fallback_commands,
             warnings,
         })
     }

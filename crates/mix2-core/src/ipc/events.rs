@@ -1,3 +1,5 @@
+use crate::agents::agent::AuthState;
+pub use crate::agents::discovery::DiscoveredHarness;
 use crate::agents::{AgentRole, HarnessKind, SlotId};
 pub use crate::collaboration::disagreement::{DisagreementRecord, Outcome, Stance};
 use serde::{Deserialize, Serialize};
@@ -33,9 +35,8 @@ pub struct AgentInfo {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// None = the sign-in probe couldn't tell.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authenticated: Option<bool>,
+    /// Five-state sign-in probe result; only `unauthenticated` ever blocks.
+    pub auth: AuthState,
     /// Configured/selected model; None = the provider's own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -44,12 +45,31 @@ pub struct AgentInfo {
     pub models: Vec<String>,
 }
 
+/// The core's configured/default team shape, sent with discovery so a
+/// picker can preselect it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeamProposal {
+    pub one: HarnessKind,
+    pub two: HarnessKind,
+    pub lead_slot: SlotId,
+}
+
 /// Events emitted by the core to the Ink UI, one JSON object per line on
 /// stdout. Provider-specific JSON never crosses this boundary; everything is
 /// normalized here in Rust and keyed by [`SlotId`], never by harness.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Event {
+    /// Startup discovery report: every probed `(harness, command)` pair,
+    /// the configured proposal, and whether the core is auto-confirming it
+    /// (`auto: true`) or waiting for a `select_team` command.
+    #[serde(rename = "harnesses.discovered")]
+    HarnessesDiscovered {
+        harnesses: Vec<DiscoveredHarness>,
+        proposal: TeamProposal,
+        auto: bool,
+    },
+
     #[serde(rename = "ready")]
     Ready {
         protocol: u32,
@@ -230,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_info_carries_slot_and_harness() {
+    fn agent_info_carries_slot_harness_and_auth() {
         let info = AgentInfo {
             slot: SlotId::Two,
             harness: HarnessKind::Codex,
@@ -238,13 +258,26 @@ mod tests {
             version: Some("1.0".into()),
             available: true,
             reason: None,
-            authenticated: Some(true),
+            auth: AuthState::Authenticated,
             model: None,
             models: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains(r#""slot":"two""#), "{json}");
         assert!(json.contains(r#""harness":"codex""#), "{json}");
+        assert!(json.contains(r#""auth":"authenticated""#), "{json}");
+    }
+
+    #[test]
+    fn auth_state_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&AuthState::ProbeFailed).unwrap(),
+            r#""probe_failed""#
+        );
+        assert_eq!(
+            serde_json::to_string(&AuthState::Unsupported).unwrap(),
+            r#""unsupported""#
+        );
     }
 
     #[test]
@@ -257,7 +290,7 @@ mod tests {
                 version: None,
                 available: true,
                 reason: None,
-                authenticated: None,
+                auth: AuthState::ProbeFailed,
                 model: None,
                 models: vec![],
             })
@@ -274,6 +307,43 @@ mod tests {
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains(r#""lead_slot":"two""#), "{json}");
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn harnesses_discovered_round_trips() {
+        use crate::agents::descriptor::{Capabilities, CapabilityLevel};
+        let ev = Event::HarnessesDiscovered {
+            harnesses: vec![DiscoveredHarness {
+                harness: HarnessKind::Codex,
+                command: "codex".into(),
+                version: Some("0.146.0".into()),
+                auth: AuthState::Authenticated,
+                available: true,
+                reason: None,
+                lead_eligible: true,
+                teammate_eligible: true,
+                capabilities: Capabilities {
+                    teammate_read_only: CapabilityLevel::Enforced,
+                    lead_permission_scoping: CapabilityLevel::Unverified,
+                    instruction_injection: CapabilityLevel::Enforced,
+                },
+            }],
+            proposal: TeamProposal {
+                one: HarnessKind::Claude,
+                two: HarnessKind::Codex,
+                lead_slot: SlotId::One,
+            },
+            auto: true,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"harnesses.discovered""#), "{json}");
+        assert!(
+            json.contains(r#""teammate_read_only":"enforced""#),
+            "{json}"
+        );
+        assert!(json.contains(r#""lead_slot":"one""#), "{json}");
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
     }

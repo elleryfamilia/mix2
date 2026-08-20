@@ -10,12 +10,12 @@ function apply(state: AppState, event: CoreEvent, now = T): AppState {
   return reduce(state, { type: 'core-event', event, now });
 }
 
-const ready: CoreEvent = {
+const ready: Extract<CoreEvent, { type: 'ready' }> = {
   type: 'ready',
   protocol: 2,
   session_id: 's1',
-  one: { slot: 'one', harness: 'claude', name: 'Claude', available: true },
-  two: { slot: 'two', harness: 'codex', name: 'Codex', available: true },
+  one: { slot: 'one', harness: 'claude', name: 'Claude', auth: 'authenticated', available: true },
+  two: { slot: 'two', harness: 'codex', name: 'Codex', auth: 'authenticated', available: true },
   lead_slot: 'one',
   cwd: '/repo',
   project: true,
@@ -112,8 +112,8 @@ describe('team panel disagreement ledger', () => {
       phase: 'ready',
       session: {
         sessionId: 's1',
-        one: { slot: 'one', harness: 'claude', name: 'Claude', available: true },
-        two: { slot: 'two', harness: 'codex', name: 'Codex', available: true },
+        one: { slot: 'one', harness: 'claude', name: 'Claude', auth: 'authenticated', available: true },
+        two: { slot: 'two', harness: 'codex', name: 'Codex', auth: 'authenticated', available: true },
         leadSlot: 'one',
         cwd: '/repo',
         project: true,

@@ -18,7 +18,7 @@ interface Harness {
   unmount: () => void;
 }
 
-const ready: CoreEvent = {
+const ready: Extract<CoreEvent, { type: 'ready' }> = {
   type: 'ready',
   protocol: 2,
   session_id: 's1',
@@ -27,7 +27,7 @@ const ready: CoreEvent = {
     harness: 'claude',
     name: 'Claude',
     version: '2.1.232',
-    available: true,
+    auth: 'authenticated', available: true,
     models: ['fable', 'opus', 'sonnet', 'haiku'],
   },
   two: {
@@ -35,7 +35,7 @@ const ready: CoreEvent = {
     harness: 'codex',
     name: 'Codex',
     version: '0.146.0',
-    available: true,
+    auth: 'authenticated', available: true,
     models: ['gpt-5.3-codex', 'gpt-5-codex'],
   },
   lead_slot: 'one',
@@ -88,7 +88,7 @@ describe('App', () => {
     await tickReact();
     h.emit({
       ...ready,
-      two: { slot: 'two', harness: 'codex', name: 'Codex', available: false, reason: 'not installed' },
+      two: { slot: 'two', harness: 'codex', name: 'Codex', auth: 'authenticated', available: false, reason: 'not installed' },
     });
     await tickReact();
     expect(h.lastFrame()).toContain('Codex offline');

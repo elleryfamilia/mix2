@@ -13,6 +13,7 @@ Usage:
 Options:
   -l, --lead <slot>    Lead slot: one or two; agent names like claude/codex
                        also work while unambiguous (default: configured)
+      --pick-team      Choose the team at startup even when configured
       --cwd <path>     Project directory (default: current directory)
       --debug          Verbose runtime logging (IPC log in /tmp/mix2)
       --core <path>    Path to the mix2-core binary
@@ -28,6 +29,7 @@ export interface CliArgs {
   lead?: string;
   cwd?: string;
   debug: boolean;
+  pickTeam: boolean;
   core?: string;
 }
 
@@ -47,7 +49,7 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     return { kind: 'update' };
   }
-  const args: CliArgs = { debug: false };
+  const args: CliArgs = { debug: false, pickTeam: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     switch (arg) {
@@ -55,6 +57,9 @@ export function parseArgs(argv: string[]): ParseResult {
       case '--lead':
         if (argv[i + 1] === undefined) return missingValue(arg);
         args.lead = argv[++i];
+        break;
+      case '--pick-team':
+        args.pickTeam = true;
         break;
       case '--cwd':
         if (argv[i + 1] === undefined) return missingValue(arg);
