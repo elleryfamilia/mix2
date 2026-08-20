@@ -30,6 +30,8 @@ struct CoreOptions {
     /// Defaults to a nonexistent path so discovery never probes a real
     /// cursor-agent install on the dev machine.
     cursor_cmd: Option<String>,
+    /// Same hermetic default for the real opencode install.
+    opencode_cmd: Option<String>,
     max_consults: Option<u32>,
     /// Raw TOML appended to the generated config file (slot tables, legacy
     /// sections) for the config-schema tests.
@@ -46,6 +48,7 @@ impl Default for CoreOptions {
             claude_cmd: Some(fixtures_dir().join("fake-claude").display().to_string()),
             codex_cmd: Some(fixtures_dir().join("fake-codex").display().to_string()),
             cursor_cmd: Some("/nonexistent/cursor-agent-binary".into()),
+            opencode_cmd: Some("/nonexistent/opencode-binary".into()),
             max_consults: None,
             config_extra: String::new(),
             pick_team: false,
@@ -80,7 +83,8 @@ impl Core {
             .stderr(Stdio::piped())
             .env_remove("MIX2_CLAUDE_CMD")
             .env_remove("MIX2_CODEX_CMD")
-            .env_remove("MIX2_CURSOR_CMD");
+            .env_remove("MIX2_CURSOR_CMD")
+            .env_remove("MIX2_OPENCODE_CMD");
         if let Some(claude) = &options.claude_cmd {
             cmd.env("MIX2_CLAUDE_CMD", claude);
         }
@@ -89,6 +93,9 @@ impl Core {
         }
         if let Some(cursor) = &options.cursor_cmd {
             cmd.env("MIX2_CURSOR_CMD", cursor);
+        }
+        if let Some(opencode) = &options.opencode_cmd {
+            cmd.env("MIX2_OPENCODE_CMD", opencode);
         }
         for (key, value) in &options.env {
             cmd.env(key, value);
@@ -1260,6 +1267,109 @@ fn signed_out_cursor_is_reported_in_discovery() {
         .as_str()
         .unwrap()
         .contains("cursor-agent login"));
+}
+
+#[test]
+fn opencode_teammate_full_consult_with_live_model_listing() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        opencode_cmd: Some(fixtures_dir().join("fake-opencode").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"opencode\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["two"]["harness"], "opencode");
+    assert_eq!(ready["two"]["name"], "OpenCode");
+    // Credential inventory maps to configured, never authenticated.
+    assert_eq!(ready["two"]["auth"], "configured");
+    // The model list came from live enumeration, not a curated constant.
+    let models: Vec<String> = ready["two"]["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m.as_str().unwrap().to_owned())
+        .collect();
+    assert!(models.contains(&"fake/model-a".to_owned()), "{models:?}");
+    assert!(models.contains(&"opencode/big-pickle".to_owned()));
+
+    core.submit("t1", "SCENARIO:consult what does the team think?");
+    let events = core.events_until("turn.completed", LONG);
+    let completed = find(&events, "consult.completed").unwrap();
+    assert_eq!(completed["slot"], "two");
+    let text = completed["text"].as_str().unwrap();
+    assert!(text.contains("fake-opencode reply"), "got: {text}");
+    assert!(text.contains("[role:teammate]"), "got: {text}");
+    assert!(text.contains("[agent:plan]"), "read-only agent: {text}");
+    // The pinned tool part surfaced as teammate tool activity.
+    let tool_started = events
+        .iter()
+        .any(|e| e["type"] == "agent.tool.started" && e["slot"] == "two" && e["name"] == "read");
+    assert!(tool_started, "tool part must reach the UI as activity");
+    assert_eq!(find(&events, "message.final").unwrap()["speaker"], "team");
+}
+
+#[test]
+fn opencode_model_selection_reaches_the_invocation() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        opencode_cmd: Some(fixtures_dir().join("fake-opencode").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"opencode\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    core.events_until("ready", LONG);
+
+    core.send(&serde_json::json!({"type": "set_model", "slot": "two", "model": "fake/model-b"}));
+    core.events_until("agent.model", LONG);
+
+    core.submit("t1", "SCENARIO:consult check the model");
+    let events = core.events_until("turn.completed", LONG);
+    let text = find(&events, "consult.completed").unwrap()["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("[model:fake/model-b]"), "got: {text}");
+}
+
+#[test]
+fn opencode_model_enumeration_failure_degrades_to_manual_entry() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        opencode_cmd: Some(fixtures_dir().join("fake-opencode").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"opencode\"\n".to_owned(),
+        env: vec![("FAKE_OPENCODE_MODELS_FAIL".into(), "1".into())],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    // Still available and usable; the picker just has no list to offer
+    // (typed /model entry still works, proven by the turn completing).
+    assert_eq!(ready["two"]["harness"], "opencode");
+    assert!(ready["two"]["models"]
+        .as_array()
+        .is_none_or(|m| m.is_empty()));
+
+    core.submit("t1", "hi");
+    core.events_until("turn.completed", LONG);
+}
+
+#[test]
+fn opencode_error_envelope_fails_the_consult_cleanly() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        opencode_cmd: Some(fixtures_dir().join("fake-opencode").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"opencode\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    core.events_until("ready", LONG);
+
+    core.submit("t1", "SCENARIO:consult CONSULT_PROMPT:SCENARIO:error");
+    let events = core.events_until("turn.completed", LONG);
+    let failed = find(&events, "consult.failed").unwrap();
+    assert!(failed["message"]
+        .as_str()
+        .unwrap()
+        .contains("provider exploded"));
+    assert_eq!(find(&events, "message.final").unwrap()["speaker"], "one");
 }
 
 fn extract_marker(text: &str, key: &str) -> String {

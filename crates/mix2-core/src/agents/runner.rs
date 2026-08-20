@@ -163,9 +163,48 @@ impl Agent for HarnessAgent {
             .collect()
     }
 
+    async fn models(&self) -> Vec<String> {
+        let Some(args) = self.descriptor.models_args else {
+            return self.known_models();
+        };
+        // Live, quota-free enumeration, bounded so a harness exposing an
+        // enormous catalog can't flood the picker. Any failure degrades to
+        // the curated fallback — never to unavailability.
+        const MAX_MODELS: usize = 50;
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            tokio::process::Command::new(&self.command)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .output(),
+        )
+        .await;
+        let Ok(Ok(out)) = out else {
+            return self.known_models();
+        };
+        if !out.status.success() {
+            return self.known_models();
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let models: Vec<String> = stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.contains(' '))
+            .take(MAX_MODELS)
+            .map(str::to_owned)
+            .collect();
+        if models.is_empty() {
+            self.known_models()
+        } else {
+            models
+        }
+    }
+
     async fn auth_status(&self) -> AuthState {
         let args = match self.descriptor.auth_probe {
-            AuthProbe::JsonLoggedIn { args } | AuthProbe::ExitStatus { args } => args,
+            AuthProbe::JsonLoggedIn { args }
+            | AuthProbe::ExitStatus { args }
+            | AuthProbe::CredentialInventory { args } => args,
             // No probe exists — never burn quota with trial prompts; surface
             // run-time auth failures cleanly instead.
             AuthProbe::None => return AuthState::Unsupported,
@@ -188,6 +227,16 @@ impl Agent for HarnessAgent {
                     AuthState::Authenticated
                 } else {
                     AuthState::Unauthenticated
+                }
+            }
+            AuthProbe::CredentialInventory { .. } => {
+                // An inventory proves credentials exist, not that they are
+                // live — Configured, never Authenticated. A failing
+                // inventory proves nothing either way.
+                if out.status.success() {
+                    AuthState::Configured
+                } else {
+                    AuthState::ProbeFailed
                 }
             }
             AuthProbe::JsonLoggedIn { .. } => {

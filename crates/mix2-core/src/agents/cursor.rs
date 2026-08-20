@@ -65,6 +65,7 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
         "claude-4.5-sonnet-thinking",
         "gemini-3-flash",
     ],
+    models_args: None,
     version_args: &["--version"],
     parse_version,
     // `cursor-agent status` exits 0 when signed in ("✓ Logged in as …").

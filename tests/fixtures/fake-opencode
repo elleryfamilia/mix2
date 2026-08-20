@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Fake OpenCode CLI for mix2 tests.
+
+Speaks the JSONL envelope shape of `opencode run --format json` (pinned
+from a live tool-using probe against opencode 1.16.2): step_start /
+tool_use / text / step_finish envelopes, every one carrying the top-level
+sessionID used for `-s` resumes. The message is positional; role
+instructions ride in-band ahead of it.
+
+The invocation contract is asserted hard: anything other than
+`run --format json --agent plan [-m model] [-s id] <message>` exits 2.
+
+Subcommands: `--version`, `auth list` (credential inventory; exit 1 when
+FAKE_OPENCODE_NO_AUTH=1), `models` (exit 1 when FAKE_OPENCODE_MODELS_FAIL=1).
+
+Scenario markers (first token of any line of the message):
+  SCENARIO:fail       exit non-zero with a stderr message
+  SCENARIO:error      emit an error envelope instead of text
+  SCENARIO:malformed  emit a garbage line before a valid response
+  SCENARIO:slow       sleep a long time before responding
+
+The final text carries bracketed markers for assertions:
+  [session:<id>] [resumed:yes|no] [role:teammate|none] [model:<m>]
+  [agent:plan]
+"""
+import json
+import os
+import sys
+import time
+import uuid
+
+VALUE_FLAGS = {"--format", "--agent", "-m", "-s"}
+
+
+def envelope(kind, session_id, part):
+    sys.stdout.write(json.dumps({
+        "type": kind, "timestamp": 1787261742415,
+        "sessionID": session_id, "part": part,
+    }) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args:
+        print("9.9.9-fake")
+        return 0
+
+    if args[:2] == ["auth", "list"]:
+        if os.environ.get("FAKE_OPENCODE_NO_AUTH") == "1":
+            sys.stderr.write("no credential store\n")
+            return 1
+        print("Credentials ~/.local/share/opencode/auth.json")
+        print("2 credentials")
+        return 0
+
+    if args[:1] == ["models"]:
+        if os.environ.get("FAKE_OPENCODE_MODELS_FAIL") == "1":
+            sys.stderr.write("model enumeration exploded\n")
+            return 1
+        print("fake/model-a")
+        print("fake/model-b")
+        print("opencode/big-pickle")
+        return 0
+
+    if args[:1] != ["run"]:
+        sys.stderr.write(f"fake-opencode: unexpected subcommand: {args!r}\n")
+        return 2
+
+    flags = {}
+    positional = []
+    i = 1
+    while i < len(args):
+        a = args[i]
+        if a in VALUE_FLAGS and i + 1 < len(args):
+            flags[a] = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("-"):
+            flags[a] = True
+            i += 1
+            continue
+        positional.append(a)
+        i += 1
+
+    required = (
+        flags.get("--format") == "json"
+        and flags.get("--agent") == "plan"
+        and len(positional) == 1
+    )
+    if not required:
+        sys.stderr.write(
+            f"fake-opencode: unexpected argv (contract drift): {args!r}\n"
+        )
+        return 2
+
+    prompt = positional[0]
+    model = flags.get("-m", "provider-default")
+    resume_id = flags.get("-s")
+    scenarios = _line_scenarios(prompt)
+
+    if "fail" in scenarios:
+        sys.stderr.write("fake-opencode: simulated provider failure\n")
+        return 1
+
+    session_id = resume_id or f"ses_{uuid.uuid4().hex[:12]}"
+    resumed = "yes" if resume_id else "no"
+    role = "teammate" if "consulting engineer" in prompt else "none"
+
+    envelope("step_start", session_id, {"id": "prt_1", "type": "step-start"})
+
+    if "error" in scenarios:
+        envelope("error", session_id, {"error": "provider exploded mid-run"})
+        return 1
+
+    if "malformed" in scenarios:
+        sys.stdout.write("this is not json at all {{{\n")
+        sys.stdout.flush()
+
+    if "slow" in scenarios:
+        time.sleep(120)
+
+    # A little tool activity, exactly as pinned from the live probe.
+    envelope("tool_use", session_id, {
+        "id": "prt_2", "type": "tool", "tool": "read", "callID": "call_1",
+        "state": {
+            "status": "completed",
+            "input": {"filePath": "note.txt"},
+            "title": "note.txt",
+            "time": {"start": 1, "end": 2},
+        },
+    })
+    envelope("step_finish", session_id, {
+        "id": "prt_3", "type": "step-finish", "reason": "tool-calls",
+        "tokens": {"total": 100, "input": 90, "output": 8, "reasoning": 2,
+                   "cache": {"write": 0, "read": 0}},
+        "cost": 0,
+    })
+
+    text = (
+        f"fake-opencode reply [session:{session_id}] [resumed:{resumed}] "
+        f"[role:{role}] [model:{model}] [agent:plan]"
+    )
+    envelope("step_start", session_id, {"id": "prt_4", "type": "step-start"})
+    envelope("text", session_id, {
+        "id": "prt_5", "type": "text", "text": text,
+        "time": {"start": 3, "end": 4},
+    })
+    envelope("step_finish", session_id, {
+        "id": "prt_6", "type": "step-finish", "reason": "stop",
+        "tokens": {"total": 130, "input": 100, "output": 30, "reasoning": 0,
+                   "cache": {"write": 0, "read": 50}},
+        "cost": 0,
+    })
+    return 0
+
+
+def _line_scenarios(prompt):
+    scenarios = set()
+    for line in prompt.splitlines():
+        for token in line.split():
+            if token.startswith("SCENARIO:"):
+                scenarios.add(token[len("SCENARIO:"):])
+            else:
+                break
+    return scenarios
+
+
+if __name__ == "__main__":
+    sys.exit(main())

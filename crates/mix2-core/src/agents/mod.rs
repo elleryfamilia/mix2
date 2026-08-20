@@ -5,6 +5,7 @@ pub mod cursor;
 pub mod descriptor;
 pub mod discovery;
 pub mod events;
+pub mod opencode;
 pub mod registry;
 pub mod runner;
 
@@ -69,6 +70,7 @@ pub enum HarnessKind {
     Claude,
     Codex,
     Cursor,
+    Opencode,
 }
 
 impl HarnessKind {
@@ -77,6 +79,7 @@ impl HarnessKind {
             HarnessKind::Claude => "Claude",
             HarnessKind::Codex => "Codex",
             HarnessKind::Cursor => "Cursor",
+            HarnessKind::Opencode => "OpenCode",
         }
     }
 }
@@ -87,6 +90,7 @@ impl fmt::Display for HarnessKind {
             HarnessKind::Claude => write!(f, "claude"),
             HarnessKind::Codex => write!(f, "codex"),
             HarnessKind::Cursor => write!(f, "cursor"),
+            HarnessKind::Opencode => write!(f, "opencode"),
         }
     }
 }

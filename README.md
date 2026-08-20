@@ -174,10 +174,15 @@ harness = "codex"
 ```
 
 The same harness on both slots is allowed (the UI shows them as e.g.
-"Codex (one)" / "Codex (two)"). Besides `claude` and `codex`, the
-[Cursor CLI](https://cursor.com/cli) is supported as a teammate
-(`harness = "cursor"`, read-only `--mode plan` consultations; it runs
-with `--trust`, disclosed in the picker).
+"Codex (one)" / "Codex (two)"). Besides `claude` and `codex`, two more
+harnesses are supported as teammates:
+
+- [Cursor CLI](https://cursor.com/cli) — `harness = "cursor"`; read-only
+  `--mode plan` consultations; runs with `--trust`, disclosed in the
+  picker.
+- [OpenCode](https://opencode.ai) — `harness = "opencode"`; read-only
+  `plan` agent consultations; models span providers
+  (`model = "provider/model"`), listed live for the `/model` picker.
 
 The legacy harness-keyed schema keeps working unchanged, and the two can
 mix (slot values win; conflicts are reported as warnings at startup):

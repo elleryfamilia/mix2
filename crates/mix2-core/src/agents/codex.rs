@@ -47,6 +47,7 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     // Curated: the models codex's `-m` commonly accepts. Replace with a
     // provider listing when the CLI grows one.
     known_models: &["gpt-5.3-codex", "gpt-5-codex", "gpt-5", "gpt-5-codex-mini"],
+    models_args: None,
     version_args: &["--version"],
     parse_version,
     // `codex login status` exits 0 when signed in, non-zero otherwise.
