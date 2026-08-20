@@ -1,7 +1,8 @@
 import { Text } from 'ink';
 import React from 'react';
 import type { SessionInfo } from '../state/store.js';
-import { agentColor, agentGlyph, displayName, theme } from '../theme/theme.js';
+import { leadInfo, otherSlot, teammateInfo } from '../state/store.js';
+import { agentColor, agentGlyph, theme } from '../theme/theme.js';
 
 function shortenPath(cwd: string, maxLength: number): string {
   const home = process.env['HOME'];
@@ -32,15 +33,16 @@ export function Header({
 
   // The team roster: no lead/teammate labels — the user talks to one team,
   // and who coordinates is an internal mechanic.
-  const lead = session?.lead.kind;
-  const teammate = session?.teammate.kind;
+  const lead = session?.leadSlot;
+  const teammate = session ? otherSlot(session.leadSlot) : undefined;
+  const leadName = session ? leadInfo(session).name : '';
   const teammateLabel = session
-    ? session.teammate.available
-      ? displayName(teammate!)
-      : `${displayName(teammate!)} offline`
+    ? teammateInfo(session).available
+      ? teammateInfo(session).name
+      : `${teammateInfo(session).name} offline`
     : '';
   const identityPlain = session
-    ? `  ${agentGlyph(lead!)} ${displayName(lead!)} ${'·'} ${agentGlyph(teammate!)} ${teammateLabel}`
+    ? `  ${agentGlyph(lead!)} ${leadName} ${'·'} ${agentGlyph(teammate!)} ${teammateLabel}`
     : '';
 
   const leftLen = 1 + chipLabel.length + identityPlain.length;
@@ -61,7 +63,7 @@ export function Header({
             {agentGlyph(lead!)}
           </Text>
           <Text backgroundColor={bg} color={theme.text.muted}>
-            {` ${displayName(lead!)} · `}
+            {` ${leadName} · `}
           </Text>
           <Text backgroundColor={bg} color={agentColor(teammate!)}>
             {agentGlyph(teammate!)}

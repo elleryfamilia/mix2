@@ -6,7 +6,7 @@
 //! validation happens here, server-side, so the grammar lives in exactly one
 //! place. This module stays dependency-free (serde + std only).
 
-use crate::agents::AgentKind;
+use crate::agents::{SlotId, Team};
 use serde::{Deserialize, Serialize};
 
 /// What became of one agent's position.
@@ -18,16 +18,15 @@ pub enum Outcome {
     Dropped,
 }
 
-/// One session agent's position and what happened to it.
+/// One team slot's position and what happened to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stance {
-    pub agent: AgentKind,
+    pub slot: SlotId,
     pub position: String,
     pub outcome: Outcome,
 }
 
-/// A recorded disagreement: each session agent's stance plus the team's
-/// resolution.
+/// A recorded disagreement: each slot's stance plus the team's resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisagreementRecord {
     pub stances: Vec<Stance>,
@@ -45,17 +44,14 @@ SPLIT"#;
 
 /// Parse a `mix2-consult disagree` payload into a [`DisagreementRecord`].
 ///
-/// Grammar: one line per session agent, `<agent>: <position> | <outcome>`
-/// (agent names case-insensitive; both the kind name and display name are
-/// accepted; split on the LAST `|` since positions may themselves contain
-/// pipes), followed by a required `team: <resolution>` line. Lines after
-/// `team` that don't match an agent line fold into the resolution,
-/// space-joined and hard-capped at 300 chars on a word boundary.
-pub fn parse(
-    text: &str,
-    lead: AgentKind,
-    teammate: AgentKind,
-) -> Result<DisagreementRecord, String> {
+/// Grammar: one line per team slot, `<agent>: <position> | <outcome>`.
+/// The slot ids `one:`/`two:` are always accepted; a harness name or display
+/// name ("codex:", "Claude:") resolves only while exactly one slot runs that
+/// harness (see [`Team::slot_named`]). Split on the LAST `|` since positions
+/// may themselves contain pipes. A required `team: <resolution>` line
+/// follows; lines after `team` that don't match an agent line fold into the
+/// resolution, space-joined and hard-capped at 300 chars on a word boundary.
+pub fn parse(text: &str, team: &Team) -> Result<DisagreementRecord, String> {
     let mut stances: Vec<Stance> = Vec::new();
     let mut resolution = String::new();
     let mut seen_team = false;
@@ -73,8 +69,8 @@ pub fn parse(
                 push_resolution_piece(&mut resolution, rest.trim());
                 continue;
             }
-            if let Some(agent) = match_agent(&name_norm, lead, teammate) {
-                stances.push(parse_stance_line(agent, rest)?);
+            if let Some(slot) = team.slot_named(&name_norm) {
+                stances.push(parse_stance_line(slot, team, rest)?);
                 continue;
             }
         }
@@ -84,8 +80,8 @@ pub fn parse(
         }
     }
 
-    for agent in [lead, teammate] {
-        let count = stances.iter().filter(|s| s.agent == agent).count();
+    for slot in SlotId::ALL {
+        let count = stances.iter().filter(|s| s.slot == slot).count();
         if count != 1 {
             return Err("each agent needs exactly one line".to_string());
         }
@@ -100,16 +96,10 @@ pub fn parse(
         }
     }
 
-    let lead_position =
-        normalize_position(&stances.iter().find(|s| s.agent == lead).unwrap().position);
-    let teammate_position = normalize_position(
-        &stances
-            .iter()
-            .find(|s| s.agent == teammate)
-            .unwrap()
-            .position,
-    );
-    if lead_position == teammate_position {
+    let position_of = |slot: SlotId| {
+        normalize_position(&stances.iter().find(|s| s.slot == slot).unwrap().position)
+    };
+    if position_of(SlotId::One) == position_of(SlotId::Two) {
         return Err(
             "both positions are the same — that's not a split; disclose the nuance in prose instead"
                 .to_string(),
@@ -134,19 +124,16 @@ pub fn refusal(err: &str) -> String {
     )
 }
 
-fn match_agent(name_norm: &str, lead: AgentKind, teammate: AgentKind) -> Option<AgentKind> {
-    [lead, teammate].into_iter().find(|&agent| {
-        name_norm == agent.to_string() || name_norm == agent.display_name().to_lowercase()
-    })
-}
-
-fn parse_stance_line(agent: AgentKind, rest: &str) -> Result<Stance, String> {
-    let (position_raw, outcome_raw) = rest
-        .rsplit_once('|')
-        .ok_or_else(|| format!("{} line is missing '| <outcome>'", agent.display_name()))?;
+fn parse_stance_line(slot: SlotId, team: &Team, rest: &str) -> Result<Stance, String> {
+    let (position_raw, outcome_raw) = rest.rsplit_once('|').ok_or_else(|| {
+        format!(
+            "{} line is missing '| <outcome>'",
+            team.harness(slot).display_name()
+        )
+    })?;
     let outcome = parse_outcome(outcome_raw)?;
     Ok(Stance {
-        agent,
+        slot,
         position: position_raw.trim().to_string(),
         outcome,
     })
@@ -212,17 +199,53 @@ fn cap_resolution(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::HarnessKind;
+
+    fn team() -> Team {
+        Team {
+            one: HarnessKind::Claude,
+            two: HarnessKind::Codex,
+            lead: SlotId::One,
+        }
+    }
 
     #[test]
     fn parses_canonical_block() {
         let text = "claude: cache the compiled schema in-process | chosen\n\
                     codex: move validation off the hot path | deferred\n\
                     team: ship the cache now; file the rework as a follow-up";
-        let r = parse(text, AgentKind::Claude, AgentKind::Codex).unwrap();
+        let r = parse(text, &team()).unwrap();
         assert_eq!(r.stances.len(), 2);
+        assert_eq!(r.stances[0].slot, SlotId::One);
         assert_eq!(r.stances[0].outcome, Outcome::Chosen);
+        assert_eq!(r.stances[1].slot, SlotId::Two);
         assert_eq!(r.stances[1].outcome, Outcome::Deferred);
         assert!(r.resolution.starts_with("ship the cache"));
+    }
+
+    #[test]
+    fn accepts_slot_ids_as_canonical_names() {
+        let text = "one: cache the compiled schema | chosen\n\
+                    two: move validation off the hot path | deferred\n\
+                    team: ship the cache";
+        let r = parse(text, &team()).unwrap();
+        assert_eq!(r.stances[0].slot, SlotId::One);
+        assert_eq!(r.stances[1].slot, SlotId::Two);
+    }
+
+    #[test]
+    fn harness_names_are_ambiguous_on_same_harness_teams() {
+        let same = Team {
+            one: HarnessKind::Codex,
+            two: HarnessKind::Codex,
+            lead: SlotId::One,
+        };
+        let by_name = "codex: a | chosen\ncodex: b | deferred\nteam: c";
+        assert!(parse(by_name, &same).is_err(), "names cannot disambiguate");
+        let by_slot = "one: a | chosen\ntwo: b | deferred\nteam: c";
+        let r = parse(by_slot, &same).unwrap();
+        assert_eq!(r.stances[0].slot, SlotId::One);
+        assert_eq!(r.stances[1].slot, SlotId::Two);
     }
 
     #[test]
@@ -230,14 +253,14 @@ mod tests {
         let text = "Claude: use `string | null` in the schema | chosen\n\
                     Codex: keep the alias | dropped\n\
                     team: go with the union";
-        let r = parse(text, AgentKind::Claude, AgentKind::Codex).unwrap();
+        let r = parse(text, &team()).unwrap();
         assert_eq!(r.stances[0].position, "use `string | null` in the schema");
     }
 
     #[test]
     fn accepts_outcome_synonyms() {
         let text = "claude: a | shipped\ncodex: b | follow-up\nteam: call";
-        let r = parse(text, AgentKind::Claude, AgentKind::Codex).unwrap();
+        let r = parse(text, &team()).unwrap();
         assert_eq!(r.stances[0].outcome, Outcome::Chosen);
         assert_eq!(r.stances[1].outcome, Outcome::Deferred);
     }
@@ -248,29 +271,19 @@ mod tests {
             "claude: a | chosen\ncodex: b | deferred\nteam: first.\n{}",
             "word ".repeat(100)
         );
-        let r = parse(&text, AgentKind::Claude, AgentKind::Codex).unwrap();
+        let r = parse(&text, &team()).unwrap();
         assert!(r.resolution.chars().count() <= 300);
         assert!(r.resolution.ends_with('…'));
     }
 
     #[test]
     fn rejects_missing_team_line() {
-        assert!(parse(
-            "claude: a | chosen\ncodex: b | deferred",
-            AgentKind::Claude,
-            AgentKind::Codex
-        )
-        .is_err());
+        assert!(parse("claude: a | chosen\ncodex: b | deferred", &team()).is_err());
     }
 
     #[test]
     fn rejects_unknown_outcome_naming_the_tail() {
-        let err = parse(
-            "claude: a | maybe\ncodex: b | deferred\nteam: c",
-            AgentKind::Claude,
-            AgentKind::Codex,
-        )
-        .unwrap_err();
+        let err = parse("claude: a | maybe\ncodex: b | deferred\nteam: c", &team()).unwrap_err();
         assert!(err.contains("maybe"));
     }
 
@@ -278,8 +291,7 @@ mod tests {
     fn rejects_identical_positions() {
         let err = parse(
             "claude: Use the cache | chosen\ncodex: use  the cache | deferred\nteam: c",
-            AgentKind::Claude,
-            AgentKind::Codex,
+            &team(),
         )
         .unwrap_err();
         assert!(err.contains("not a split"));
@@ -291,25 +303,13 @@ mod tests {
             "claude: {} | chosen\ncodex: b | deferred\nteam: c",
             "x".repeat(201)
         );
-        assert!(parse(&text, AgentKind::Claude, AgentKind::Codex)
-            .unwrap_err()
-            .contains("too long"));
+        assert!(parse(&text, &team()).unwrap_err().contains("too long"));
     }
 
     #[test]
     fn rejects_wrong_and_duplicate_agents() {
-        assert!(parse(
-            "gemini: a | chosen\ncodex: b | deferred\nteam: c",
-            AgentKind::Claude,
-            AgentKind::Codex
-        )
-        .is_err());
-        assert!(parse(
-            "claude: a | chosen\nclaude: b | deferred\nteam: c",
-            AgentKind::Claude,
-            AgentKind::Codex
-        )
-        .is_err());
+        assert!(parse("gemini: a | chosen\ncodex: b | deferred\nteam: c", &team()).is_err());
+        assert!(parse("claude: a | chosen\nclaude: b | deferred\nteam: c", &team()).is_err());
     }
 
     #[test]
@@ -319,6 +319,6 @@ mod tests {
             .filter(|l| !l.starts_with("mix2-consult") && *l != "SPLIT")
             .collect::<Vec<_>>()
             .join("\n");
-        parse(&body, AgentKind::Claude, AgentKind::Codex).unwrap();
+        parse(&body, &team()).unwrap();
     }
 }

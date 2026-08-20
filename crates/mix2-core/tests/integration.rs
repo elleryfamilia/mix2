@@ -96,7 +96,7 @@ impl Core {
             events: rx,
         };
         let mut init = serde_json::json!({
-            "type": "initialize", "protocol": 1,
+            "type": "initialize", "protocol": 2,
             "cwd": std::env::current_dir().unwrap().display().to_string(),
         });
         if let Some(lead) = options.lead {
@@ -173,9 +173,11 @@ fn greeting_uses_lead_only() {
     let mut core = Core::start(CoreOptions::default());
     let startup = core.events_until("ready", LONG);
     let ready = find(&startup, "ready").unwrap();
-    assert_eq!(ready["lead"]["kind"], "claude");
-    assert_eq!(ready["teammate"]["kind"], "codex");
-    assert_eq!(ready["teammate"]["available"], true);
+    assert_eq!(ready["one"]["slot"], "one");
+    assert_eq!(ready["one"]["harness"], "claude");
+    assert_eq!(ready["two"]["harness"], "codex");
+    assert_eq!(ready["two"]["available"], true);
+    assert_eq!(ready["lead_slot"], "one");
 
     core.submit("t1", "hi");
     let events = core.events_until("turn.completed", LONG);
@@ -183,7 +185,7 @@ fn greeting_uses_lead_only() {
     assert!(find(&events, "agent.started").is_some());
     assert_eq!(count(&events, "consult.started"), 0);
     let final_msg = find(&events, "message.final").unwrap();
-    assert_eq!(final_msg["speaker"], "claude");
+    assert_eq!(final_msg["speaker"], "one");
     let text = final_msg["text"].as_str().unwrap();
     assert!(text.contains("[resumed:no]"), "unexpected text: {text}");
     assert!(
@@ -205,7 +207,7 @@ fn claude_lead_consults_codex_and_answer_is_team() {
     let events = core.events_until("turn.completed", LONG);
 
     let started = find(&events, "consult.started").unwrap();
-    assert_eq!(started["agent"], "codex");
+    assert_eq!(started["slot"], "two");
     assert_eq!(started["index"], 1);
     assert_eq!(started["max"], 2);
 
@@ -237,13 +239,16 @@ fn codex_lead_consults_claude() {
     });
     let startup = core.events_until("ready", LONG);
     let ready = find(&startup, "ready").unwrap();
-    assert_eq!(ready["lead"]["kind"], "codex");
-    assert_eq!(ready["teammate"]["kind"], "claude");
+    // Reversed lead: the harness-to-slot mapping is stable (slot one is
+    // still Claude); only the lead slot moves.
+    assert_eq!(ready["lead_slot"], "two");
+    assert_eq!(ready["one"]["harness"], "claude");
+    assert_eq!(ready["two"]["harness"], "codex");
 
     core.submit("t1", "SCENARIO:consult review this");
     let events = core.events_until("turn.completed", LONG);
     let completed = find(&events, "consult.completed").unwrap();
-    assert_eq!(completed["agent"], "claude");
+    assert_eq!(completed["slot"], "one");
     let teammate_text = completed["text"].as_str().unwrap();
     assert!(teammate_text.contains("fake-claude reply"));
     assert!(
@@ -252,6 +257,7 @@ fn codex_lead_consults_claude() {
     );
     let final_msg = find(&events, "message.final").unwrap();
     assert_eq!(final_msg["speaker"], "team");
+    assert_eq!(final_msg["lead_slot"], "two");
     // Codex lead runs with the workspace-write sandbox for consult IPC.
     assert!(final_msg["text"]
         .as_str()
@@ -322,7 +328,7 @@ fn abandoned_consultation_never_bleeds_into_the_next_turn() {
     assert_eq!(count(&events, "consult.started"), 1);
     assert_eq!(count(&events, "consult.completed"), 0);
     let final_msg = find(&events, "message.final").unwrap();
-    assert_eq!(final_msg["speaker"], "claude");
+    assert_eq!(final_msg["speaker"], "one");
     assert!(final_msg["text"]
         .as_str()
         .unwrap()
@@ -334,7 +340,7 @@ fn abandoned_consultation_never_bleeds_into_the_next_turn() {
     assert_eq!(count(&events, "consult.completed"), 0);
     assert_eq!(count(&events, "consult.failed"), 0);
     let final_msg = find(&events, "message.final").unwrap();
-    assert_eq!(final_msg["speaker"], "claude");
+    assert_eq!(final_msg["speaker"], "one");
     assert_eq!(final_msg["consultations"], 0);
 }
 
@@ -460,7 +466,7 @@ fn failed_consultation_does_not_fail_the_lead() {
     // The lead still answered; attribution stays solo because no
     // consultation actually succeeded.
     let final_msg = find(&events, "message.final").unwrap();
-    assert_eq!(final_msg["speaker"], "claude");
+    assert_eq!(final_msg["speaker"], "one");
     assert!(final_msg["text"]
         .as_str()
         .unwrap()
@@ -520,16 +526,17 @@ fn set_model_applies_to_lead_and_teammate() {
     let mut core = Core::start(CoreOptions::default());
     let startup = core.events_until("ready", LONG);
     let ready = find(&startup, "ready").unwrap();
-    assert!(ready["lead"]["model"].is_null());
+    assert!(ready["one"]["model"].is_null());
 
-    core.send(&serde_json::json!({"type": "set_model", "agent": "claude", "model": "sonnet"}));
+    // Legacy harness names still target the slot while they're unambiguous.
+    core.send(&serde_json::json!({"type": "set_model", "slot": "claude", "model": "sonnet"}));
     let events = core.events_until("agent.model", LONG);
     let confirm = find(&events, "agent.model").unwrap();
-    assert_eq!(confirm["agent"], "claude");
+    assert_eq!(confirm["slot"], "one");
     assert_eq!(confirm["model"], "sonnet");
     assert_eq!(confirm["source"], "selected");
 
-    core.send(&serde_json::json!({"type": "set_model", "agent": "codex", "model": "gpt-5-codex"}));
+    core.send(&serde_json::json!({"type": "set_model", "slot": "two", "model": "gpt-5-codex"}));
     core.events_until("agent.model", LONG);
 
     core.submit("t1", "SCENARIO:consult check models");
@@ -550,7 +557,7 @@ fn set_model_applies_to_lead_and_teammate() {
     );
 
     // Clearing returns to the provider default.
-    core.send(&serde_json::json!({"type": "set_model", "agent": "claude", "model": null}));
+    core.send(&serde_json::json!({"type": "set_model", "slot": "one", "model": null}));
     let events = core.events_until("agent.model", LONG);
     assert!(find(&events, "agent.model").unwrap()["model"].is_null());
     core.submit("t2", "plain again");

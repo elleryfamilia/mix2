@@ -1,7 +1,7 @@
 use crate::agents::agent::{Agent, AgentRequest, AgentResult, AgentSession, AuthStatus};
 use crate::agents::claude::ClaudeAgent;
 use crate::agents::codex::CodexAgent;
-use crate::agents::{AgentEvent, AgentKind, AgentRole};
+use crate::agents::{AgentEvent, AgentRole, HarnessKind, SlotId, Team};
 use crate::collaboration::consult::{ActiveTurn, ConsultServer, ConsultUpdate};
 use crate::collaboration::ConsultBudget;
 use crate::config::Config;
@@ -51,20 +51,17 @@ pub struct RuntimeOptions {
     pub debug: bool,
 }
 
-fn build_agent(kind: AgentKind, config: &Config) -> Arc<dyn Agent> {
+fn build_agent(harness: HarnessKind, command: &str) -> Arc<dyn Agent> {
     // Test/dev injection: MIX2_CLAUDE_CMD / MIX2_CODEX_CMD point the
     // adapters at fake provider fixtures without touching user config.
-    let command = match kind {
-        AgentKind::Claude => {
-            std::env::var("MIX2_CLAUDE_CMD").unwrap_or_else(|_| config.claude_command.clone())
-        }
-        AgentKind::Codex => {
-            std::env::var("MIX2_CODEX_CMD").unwrap_or_else(|_| config.codex_command.clone())
-        }
+    let env_override = match harness {
+        HarnessKind::Claude => std::env::var("MIX2_CLAUDE_CMD").ok(),
+        HarnessKind::Codex => std::env::var("MIX2_CODEX_CMD").ok(),
     };
-    match kind {
-        AgentKind::Claude => Arc::new(ClaudeAgent::new(command)),
-        AgentKind::Codex => Arc::new(CodexAgent::new(command)),
+    let command = env_override.unwrap_or_else(|| command.to_owned());
+    match harness {
+        HarnessKind::Claude => Arc::new(ClaudeAgent::new(command)),
+        HarnessKind::Codex => Arc::new(CodexAgent::new(command)),
     }
 }
 
@@ -124,8 +121,8 @@ pub struct Runtime {
     project: bool,
     lead_model: Option<String>,
     lead_agent: Arc<dyn Agent>,
-    lead_info: AgentInfo,
-    teammate_info: AgentInfo,
+    one_info: AgentInfo,
+    two_info: AgentInfo,
     consult_server: ConsultServer,
     runtime_dir: PathBuf,
     lead_msgs: mpsc::Sender<LeadMsg>,
@@ -148,30 +145,28 @@ impl Runtime {
             .canonicalize()
             .with_context(|| format!("project directory {} does not exist", cwd.display()))?;
 
-        let lead_agent = build_agent(config.lead, &config);
-        let teammate_agent = build_agent(config.teammate, &config);
+        let team = config.team;
+        let one_agent = build_agent(team.one, &config.slot(SlotId::One).command);
+        let two_agent = build_agent(team.two, &config.slot(SlotId::Two).command);
 
         // Both probes gate readiness, so both get the generous timeout.
         let probe = |agent: Arc<dyn Agent>| async move {
             tokio::time::timeout(Duration::from_secs(20), agent.version()).await
         };
-        let (lead_version, teammate_version) = tokio::join!(
-            probe(Arc::clone(&lead_agent)),
-            probe(Arc::clone(&teammate_agent))
-        );
+        let (one_version, two_version) =
+            tokio::join!(probe(Arc::clone(&one_agent)), probe(Arc::clone(&two_agent)));
 
-        let lead_installed = match lead_version {
+        let one_installed = match one_version {
             Ok(Ok(v)) => Some(v.raw),
             _ => None,
         };
-        let teammate_installed = match teammate_version {
+        let two_installed = match two_version {
             Ok(Ok(v)) => Some(v.raw),
             _ => None,
         };
 
         // Sign-in probes are local and quota-free.
-        let (lead_auth, teammate_auth) =
-            tokio::join!(lead_agent.auth_status(), teammate_agent.auth_status());
+        let (one_auth, two_auth) = tokio::join!(one_agent.auth_status(), two_agent.auth_status());
 
         fn ready_for_duty(installed: &Option<String>, auth: AuthStatus) -> bool {
             installed.is_some() && auth != AuthStatus::Unauthenticated
@@ -180,50 +175,34 @@ impl Runtime {
         // mix2 is the two-agent team — there is no solo mode. If either
         // agent is missing or signed out, refuse to start and say exactly
         // what fixes each one.
-        if !ready_for_duty(&lead_installed, lead_auth)
-            || !ready_for_duty(&teammate_installed, teammate_auth)
-        {
-            let status = |kind: AgentKind, installed: &Option<String>, auth: AuthStatus| {
+        if !ready_for_duty(&one_installed, one_auth) || !ready_for_duty(&two_installed, two_auth) {
+            let status = |harness: HarnessKind, installed: &Option<String>, auth: AuthStatus| {
                 if installed.is_none() {
                     format!(
                         "{} — not installed: {}",
-                        kind.display_name(),
-                        install_hint(kind)
+                        harness.display_name(),
+                        install_hint(harness)
                     )
                 } else if auth == AuthStatus::Unauthenticated {
                     format!(
                         "{} — not signed in: {}",
-                        kind.display_name(),
-                        login_hint(kind)
+                        harness.display_name(),
+                        login_hint(harness)
                     )
                 } else {
-                    format!("{} — ready", kind.display_name())
+                    format!("{} — ready", harness.display_name())
                 }
             };
-            let (first, second) = if config.lead == AgentKind::Claude {
-                (config.lead, config.teammate)
-            } else {
-                (config.teammate, config.lead)
-            };
-            let for_kind = |kind: AgentKind| {
-                if kind == config.lead {
-                    (&lead_installed, lead_auth)
-                } else {
-                    (&teammate_installed, teammate_auth)
-                }
-            };
-            let (fi, fa) = for_kind(first);
-            let (si, sa) = for_kind(second);
             anyhow::bail!(
                 "mix2 needs both agents installed and signed in.\n{}\n{}\nFix the above, then restart mix2.",
-                status(first, fi, fa),
-                status(second, si, sa),
+                status(team.one, &one_installed, one_auth),
+                status(team.two, &two_installed, two_auth),
             );
         }
-        let lead_version = lead_installed.expect("lead ready implies installed");
-        let teammate_version_str = teammate_installed.expect("teammate ready implies installed");
+        let one_version = one_installed.expect("slot one ready implies installed");
+        let two_version = two_installed.expect("slot two ready implies installed");
 
-        let session = Mix2Session::new(config.lead, cwd);
+        let session = Mix2Session::new(team, cwd);
         let project = detect_project(&session.cwd);
         let runtime_dir = runtime_dir_for(session.id);
         tokio::fs::create_dir_all(&runtime_dir).await?;
@@ -233,46 +212,48 @@ impl Runtime {
             let _ = std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700));
         }
 
-        let model_for = |kind: AgentKind| match kind {
-            AgentKind::Claude => config.claude_model.clone(),
-            AgentKind::Codex => config.codex_model.clone(),
+        let lead_model = config.slot(team.lead).model.clone();
+        let teammate_model = config.slot(team.teammate()).model.clone();
+
+        let (lead_agent, teammate_agent) = match team.lead {
+            SlotId::One => (Arc::clone(&one_agent), Arc::clone(&two_agent)),
+            SlotId::Two => (Arc::clone(&two_agent), Arc::clone(&one_agent)),
         };
-        let lead_model = model_for(config.lead);
-        let teammate_model = model_for(config.teammate);
 
         let consult_server = ConsultServer::start(
-            Arc::clone(&teammate_agent),
-            config.teammate,
-            config.lead,
+            teammate_agent,
+            team,
             session.cwd.clone(),
             runtime_dir.clone(),
             session.id,
             helper_dir(),
             project,
-            teammate_model.clone(),
+            teammate_model,
             consult_updates,
         )
         .await?;
 
-        let lead_info = AgentInfo {
-            kind: config.lead,
-            name: config.lead.display_name().to_owned(),
-            version: Some(lead_version),
+        let one_info = AgentInfo {
+            slot: SlotId::One,
+            harness: team.one,
+            name: team.one.display_name().to_owned(),
+            version: Some(one_version),
             available: true,
             reason: None,
-            authenticated: auth_flag(lead_auth),
-            model: lead_model.clone(),
-            models: lead_agent.known_models(),
+            authenticated: auth_flag(one_auth),
+            model: config.slot(SlotId::One).model.clone(),
+            models: one_agent.known_models(),
         };
-        let teammate_info = AgentInfo {
-            kind: config.teammate,
-            name: config.teammate.display_name().to_owned(),
-            version: Some(teammate_version_str),
+        let two_info = AgentInfo {
+            slot: SlotId::Two,
+            harness: team.two,
+            name: team.two.display_name().to_owned(),
+            version: Some(two_version),
             available: true,
             reason: None,
-            authenticated: auth_flag(teammate_auth),
-            model: teammate_model.clone(),
-            models: teammate_agent.known_models(),
+            authenticated: auth_flag(two_auth),
+            model: config.slot(SlotId::Two).model.clone(),
+            models: two_agent.known_models(),
         };
 
         Ok(Self {
@@ -281,13 +262,17 @@ impl Runtime {
             project,
             lead_model,
             lead_agent,
-            lead_info,
-            teammate_info,
+            one_info,
+            two_info,
             consult_server,
             runtime_dir,
             lead_msgs,
             debug,
         })
+    }
+
+    fn team(&self) -> Team {
+        self.config.team
     }
 
     fn mix2_env(
@@ -335,8 +320,8 @@ impl Runtime {
             turn_id: turn_uuid,
             model: self.lead_model.clone(),
             instructions: crate::collaboration::prompts::lead_instructions(
-                self.config.lead,
-                self.config.teammate,
+                self.team().lead_harness(),
+                self.team().teammate_harness(),
                 self.project,
             ),
             env: self.mix2_env(turn_uuid, AgentRole::Lead, Some(&consult_token)),
@@ -350,7 +335,7 @@ impl Runtime {
             .lead_provider_session_id
             .clone()
             .map(|id| AgentSession {
-                agent: self.config.lead,
+                harness: self.team().lead_harness(),
                 id,
             });
         let msgs = self.lead_msgs.clone();
@@ -398,49 +383,49 @@ impl Runtime {
 
     fn handle_lead_event(&mut self, ui_id: &str, event: AgentEvent) {
         let turn_id = ui_id.to_owned();
+        // Adapter events are identity-free; the lead channel they arrived on
+        // is what stamps the slot.
+        let slot = self.team().lead;
         let role = AgentRole::Lead;
         match event {
-            AgentEvent::Started { agent } => emit(&Event::AgentStarted {
+            AgentEvent::Started => emit(&Event::AgentStarted {
                 turn_id,
-                agent,
+                slot,
                 role,
             }),
-            AgentEvent::SessionStarted { session_id, .. } => {
+            AgentEvent::SessionStarted { session_id } => {
                 self.session.lead_provider_session_id = Some(session_id);
             }
-            AgentEvent::TextDelta { agent, text } => emit(&Event::AgentTextDelta {
+            AgentEvent::TextDelta { text } => emit(&Event::AgentTextDelta {
                 turn_id,
-                agent,
+                slot,
                 role,
                 text,
             }),
-            AgentEvent::ToolStarted {
-                agent,
-                name,
-                detail,
-            } => emit(&Event::AgentToolStarted {
+            AgentEvent::ToolStarted { name, detail } => emit(&Event::AgentToolStarted {
                 turn_id,
-                agent,
+                slot,
                 role,
                 name,
                 detail,
             }),
-            AgentEvent::ToolFinished { agent, name } => emit(&Event::AgentToolFinished {
+            AgentEvent::ToolFinished { name } => emit(&Event::AgentToolFinished {
                 turn_id,
-                agent,
+                slot,
                 role,
                 name,
             }),
-            AgentEvent::ModelObserved { agent, model } => emit(&Event::AgentModel {
-                agent,
+            AgentEvent::ModelObserved { model } => emit(&Event::AgentModel {
+                slot,
                 model: Some(model),
                 source: "observed".to_owned(),
             }),
-            AgentEvent::ParserWarning { agent, message } => {
-                tracing::warn!("{agent} parser: {message}");
+            AgentEvent::ParserWarning { message } => {
+                let harness = self.team().lead_harness();
+                tracing::warn!("{harness} parser: {message}");
                 if self.debug {
                     emit(&Event::Warning {
-                        message: format!("{agent} parser: {message}"),
+                        message: format!("{harness} parser: {message}"),
                     });
                 }
             }
@@ -448,19 +433,21 @@ impl Runtime {
             // result handling; emitting them here would duplicate output.
             AgentEvent::Message { .. }
             | AgentEvent::Usage { .. }
-            | AgentEvent::Completed { .. }
+            | AgentEvent::Completed
             | AgentEvent::Failed { .. } => {}
         }
     }
 
     fn handle_consult_update(&mut self, turn: &mut TurnState, update: ConsultUpdate) {
-        let teammate = self.config.teammate;
+        // Adapter events are identity-free; the consult channel they arrived
+        // on is what stamps the teammate slot.
+        let teammate = self.team().teammate();
         match update {
             ConsultUpdate::Started {
                 index, max, prompt, ..
             } => emit(&Event::ConsultStarted {
                 turn_id: turn.ui_id.clone(),
-                agent: teammate,
+                slot: teammate,
                 index,
                 max,
                 prompt,
@@ -469,31 +456,27 @@ impl Runtime {
                 let turn_id = turn.ui_id.clone();
                 let role = AgentRole::Teammate;
                 match event {
-                    AgentEvent::Started { agent } => emit(&Event::AgentStarted {
+                    AgentEvent::Started => emit(&Event::AgentStarted {
                         turn_id,
-                        agent,
+                        slot: teammate,
                         role,
                     }),
-                    AgentEvent::TextDelta { agent, text } => emit(&Event::AgentTextDelta {
+                    AgentEvent::TextDelta { text } => emit(&Event::AgentTextDelta {
                         turn_id,
-                        agent,
+                        slot: teammate,
                         role,
                         text,
                     }),
-                    AgentEvent::ToolStarted {
-                        agent,
-                        name,
-                        detail,
-                    } => emit(&Event::AgentToolStarted {
+                    AgentEvent::ToolStarted { name, detail } => emit(&Event::AgentToolStarted {
                         turn_id,
-                        agent,
+                        slot: teammate,
                         role,
                         name,
                         detail,
                     }),
-                    AgentEvent::ToolFinished { agent, name } => emit(&Event::AgentToolFinished {
+                    AgentEvent::ToolFinished { name } => emit(&Event::AgentToolFinished {
                         turn_id,
-                        agent,
+                        slot: teammate,
                         role,
                         name,
                     }),
@@ -509,14 +492,14 @@ impl Runtime {
                 turn.successful_consults += 1;
                 emit(&Event::ConsultCompleted {
                     turn_id: turn.ui_id.clone(),
-                    agent: teammate,
+                    slot: teammate,
                     index,
                     duration_ms,
                     text,
                 });
                 emit(&Event::LeadSynthesizing {
                     turn_id: turn.ui_id.clone(),
-                    agent: self.config.lead,
+                    slot: self.team().lead,
                 });
             }
             ConsultUpdate::DisagreementRecorded {
@@ -529,7 +512,7 @@ impl Runtime {
             }),
             ConsultUpdate::Failed { index, message, .. } => emit(&Event::ConsultFailed {
                 turn_id: turn.ui_id.clone(),
-                agent: teammate,
+                slot: teammate,
                 index,
                 message,
             }),
@@ -556,12 +539,12 @@ impl Runtime {
                 let speaker = if turn.successful_consults > 0 {
                     Speaker::Team
                 } else {
-                    Speaker::from(self.config.lead)
+                    Speaker::from(self.team().lead)
                 };
                 emit(&Event::MessageFinal {
                     turn_id: turn.ui_id.clone(),
                     speaker,
-                    lead: self.config.lead,
+                    lead_slot: self.team().lead,
                     text: result.text,
                     consultations: turn.successful_consults,
                     duration_ms,
@@ -584,21 +567,25 @@ impl Runtime {
 
     /// Apply a /model selection: store the override for future invocations
     /// (lead resumes and teammate consults both honor it) and confirm.
-    async fn set_model(&mut self, agent: &str, model: Option<String>) {
-        let Ok(kind) = agent.parse::<AgentKind>() else {
+    /// Targets a slot — `one`/`two` canonically, or a harness name while it
+    /// names exactly one slot.
+    async fn set_model(&mut self, slot: &str, model: Option<String>) {
+        let Some(slot_id) = self.team().slot_named(slot) else {
             emit(&Event::Error {
-                message: format!("unknown agent '{agent}' (expected claude or codex)"),
+                message: format!(
+                    "unknown slot '{slot}' (expected one, two, or an unambiguous harness name)"
+                ),
             });
             return;
         };
         let model = model.filter(|m| !m.trim().is_empty() && m != "default");
-        if kind == self.config.lead {
+        if slot_id == self.team().lead {
             self.lead_model = model.clone();
         } else {
             self.consult_server.set_teammate_model(model.clone()).await;
         }
         emit(&Event::AgentModel {
-            agent: kind,
+            slot: slot_id,
             model,
             source: "selected".to_owned(),
         });
@@ -617,21 +604,21 @@ fn auth_flag(status: AuthStatus) -> Option<bool> {
     }
 }
 
-fn install_hint(kind: AgentKind) -> String {
-    match kind {
-        AgentKind::Claude => {
+fn install_hint(harness: HarnessKind) -> String {
+    match harness {
+        HarnessKind::Claude => {
             "install Claude Code from https://claude.com/claude-code, then run `claude` once to sign in"
                 .to_owned()
         }
-        AgentKind::Codex => "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), then run `codex login`"
+        HarnessKind::Codex => "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), then run `codex login`"
             .to_owned(),
     }
 }
 
-fn login_hint(kind: AgentKind) -> String {
-    match kind {
-        AgentKind::Claude => "run `claude` once (or `claude auth login`) to sign in".to_owned(),
-        AgentKind::Codex => "run `codex login`".to_owned(),
+fn login_hint(harness: HarnessKind) -> String {
+    match harness {
+        HarnessKind::Claude => "run `claude` once (or `claude auth login`) to sign in".to_owned(),
+        HarnessKind::Codex => "run `codex login`".to_owned(),
     }
 }
 
@@ -720,8 +707,9 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,
         session_id: runtime.session.id.to_string(),
-        lead: Box::new(runtime.lead_info.clone()),
-        teammate: Box::new(runtime.teammate_info.clone()),
+        one: Box::new(runtime.one_info.clone()),
+        two: Box::new(runtime.two_info.clone()),
+        lead_slot: runtime.team().lead,
         cwd: runtime.session.cwd.display().to_string(),
         project: runtime.project,
     });
@@ -762,8 +750,8 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
                             }),
                         }
                     }
-                    Ok(Command::SetModel { agent, model }) => {
-                        runtime.set_model(&agent, model).await;
+                    Ok(Command::SetModel { slot, model }) => {
+                        runtime.set_model(&slot, model).await;
                     }
                     Ok(Command::Shutdown) => {
                         if let Some(turn) = active.take() {
@@ -840,8 +828,9 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,
         session_id: runtime.session.id.to_string(),
-        lead: Box::new(runtime.lead_info.clone()),
-        teammate: Box::new(runtime.teammate_info.clone()),
+        one: Box::new(runtime.one_info.clone()),
+        two: Box::new(runtime.two_info.clone()),
+        lead_slot: runtime.team().lead,
         cwd: runtime.session.cwd.display().to_string(),
         project: runtime.project,
     });

@@ -20,22 +20,25 @@ interface Harness {
 
 const ready: CoreEvent = {
   type: 'ready',
-  protocol: 1,
+  protocol: 2,
   session_id: 's1',
-  lead: {
-    kind: 'claude',
+  one: {
+    slot: 'one',
+    harness: 'claude',
     name: 'Claude',
     version: '2.1.232',
     available: true,
     models: ['fable', 'opus', 'sonnet', 'haiku'],
   },
-  teammate: {
-    kind: 'codex',
+  two: {
+    slot: 'two',
+    harness: 'codex',
     name: 'Codex',
     version: '0.146.0',
     available: true,
     models: ['gpt-5.3-codex', 'gpt-5-codex'],
   },
+  lead_slot: 'one',
   cwd: '/home/dev/src/acme',
 };
 
@@ -85,7 +88,7 @@ describe('App', () => {
     await tickReact();
     h.emit({
       ...ready,
-      teammate: { kind: 'codex', name: 'Codex', available: false, reason: 'not installed' },
+      two: { slot: 'two', harness: 'codex', name: 'Codex', available: false, reason: 'not installed' },
     });
     await tickReact();
     expect(h.lastFrame()).toContain('Codex offline');
@@ -114,8 +117,8 @@ describe('App', () => {
     h.emit({
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'Hey. What are we working on?',
       consultations: 0,
       duration_ms: 900,
@@ -138,7 +141,7 @@ describe('App', () => {
     h.emit({
       type: 'consult.started',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       max: 2,
       prompt: 'Independently evaluate the migration.',
@@ -150,12 +153,12 @@ describe('App', () => {
     h.emit({
       type: 'consult.completed',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       duration_ms: 8_000,
       text: 'Keep Postgres for the joins.',
     });
-    h.emit({ type: 'lead.synthesizing', turn_id: 't1', agent: 'claude' });
+    h.emit({ type: 'lead.synthesizing', turn_id: 't1', slot: 'one' });
     await tickReact();
     expect(h.lastFrame()).toContain('reconciling');
 
@@ -163,7 +166,7 @@ describe('App', () => {
       type: 'message.final',
       turn_id: 't1',
       speaker: 'team',
-      lead: 'claude',
+      lead_slot: 'one',
       text: "I wouldn't replace Postgres wholesale.",
       consultations: 1,
       duration_ms: 20_000,
@@ -185,7 +188,7 @@ describe('App', () => {
     h.emit({
       type: 'consult.started',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       max: 1,
       prompt: 'Evaluate X.',
@@ -193,22 +196,22 @@ describe('App', () => {
     h.emit({
       type: 'consult.completed',
       turn_id: 't1',
-      agent: 'codex',
+      slot: 'two',
       index: 1,
       duration_ms: 5_000,
       text: 'Use X.',
     });
-    h.emit({ type: 'lead.synthesizing', turn_id: 't1', agent: 'claude' });
+    h.emit({ type: 'lead.synthesizing', turn_id: 't1', slot: 'one' });
     h.emit({
       type: 'message.final',
       turn_id: 't1',
       speaker: 'team',
-      lead: 'claude',
+      lead_slot: 'one',
       text: "I recommend against X.",
       consultations: 1,
       duration_ms: 15_000,
       disagreement: {
-        stances: [{ agent: 'claude', position: 'Do not use X', outcome: 'chosen' }],
+        stances: [{ slot: 'one', position: 'Do not use X', outcome: 'chosen' }],
         resolution: 'We decided against X.',
       },
     });
@@ -228,8 +231,8 @@ describe('App', () => {
     h.emit({
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'answer',
       consultations: 0,
       duration_ms: 500,
@@ -326,8 +329,8 @@ describe('App', () => {
     h.emit({
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'answer',
       consultations: 0,
       duration_ms: 100,
@@ -352,8 +355,8 @@ describe('App', () => {
     h.emit({
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: '## Short answer\n\nKeep the **Rust core**.\n\n1. First point\n2. Second point',
       consultations: 0,
       duration_ms: 100,
@@ -394,8 +397,8 @@ describe('App', () => {
     h.emit({
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: 'the answer',
       consultations: 0,
       duration_ms: 100,
@@ -428,8 +431,8 @@ describe('App', () => {
     handlers.onEvent({
       type: 'message.final',
       turn_id: 't1',
-      speaker: 'claude',
-      lead: 'claude',
+      speaker: 'one',
+      lead_slot: 'one',
       text: Array.from({ length: 60 }, (_, i) => `answer line ${i + 1}`).join('\n\n'),
       consultations: 0,
       duration_ms: 100,
@@ -499,7 +502,7 @@ describe('App', () => {
     await tickReact();
     expect(h.client.send).toHaveBeenCalledWith({
       type: 'set_model',
-      agent: 'claude',
+      slot: 'one',
       model: 'sonnet',
     });
 
@@ -511,7 +514,7 @@ describe('App', () => {
     await tickReact();
     expect(h.client.send).toHaveBeenCalledWith({
       type: 'set_model',
-      agent: 'codex',
+      slot: 'two',
       model: 'gpt-5-codex',
     });
 
@@ -533,10 +536,10 @@ describe('App', () => {
     await tickReact();
     expect(h.client.send).toHaveBeenCalledWith({
       type: 'set_model',
-      agent: 'claude',
+      slot: 'one',
       model: 'sonnet',
     });
-    h.emit({ type: 'agent.model', agent: 'claude', model: 'sonnet', source: 'selected' });
+    h.emit({ type: 'agent.model', slot: 'one', model: 'sonnet', source: 'selected' });
     await tickReact();
     expect(h.lastFrame()).toContain('claude model set to sonnet');
     h.unmount();

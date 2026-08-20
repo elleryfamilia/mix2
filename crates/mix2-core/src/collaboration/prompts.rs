@@ -1,9 +1,9 @@
-use crate::agents::AgentKind;
+use crate::agents::HarnessKind;
 use crate::collaboration::disagreement;
 
 /// Instructions appended to the lead agent's own system prompt. The lead —
 /// not a classifier in front of it — decides when consulting is worthwhile.
-pub fn lead_instructions(lead: AgentKind, teammate: AgentKind, project: bool) -> String {
+pub fn lead_instructions(lead: HarnessKind, teammate: HarnessKind, project: bool) -> String {
     let lead_name = lead.display_name();
     let teammate_name = teammate.display_name();
     let context = if project {
@@ -98,7 +98,7 @@ Your teammate is an independent peer, not an authority. The team remains respons
 /// Instructions for an agent invoked as the consulting teammate. Consultations
 /// are fresh sessions on purpose: independence preserves the value of the
 /// second opinion.
-pub fn teammate_instructions(lead: AgentKind, teammate: AgentKind, project: bool) -> String {
+pub fn teammate_instructions(lead: HarnessKind, teammate: HarnessKind, project: bool) -> String {
     let lead_name = lead.display_name();
     let teammate_name = teammate.display_name();
     let context = if project {
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn lead_prompt_names_the_teammate() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(p.contains("You are Claude"));
         assert!(p.contains("Your teammate is Codex"));
         assert!(p.contains("mix2-consult <<'CONSULT'"));
@@ -145,14 +145,14 @@ mod tests {
 
     #[test]
     fn lead_prompt_defaults_to_consulting() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(p.contains("DEFAULT TO CONSULTING"));
         assert!(p.contains("Answer alone only"));
     }
 
     #[test]
     fn lead_prompt_enforces_team_voice_and_concurrency() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(p.contains("first person plural"));
         // Two registers: third-person narration under the `mix2` label while
         // working, "we" (both agents, never the lead alone) in the answer.
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn lead_prompt_qualifies_and_uses_scratchpad() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(p.contains("QUALIFY BROAD REQUESTS"));
         assert!(p.contains("TEAM SCRATCHPAD"));
         assert!(p.contains(".mix2/"));
@@ -185,16 +185,16 @@ mod tests {
 
     #[test]
     fn prompts_adapt_to_non_project_directories() {
-        let lead = lead_instructions(AgentKind::Claude, AgentKind::Codex, false);
+        let lead = lead_instructions(HarnessKind::Claude, HarnessKind::Codex, false);
         assert!(lead.contains("doesn't look like a software project"));
         assert!(lead.contains("business viability"));
-        let teammate = teammate_instructions(AgentKind::Claude, AgentKind::Codex, false);
+        let teammate = teammate_instructions(HarnessKind::Claude, HarnessKind::Codex, false);
         assert!(teammate.contains("don't force a code lens"));
     }
 
     #[test]
     fn teammate_prompt_calibrates_effort() {
-        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = teammate_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(p.contains("EFFORT"));
         assert!(p.contains("Quick take"));
         assert!(p.contains("depth budget"));
@@ -202,14 +202,14 @@ mod tests {
 
     #[test]
     fn teammate_prompt_forbids_recursion() {
-        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = teammate_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(p.contains("Do not call `mix2-consult`"));
         assert!(p.contains("You are Codex"));
     }
 
     #[test]
     fn lead_prompt_teaches_the_disagree_verb() {
-        let p = lead_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = lead_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(p.contains("mix2-consult disagree"));
         assert!(p.contains(crate::collaboration::disagreement::DISAGREE_EXAMPLE));
         assert!(p.contains("at most one sentence"));
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn teammate_prompt_does_not_teach_disagree() {
-        let p = teammate_instructions(AgentKind::Claude, AgentKind::Codex, true);
+        let p = teammate_instructions(HarnessKind::Claude, HarnessKind::Codex, true);
         assert!(!p.contains("mix2-consult disagree"));
     }
 }

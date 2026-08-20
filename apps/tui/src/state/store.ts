@@ -5,7 +5,7 @@
  * provider behavior.
  */
 import type { AgentInfo, CoreEvent, Disagreement, Stance } from '../ipc/protocol.js';
-import type { AgentName, SpeakerName } from '../theme/theme.js';
+import type { SlotName, SpeakerName } from '../theme/theme.js';
 
 export interface ToolActivity {
   name: string;
@@ -16,7 +16,7 @@ export interface ToolActivity {
 export interface ConsultState {
   index: number;
   max: number;
-  agent: AgentName;
+  slot: SlotName;
   status: 'running' | 'done' | 'failed';
   startedAt: number;
   durationMs?: number;
@@ -49,7 +49,7 @@ export interface ActiveTurn {
   tools: ToolActivity[];
   toolsCompleted: number;
   consults: ConsultState[];
-  leadAgent: AgentName;
+  leadSlot: SlotName;
   /** Scratchpad files (.mix2/…) the coordinator wrote this turn. */
   scratchpadPaths: string[];
   disagreement?: DisagreementState;
@@ -57,26 +57,26 @@ export interface ActiveTurn {
 
 export type ConversationItem =
   | { kind: 'user'; text: string }
-  | { kind: 'interim'; agent: AgentName; text: string }
+  | { kind: 'interim'; slot: SlotName; text: string }
   | {
       kind: 'activity';
-      agent: AgentName;
+      slot: SlotName;
       toolsCount: number;
       details: string[];
       durationMs: number;
     }
   | {
       kind: 'trace';
-      leadAgent: AgentName;
+      leadSlot: SlotName;
       leadMs: number;
       consultCount: number;
-      teammateAgent: AgentName;
+      teammateSlot: SlotName;
       teammateMs: number;
     }
   | {
       kind: 'final';
       speaker: SpeakerName;
-      lead: AgentName;
+      leadSlot: SlotName;
       text: string;
       consultations: number;
       disagreement?: Disagreement;
@@ -96,11 +96,41 @@ export interface TurnRecord {
 
 export interface SessionInfo {
   sessionId: string;
-  lead: AgentInfo;
-  teammate: AgentInfo;
+  one: AgentInfo;
+  two: AgentInfo;
+  leadSlot: SlotName;
   cwd: string;
   /** False when the cwd doesn't look like a software project. */
   project: boolean;
+}
+
+export function otherSlot(slot: SlotName): SlotName {
+  return slot === 'one' ? 'two' : 'one';
+}
+
+export function slotInfo(session: SessionInfo, slot: SlotName): AgentInfo {
+  return slot === 'one' ? session.one : session.two;
+}
+
+export function leadInfo(session: SessionInfo): AgentInfo {
+  return slotInfo(session, session.leadSlot);
+}
+
+export function teammateInfo(session: SessionInfo): AgentInfo {
+  return slotInfo(session, otherSlot(session.leadSlot));
+}
+
+/** Display name for a slot ("Claude") or the team. Slots fall back to their
+ * ids while the session is still starting. */
+export function speakerName(session: SessionInfo | undefined, slot: SpeakerName): string {
+  if (slot === 'team') return 'Team';
+  if (!session) return slot === 'one' ? 'One' : 'Two';
+  return slotInfo(session, slot).name;
+}
+
+/** The lowercase register used by tiles, stances, and status lines. */
+export function speakerLabel(session: SessionInfo | undefined, slot: SpeakerName): string {
+  return speakerName(session, slot).toLowerCase();
 }
 
 export interface AppState {
@@ -136,7 +166,7 @@ export type Action =
 function settleStream(items: ConversationItem[], turn: ActiveTurn): ConversationItem[] {
   const text = turn.streamText.trim();
   if (!text) return items;
-  return [...items, { kind: 'interim', agent: turn.leadAgent, text }];
+  return [...items, { kind: 'interim', slot: turn.leadSlot, text }];
 }
 
 /** Collapse the live turn into settled conversation items. */
@@ -154,21 +184,21 @@ function settleTurn(
       .map((t) => t.detail as string);
     out = [
       ...out,
-      { kind: 'activity', agent: turn.leadAgent, toolsCount: turn.toolsCompleted, details, durationMs },
+      { kind: 'activity', slot: turn.leadSlot, toolsCount: turn.toolsCompleted, details, durationMs },
     ];
   }
   const doneConsults = turn.consults.filter((c) => c.status !== 'running');
   if (doneConsults.length > 0) {
-    const teammate = doneConsults[0]!.agent;
+    const teammate = doneConsults[0]!.slot;
     const teammateMs = doneConsults.reduce((sum, c) => sum + (c.durationMs ?? 0), 0);
     out = [
       ...out,
       {
         kind: 'trace',
-        leadAgent: turn.leadAgent,
+        leadSlot: turn.leadSlot,
         leadMs: durationMs,
         consultCount: doneConsults.length,
-        teammateAgent: teammate,
+        teammateSlot: teammate,
         teammateMs,
       },
     ];
@@ -227,8 +257,9 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
         phase: 'ready',
         session: {
           sessionId: event.session_id,
-          lead: event.lead,
-          teammate: event.teammate,
+          one: event.one,
+          two: event.two,
+          leadSlot: event.lead_slot,
           cwd: event.cwd,
           project: event.project ?? true,
         },
@@ -247,7 +278,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           tools: [],
           toolsCompleted: 0,
           consults: [],
-          leadAgent: (state.session?.lead.kind ?? 'claude') as AgentName,
+          leadSlot: state.session?.leadSlot ?? 'one',
           scratchpadPaths: [],
         },
         lastSummary: undefined,
@@ -337,7 +368,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       const consult: ConsultState = {
         index: event.index,
         max: event.max,
-        agent: event.agent,
+        slot: event.slot,
         status: 'running',
         startedAt: now,
         prompt: event.prompt,
@@ -385,7 +416,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           {
             index: event.index,
             max: 0,
-            agent: event.agent,
+            slot: event.slot,
             status: 'failed',
             startedAt: now,
             message: event.message,
@@ -432,7 +463,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
         {
           kind: 'final',
           speaker: event.speaker,
-          lead: event.lead,
+          leadSlot: event.lead_slot,
           text: event.text,
           consultations: event.consultations,
           disagreement: event.disagreement,
@@ -503,23 +534,24 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       if (!session) return state;
       const model = event.model ?? undefined;
       const updateInfo = (info: AgentInfo): AgentInfo =>
-        info.kind === event.agent ? { ...info, model } : info;
+        info.slot === event.slot ? { ...info, model } : info;
       const next: AppState = {
         ...state,
         session: {
           ...session,
-          lead: updateInfo(session.lead),
-          teammate: updateInfo(session.teammate),
+          one: updateInfo(session.one),
+          two: updateInfo(session.two),
         },
       };
       if (event.source === 'selected') {
+        const label = speakerLabel(session, event.slot);
         next.items = [
           ...next.items,
           {
             kind: 'notice',
             text: model
-              ? `${event.agent} model set to ${model}`
-              : `${event.agent} model reset to provider default`,
+              ? `${label} model set to ${model}`
+              : `${label} model reset to provider default`,
           },
         ];
       }

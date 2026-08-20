@@ -1,27 +1,32 @@
-use crate::agents::{AgentKind, AgentRole};
+use crate::agents::{AgentRole, HarnessKind, SlotId};
 pub use crate::collaboration::disagreement::{DisagreementRecord, Outcome, Stance};
 use serde::{Deserialize, Serialize};
 
+/// Who a settled message speaks for: one slot alone, or the whole team.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Speaker {
-    Claude,
-    Codex,
+    One,
+    Two,
     Team,
 }
 
-impl From<AgentKind> for Speaker {
-    fn from(kind: AgentKind) -> Self {
-        match kind {
-            AgentKind::Claude => Speaker::Claude,
-            AgentKind::Codex => Speaker::Codex,
+impl From<SlotId> for Speaker {
+    fn from(slot: SlotId) -> Self {
+        match slot {
+            SlotId::One => Speaker::One,
+            SlotId::Two => Speaker::Two,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentInfo {
-    pub kind: AgentKind,
+    /// The durable participant identity this info describes.
+    pub slot: SlotId,
+    /// Which provider CLI backs the slot. Display only — behavior never
+    /// branches on the *other* slot's harness.
+    pub harness: HarnessKind,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -41,7 +46,7 @@ pub struct AgentInfo {
 
 /// Events emitted by the core to the Ink UI, one JSON object per line on
 /// stdout. Provider-specific JSON never crosses this boundary; everything is
-/// normalized here in Rust.
+/// normalized here in Rust and keyed by [`SlotId`], never by harness.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Event {
@@ -49,8 +54,9 @@ pub enum Event {
     Ready {
         protocol: u32,
         session_id: String,
-        lead: Box<AgentInfo>,
-        teammate: Box<AgentInfo>,
+        one: Box<AgentInfo>,
+        two: Box<AgentInfo>,
+        lead_slot: SlotId,
         cwd: String,
         /// Whether the cwd looks like a software project; false switches the
         /// team into general-brainstorming framing.
@@ -69,20 +75,20 @@ pub enum Event {
     #[serde(rename = "agent.started")]
     AgentStarted {
         turn_id: String,
-        agent: AgentKind,
+        slot: SlotId,
         role: AgentRole,
     },
     #[serde(rename = "agent.text_delta")]
     AgentTextDelta {
         turn_id: String,
-        agent: AgentKind,
+        slot: SlotId,
         role: AgentRole,
         text: String,
     },
     #[serde(rename = "agent.tool.started")]
     AgentToolStarted {
         turn_id: String,
-        agent: AgentKind,
+        slot: SlotId,
         role: AgentRole,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,7 +97,7 @@ pub enum Event {
     #[serde(rename = "agent.tool.finished")]
     AgentToolFinished {
         turn_id: String,
-        agent: AgentKind,
+        slot: SlotId,
         role: AgentRole,
         name: String,
     },
@@ -99,7 +105,7 @@ pub enum Event {
     #[serde(rename = "consult.started")]
     ConsultStarted {
         turn_id: String,
-        agent: AgentKind,
+        slot: SlotId,
         index: u32,
         max: u32,
         /// The lead's written consultation prompt (team panel only).
@@ -110,7 +116,7 @@ pub enum Event {
     #[serde(rename = "consult.completed")]
     ConsultCompleted {
         turn_id: String,
-        agent: AgentKind,
+        slot: SlotId,
         index: u32,
         duration_ms: u64,
         text: String,
@@ -118,7 +124,7 @@ pub enum Event {
     #[serde(rename = "consult.failed")]
     ConsultFailed {
         turn_id: String,
-        agent: AgentKind,
+        slot: SlotId,
         index: u32,
         message: String,
     },
@@ -134,24 +140,24 @@ pub enum Event {
         revision: u32,
     },
 
-    /// An agent's model changed or was observed from its stream.
+    /// A slot's model changed or was observed from its stream.
     /// source: "selected" (user /model) or "observed" (provider reported).
     #[serde(rename = "agent.model")]
     AgentModel {
-        agent: AgentKind,
+        slot: SlotId,
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         source: String,
     },
 
     #[serde(rename = "lead.synthesizing")]
-    LeadSynthesizing { turn_id: String, agent: AgentKind },
+    LeadSynthesizing { turn_id: String, slot: SlotId },
 
     #[serde(rename = "message.final")]
     MessageFinal {
         turn_id: String,
         speaker: Speaker,
-        lead: AgentKind,
+        lead_slot: SlotId,
         text: String,
         consultations: u32,
         duration_ms: u64,
@@ -187,7 +193,7 @@ mod tests {
     fn event_serialization_shape() {
         let ev = Event::ConsultStarted {
             turn_id: "t1".into(),
-            agent: AgentKind::Codex,
+            slot: SlotId::Two,
             index: 1,
             max: 2,
             prompt: "evaluate X".into(),
@@ -195,7 +201,7 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"consult.started","turn_id":"t1","agent":"codex","index":1,"max":2,"prompt":"evaluate X"}"#
+            r#"{"type":"consult.started","turn_id":"t1","slot":"two","index":1,"max":2,"prompt":"evaluate X"}"#
         );
     }
 
@@ -204,7 +210,7 @@ mod tests {
         let ev = Event::MessageFinal {
             turn_id: "t1".into(),
             speaker: Speaker::Team,
-            lead: AgentKind::Claude,
+            lead_slot: SlotId::One,
             text: "answer".into(),
             consultations: 1,
             duration_ms: 1234,
@@ -216,9 +222,60 @@ mod tests {
     }
 
     #[test]
-    fn speaker_from_kind() {
-        assert_eq!(Speaker::from(AgentKind::Claude), Speaker::Claude);
-        assert_eq!(Speaker::from(AgentKind::Codex), Speaker::Codex);
+    fn speaker_from_slot() {
+        assert_eq!(Speaker::from(SlotId::One), Speaker::One);
+        assert_eq!(Speaker::from(SlotId::Two), Speaker::Two);
+        assert_eq!(serde_json::to_string(&Speaker::One).unwrap(), r#""one""#);
+        assert_eq!(serde_json::to_string(&Speaker::Team).unwrap(), r#""team""#);
+    }
+
+    #[test]
+    fn agent_info_carries_slot_and_harness() {
+        let info = AgentInfo {
+            slot: SlotId::Two,
+            harness: HarnessKind::Codex,
+            name: "Codex".into(),
+            version: Some("1.0".into()),
+            available: true,
+            reason: None,
+            authenticated: Some(true),
+            model: None,
+            models: vec![],
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains(r#""slot":"two""#), "{json}");
+        assert!(json.contains(r#""harness":"codex""#), "{json}");
+    }
+
+    #[test]
+    fn ready_shape_is_slot_keyed() {
+        let info = |slot: SlotId, harness: HarnessKind| {
+            Box::new(AgentInfo {
+                slot,
+                harness,
+                name: harness.display_name().to_owned(),
+                version: None,
+                available: true,
+                reason: None,
+                authenticated: None,
+                model: None,
+                models: vec![],
+            })
+        };
+        // A same-harness team serializes without loss: identity is the slot.
+        let ev = Event::Ready {
+            protocol: 2,
+            session_id: "s1".into(),
+            one: info(SlotId::One, HarnessKind::Codex),
+            two: info(SlotId::Two, HarnessKind::Codex),
+            lead_slot: SlotId::Two,
+            cwd: "/repo".into(),
+            project: true,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""lead_slot":"two""#), "{json}");
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
     }
 
     #[test]
@@ -227,12 +284,12 @@ mod tests {
             turn_id: "t1".into(),
             stances: vec![
                 Stance {
-                    agent: AgentKind::Claude,
+                    slot: SlotId::One,
                     position: "cache in-process".into(),
                     outcome: Outcome::Chosen,
                 },
                 Stance {
-                    agent: AgentKind::Codex,
+                    slot: SlotId::Two,
                     position: "move validation off the hot path".into(),
                     outcome: Outcome::Deferred,
                 },
@@ -243,7 +300,7 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"disagreement.recorded","turn_id":"t1","stances":[{"agent":"claude","position":"cache in-process","outcome":"chosen"},{"agent":"codex","position":"move validation off the hot path","outcome":"deferred"}],"resolution":"ship the cache; file the rework","revision":1}"#
+            r#"{"type":"disagreement.recorded","turn_id":"t1","stances":[{"slot":"one","position":"cache in-process","outcome":"chosen"},{"slot":"two","position":"move validation off the hot path","outcome":"deferred"}],"resolution":"ship the cache; file the rework","revision":1}"#
         );
     }
 
@@ -252,7 +309,7 @@ mod tests {
         let ev = Event::MessageFinal {
             turn_id: "t1".into(),
             speaker: Speaker::Team,
-            lead: AgentKind::Claude,
+            lead_slot: SlotId::One,
             text: "answer".into(),
             consultations: 1,
             duration_ms: 1234,
@@ -270,13 +327,13 @@ mod tests {
         let ev = Event::MessageFinal {
             turn_id: "t1".into(),
             speaker: Speaker::Team,
-            lead: AgentKind::Claude,
+            lead_slot: SlotId::One,
             text: "answer".into(),
             consultations: 1,
             duration_ms: 1234,
             disagreement: Some(DisagreementRecord {
                 stances: vec![Stance {
-                    agent: AgentKind::Claude,
+                    slot: SlotId::One,
                     position: "cache in-process".into(),
                     outcome: Outcome::Chosen,
                 }],

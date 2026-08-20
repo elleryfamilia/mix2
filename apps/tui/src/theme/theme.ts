@@ -2,12 +2,15 @@
  * Semantic color roles and glyph vocabulary for the mix2 TUI.
  *
  * Values come from Design Direction #4 (see docs/design-system.md). UI code
- * must reference roles, never raw hex values. Colors degrade to glyph +
- * label identity on NO_COLOR/16-color terminals (Ink handles downsampling).
+ * must reference roles, never raw hex values. Identity is keyed by team slot
+ * (`one`/`two`), never by harness: slot one is always the warm mark, slot two
+ * the cool one, whichever CLIs back them. Display names come from the
+ * session's AgentInfo, not from here. Colors degrade to glyph + label
+ * identity on NO_COLOR/16-color terminals (Ink handles downsampling).
  */
 
-export type AgentName = 'claude' | 'codex';
-export type SpeakerName = AgentName | 'team';
+export type SlotName = 'one' | 'two';
+export type SpeakerName = SlotName | 'team';
 
 export const theme = {
   text: {
@@ -17,15 +20,15 @@ export const theme = {
     faint: '#514d59',
   },
   agent: {
-    claude: '#e0a06a',
-    codex: '#8ab8d6',
+    one: '#e0a06a',
+    two: '#8ab8d6',
     team: '#b795e6',
   },
   chip: {
     appBg: '#d6d3dc',
     appFg: '#17161b',
-    claudeFg: '#1c1208',
-    codexFg: '#0c141c',
+    oneFg: '#1c1208',
+    twoFg: '#0c141c',
     teamFg: '#160e20',
   },
   border: {
@@ -42,8 +45,8 @@ export const theme = {
 export const glyphs = {
   prompt: '❯',
   cursor: '▊',
-  claude: '●',
-  codex: '○',
+  one: '●',
+  two: '○',
   team: '◐',
   consult: '↔',
   confer: '⇄',
@@ -65,24 +68,16 @@ export const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '
  */
 export const teamSpinnerFrames = ['◐', '◓', '◑', '◒'] as const;
 
-export function agentColor(agent: SpeakerName): string {
-  return theme.agent[agent];
+export function agentColor(slot: SpeakerName): string {
+  return theme.agent[slot];
 }
 
-export function agentGlyph(agent: SpeakerName): string {
-  return glyphs[agent];
+export function agentGlyph(slot: SpeakerName): string {
+  return glyphs[slot];
 }
 
-export function chipFg(agent: SpeakerName): string {
-  return agent === 'claude'
-    ? theme.chip.claudeFg
-    : agent === 'codex'
-      ? theme.chip.codexFg
-      : theme.chip.teamFg;
-}
-
-export function displayName(agent: SpeakerName): string {
-  return agent === 'claude' ? 'Claude' : agent === 'codex' ? 'Codex' : 'Team';
+export function chipFg(slot: SpeakerName): string {
+  return slot === 'one' ? theme.chip.oneFg : slot === 'two' ? theme.chip.twoFg : theme.chip.teamFg;
 }
 
 /** Maximum comfortable reading width for response text. */

@@ -13,9 +13,10 @@ import {
   agentColor,
   agentGlyph,
   chipFg,
-  displayName,
   glyphs,
   theme,
+  type SlotName,
+  type SpeakerName,
 } from '../theme/theme.js';
 import {
   BLANK,
@@ -41,6 +42,19 @@ export interface RenderContext {
   teamGlyph?: string;
   /** Current timestamp for elapsed displays. */
   now: number;
+  /** Display names per slot, from the session's AgentInfo. */
+  names?: Record<SlotName, string>;
+}
+
+/** Capitalized display name for a slot ("Claude") or the team. */
+function slotName(ctx: RenderContext, slot: SpeakerName): string {
+  if (slot === 'team') return 'Team';
+  return ctx.names?.[slot] ?? (slot === 'one' ? 'One' : 'Two');
+}
+
+/** The lowercase register used by tiles, stances, and rosters. */
+function slotLabel(ctx: RenderContext, slot: SpeakerName): string {
+  return slotName(ctx, slot).toLowerCase();
 }
 
 function contentWidth(ctx: RenderContext): number {
@@ -118,7 +132,7 @@ function traceLines(item: Extract<ConversationItem, { kind: 'trace' }>, ctx: Ren
   const left: Line = pad(
     span(`${glyphs.treeEnd} trace`, { color: theme.text.faint }),
     span('  '),
-    span(agentGlyph(item.leadAgent), { color: agentColor(item.leadAgent) }),
+    span(agentGlyph(item.leadSlot), { color: agentColor(item.leadSlot) }),
     span(` ${formatElapsed(item.leadMs)}`, { color: theme.text.faint }),
     span('  '),
     span(glyphs.confer, { color: theme.agent.team }),
@@ -127,7 +141,7 @@ function traceLines(item: Extract<ConversationItem, { kind: 'trace' }>, ctx: Ren
       { color: theme.text.faint },
     ),
     span('  '),
-    span(agentGlyph(item.teammateAgent), { color: agentColor(item.teammateAgent) }),
+    span(agentGlyph(item.teammateSlot), { color: agentColor(item.teammateSlot) }),
     span(` ${formatElapsed(item.teammateMs)}`, { color: theme.text.faint }),
   );
   return [spread(left, [span('ctrl+t ', { color: theme.text.faint })], Math.min(ctx.width, MAX_CONTENT_WIDTH))];
@@ -139,13 +153,11 @@ function chip(label: string, bg: string, fg: string): Span {
 
 // ----------------------------------------------------------- stance block
 
-// Width of the glyph+name field a stance row shares with the team row
-// below it, so their positions line up: "claude"/"codex"/"team" all fit
-// with room to spare.
+// Minimum width of the glyph+name field a stance row shares with the team
+// row below it, so their positions line up: "claude"/"codex"/"team" all fit
+// with room to spare. Longer labels (same-harness names like "codex (one)")
+// widen the shared field instead of overflowing the row.
 const STANCE_NAME_WIDTH = 9;
-// Columns spent before a row's position text starts: 2-space indent, the
-// glyph, and the padded name field (its own leading space + the field).
-const STANCE_PREFIX_WIDTH = INDENT + 1 + 1 + STANCE_NAME_WIDTH;
 // Minimum columns always kept between a truncated position and its arrow.
 const STANCE_MIN_GAP = 2;
 
@@ -155,8 +167,8 @@ export const STANCE_ARROWS: Record<Stance['outcome'], string> = {
   dropped: '→ set aside',
 };
 
-function stanceNameField(name: string): string {
-  return ' ' + name.padEnd(STANCE_NAME_WIDTH);
+function stanceNameField(name: string, fieldWidth: number): string {
+  return ' ' + name.padEnd(fieldWidth);
 }
 
 /** Right-aligns `right` against `left` like `spread`, but measures both by
@@ -178,24 +190,34 @@ function stanceSpread(left: Line, right: Line, width: number): Line {
  * docs/superpowers/plans/2026-08-15-disagreement-layer-spec.md. */
 function stanceLines(d: Disagreement, ctx: RenderContext): Line[] {
   const width = Math.min(ctx.width, MAX_CONTENT_WIDTH);
+  // One shared name-field width per block, sized to the longest label, so
+  // the position column stays aligned and the row math never overflows.
+  const labels = d.stances.map((s) => slotLabel(ctx, s.slot));
+  const nameWidth = Math.max(STANCE_NAME_WIDTH, ...labels.map((l) => displayWidth(l)));
+  // Columns spent before a row's position text starts: 2-space indent, the
+  // glyph, and the padded name field (its own leading space + the field).
+  const prefixWidth = INDENT + 1 + 1 + nameWidth;
   const lines: Line[] = [
     pad(span(`${glyphs.disagree} where we split`, { color: theme.agent.team, bold: true })),
   ];
-  for (const stance of d.stances) {
+  d.stances.forEach((stance, i) => {
     const arrow = STANCE_ARROWS[stance.outcome];
-    const room = Math.max(0, width - STANCE_PREFIX_WIDTH - displayWidth(arrow) - STANCE_MIN_GAP);
+    const room = Math.max(0, width - prefixWidth - displayWidth(arrow) - STANCE_MIN_GAP);
     const left = pad(
-      span(agentGlyph(stance.agent), { color: agentColor(stance.agent) }),
-      span(stanceNameField(stance.agent), { color: agentColor(stance.agent), bold: true }),
+      span(agentGlyph(stance.slot), { color: agentColor(stance.slot) }),
+      span(stanceNameField(labels[i]!, nameWidth), {
+        color: agentColor(stance.slot),
+        bold: true,
+      }),
       span(truncateDisplay(stance.position, room), { color: theme.text.secondary }),
     );
     lines.push(stanceSpread(left, [span(arrow, { color: theme.text.faint })], width));
-  }
-  const teamRoom = Math.max(0, width - STANCE_PREFIX_WIDTH);
+  });
+  const teamRoom = Math.max(0, width - prefixWidth);
   lines.push(
     pad(
       span(agentGlyph('team'), { color: agentColor('team') }),
-      span(stanceNameField('team'), { color: agentColor('team'), bold: true }),
+      span(stanceNameField('team', nameWidth), { color: agentColor('team'), bold: true }),
       span(truncateDisplay(d.resolution, teamRoom), { color: theme.text.secondary }),
     ),
   );
@@ -208,10 +230,11 @@ function finalLines(item: Extract<ConversationItem, { kind: 'final' }>, ctx: Ren
   // suffix appears only when both agents actually worked this turn — that
   // participation signal stays honest.
   if (item.speaker === 'team') {
+    const teammate: SlotName = item.leadSlot === 'one' ? 'two' : 'one';
     lines.push(
       pad(
         chip('Team', theme.agent.team, chipFg('team')),
-        span(`  ${item.lead} + ${item.lead === 'claude' ? 'codex' : 'claude'}`, {
+        span(`  ${slotLabel(ctx, item.leadSlot)} + ${slotLabel(ctx, teammate)}`, {
           color: theme.text.faint,
         }),
       ),
@@ -350,7 +373,6 @@ function zipTiles(left: Line[], right: Line[], gap: number): Line[] {
 
 function consultLines(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
   const lines: Line[] = [];
-  const teammateName = consult.agent;
 
   // Direction-neutral on purpose: naming who asks whom would reveal the
   // coordinator, and the user talks to one team with no visible boss. A
@@ -412,8 +434,8 @@ function equalizeBodies(a: Line[], b: Line[]): void {
 }
 
 function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
-  const lead = turn.leadAgent;
-  const teammate = consult.agent;
+  const lead = turn.leadSlot;
+  const teammate = consult.slot;
   const full = Math.min(ctx.width, MAX_CONTENT_WIDTH);
   const stacked = ctx.width < TILE_BREAKPOINT;
   const tileWidth = stacked ? full - INDENT : Math.floor((full - INDENT - 2) / 2);
@@ -454,7 +476,7 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
     {
       headerLeft: [
         span(agentGlyph(lead), { color: agentColor(lead) }),
-        span(` ${lead} — ${leadStatus}`, { color: agentColor(lead), bold: true }),
+        span(` ${slotLabel(ctx, lead)} — ${leadStatus}`, { color: agentColor(lead), bold: true }),
       ],
       headerRight: [
         span(`${ctx.spinner} ${formatElapsed(ctx.now - turn.startedAt)}`, {
@@ -470,7 +492,10 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
     {
       headerLeft: [
         span(agentGlyph(teammate), { color: agentColor(teammate) }),
-        span(` ${teammate} — reviewing`, { color: agentColor(teammate), bold: true }),
+        span(` ${slotLabel(ctx, teammate)} — reviewing`, {
+          color: agentColor(teammate),
+          bold: true,
+        }),
       ],
       headerRight: [
         span(`${ctx.spinner} ${formatElapsed(ctx.now - consult.startedAt)}`, { color: theme.text.faint }),
@@ -490,8 +515,8 @@ function parallelTiles(turn: ActiveTurn, consult: ConsultState, ctx: RenderConte
 /** After the exchange actually happened, the tiles fuse into one mauve tile
  * with the dialogue visible (Design 3b), summarized to one line per side. */
 function mergedTile(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
-  const lead = turn.leadAgent;
-  const teammate = consult.agent;
+  const lead = turn.leadSlot;
+  const teammate = consult.slot;
   const full = Math.min(ctx.width, MAX_CONTENT_WIDTH);
   const tileWidth = full - INDENT;
   const innerWidth = tileWidth - 6;
@@ -513,9 +538,9 @@ function mergedTile(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext)
   const tile = buildTile(
     {
       headerLeft: [
-        chip(displayName(lead), agentColor(lead), chipFg(lead)),
+        chip(slotName(ctx, lead), agentColor(lead), chipFg(lead)),
         span(` ${glyphs.confer} `, { color: theme.agent.team, bold: true }),
-        chip(displayName(teammate), agentColor(teammate), chipFg(teammate)),
+        chip(slotName(ctx, teammate), agentColor(teammate), chipFg(teammate)),
       ],
       headerRight: [
         span(formatElapsed(consult.durationMs ?? 0), { color: theme.text.faint }),

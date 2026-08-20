@@ -5,12 +5,12 @@
  * user's CLI configuration unless asked.
  */
 import type { SessionInfo } from '../state/store.js';
+import { leadInfo, teammateInfo } from '../state/store.js';
 import {
   MAX_CONTENT_WIDTH,
   TILE_BREAKPOINT,
   agentColor,
   agentGlyph,
-  displayName,
   theme,
 } from '../theme/theme.js';
 import { BLANK, Line, span, spread } from './lines.js';
@@ -31,16 +31,16 @@ export function modelEntries(models: string[]): string[] {
 }
 
 function columnLines(
-  info: SessionInfo['lead'],
+  info: SessionInfo['one'],
   active: boolean,
   cursorIndex: number,
   width: number,
 ): Line[] {
-  const kind = info.kind;
+  const slot = info.slot;
   const lines: Line[] = [];
   lines.push([
-    span(agentGlyph(kind), { color: agentColor(kind) }),
-    span(` ${displayName(kind)}`, { color: agentColor(kind), bold: true }),
+    span(agentGlyph(slot), { color: agentColor(slot) }),
+    span(` ${info.name}`, { color: agentColor(slot), bold: true }),
   ]);
   const entries = modelEntries(info.models ?? []);
   entries.forEach((entry, i) => {
@@ -55,12 +55,12 @@ function columnLines(
         color: isCursor
           ? theme.text.primary
           : isCurrent
-            ? agentColor(kind)
+            ? agentColor(slot)
             : theme.text.secondary,
         bold: isCursor,
         inverse: isCursor,
       }),
-      span(current, { color: agentColor(kind) }),
+      span(current, { color: agentColor(slot) }),
     ]);
   });
   return lines;
@@ -88,8 +88,8 @@ export function renderModelPanel(
 
   const stacked = width < TILE_BREAKPOINT;
   const colWidth = stacked ? w - INDENT : Math.floor((w - INDENT) / 2) - 2;
-  const left = columnLines(session.lead, cursor.column === 0, cursor.index, colWidth);
-  const right = columnLines(session.teammate, cursor.column === 1, cursor.index, colWidth);
+  const left = columnLines(leadInfo(session), cursor.column === 0, cursor.index, colWidth);
+  const right = columnLines(teammateInfo(session), cursor.column === 1, cursor.index, colWidth);
 
   if (stacked) {
     for (const line of left) lines.push([span(' '.repeat(INDENT)), ...line]);
