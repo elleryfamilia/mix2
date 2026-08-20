@@ -183,6 +183,12 @@ harnesses are supported as teammates:
 - [OpenCode](https://opencode.ai) — `harness = "opencode"`; read-only
   `plan` agent consultations; models span providers
   (`model = "provider/model"`), listed live for the `/model` picker.
+- [GitHub Copilot CLI](https://github.com/features/copilot/cli) —
+  `harness = "copilot"`; write and shell tools are denied for
+  consultations (denials outrank `--allow-all-tools`), though your
+  personal Copilot MCP servers/skills from `~/.copilot` still load —
+  disclosed in the picker. Headless auth: `COPILOT_GITHUB_TOKEN`,
+  `GH_TOKEN`, or `GITHUB_TOKEN`.
 
 The legacy harness-keyed schema keeps working unchanged, and the two can
 mix (slot values win; conflicts are reported as warnings at startup):

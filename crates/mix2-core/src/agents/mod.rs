@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod claude;
 pub mod codex;
+pub mod copilot;
 pub mod cursor;
 pub mod descriptor;
 pub mod discovery;
@@ -69,6 +70,7 @@ impl FromStr for SlotId {
 pub enum HarnessKind {
     Claude,
     Codex,
+    Copilot,
     Cursor,
     Opencode,
 }
@@ -78,6 +80,7 @@ impl HarnessKind {
         match self {
             HarnessKind::Claude => "Claude",
             HarnessKind::Codex => "Codex",
+            HarnessKind::Copilot => "Copilot",
             HarnessKind::Cursor => "Cursor",
             HarnessKind::Opencode => "OpenCode",
         }
@@ -89,6 +92,7 @@ impl fmt::Display for HarnessKind {
         match self {
             HarnessKind::Claude => write!(f, "claude"),
             HarnessKind::Codex => write!(f, "codex"),
+            HarnessKind::Copilot => write!(f, "copilot"),
             HarnessKind::Cursor => write!(f, "cursor"),
             HarnessKind::Opencode => write!(f, "opencode"),
         }
