@@ -37,6 +37,12 @@ export function statusSegments(
       right: [{ text: 'q quit', color: faint }],
     };
   }
+  if (state.phase === 'selecting-team') {
+    return {
+      left: [{ text: `${glyphs.team} pick your team`, color: theme.agent.team }],
+      right: [{ text: 'enter start · esc defaults', color: faint }],
+    };
+  }
   if (state.teamPanelOpen) {
     return {
       left: [{ text: `${glyphs.team} team`, color: theme.agent.team }],
@@ -130,7 +136,7 @@ export function StatusBar({
   let { left, right } = statusSegments(state, spinner, teamGlyph);
   if (modelPanelOpen) {
     left = [{ text: '◐ models', color: theme.agent.team }];
-    right = [{ text: '↑↓ ←→ enter · esc close', color: theme.text.faint }];
+    right = [{ text: 'type to filter · ↑↓ ←→ enter · esc close', color: theme.text.faint }];
   }
   if (slashOpen) {
     left = [{ text: '/exit · /clear · /copy · /model · /activity · /help', color: theme.text.muted }];

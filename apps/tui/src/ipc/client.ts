@@ -90,17 +90,6 @@ export class CoreClient {
         this.log('<<', line);
         const event = parseEventLine(line);
         if (!event) continue;
-        // Until the visual team picker lands, a core waiting on selection
-        // gets the proposal confirmed automatically — the handshake runs,
-        // the defaults win, startup behavior stays unchanged.
-        if (event.type === 'harnesses.discovered' && !event.auto) {
-          this.send({
-            type: 'select_team',
-            one: event.proposal.one,
-            two: event.proposal.two,
-            lead_slot: event.proposal.lead_slot,
-          });
-        }
         this.handlers.onEvent(event);
       }
     });
@@ -153,6 +142,10 @@ export class CoreClient {
 
   submit(id: string, text: string): void {
     this.send({ type: 'submit', id, text });
+  }
+
+  selectTeam(one: string, two: string, leadSlot: string): void {
+    this.send({ type: 'select_team', one, two, lead_slot: leadSlot });
   }
 
   cancel(turnId: string): void {

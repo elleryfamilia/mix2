@@ -81,6 +81,40 @@ describe('startup', () => {
     expect(teammateInfo(s.session!).slot).toBe('one');
   });
 
+  it('a non-auto discovery enters selecting-team; ready leaves it', () => {
+    const discovered: CoreEvent = {
+      type: 'harnesses.discovered',
+      harnesses: [],
+      proposal: { one: 'claude', two: 'codex', lead_slot: 'one' },
+      auto: false,
+    };
+    let s = apply(initialState, discovered);
+    expect(s.phase).toBe('selecting-team');
+    expect(s.discovery?.proposal.lead_slot).toBe('one');
+
+    // A core refusal lands on the picker, not the conversation.
+    s = apply(s, { type: 'error', message: 'Codex — not signed in' });
+    expect(s.discovery?.selectionError).toContain('not signed in');
+    expect(s.items).toHaveLength(0);
+
+    s = apply(s, ready);
+    expect(s.phase).toBe('ready');
+  });
+
+  it('an auto discovery is informational and stays in starting', () => {
+    const s = apply(initialState, {
+      type: 'harnesses.discovered',
+      harnesses: [],
+      proposal: { one: 'claude', two: 'codex', lead_slot: 'two' },
+      auto: true,
+    });
+    expect(s.phase).toBe('starting');
+    expect(s.discovery?.auto).toBe(true);
+    // Errors outside selecting-team stay out of picker state.
+    const after = apply(s, { type: 'error', message: 'a turn is already running' });
+    expect(after.discovery?.selectionError).toBeUndefined();
+  });
+
   it('fatal event switches to fatal phase', () => {
     const s = apply(initialState, { type: 'fatal', message: 'lead unavailable' });
     expect(s.phase).toBe('fatal');

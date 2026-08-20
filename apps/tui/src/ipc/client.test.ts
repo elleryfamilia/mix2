@@ -6,9 +6,9 @@ import type { CoreEvent } from './protocol.js';
 import { CoreClient } from './client.js';
 
 describe('CoreClient selection handshake', () => {
-  it('auto-confirms the proposal while no picker exists', async () => {
+  it('surfaces the discovery report and leaves selection to the app', async () => {
     // A stand-in core that reports discovery awaiting selection, then
-    // stays alive long enough to receive the reply.
+    // stays alive long enough for a reply to be possible.
     const script = path.join(tmpdir(), `mix2-fake-core-${process.pid}.sh`);
     writeFileSync(
       script,
@@ -35,11 +35,17 @@ describe('CoreClient selection handshake', () => {
     }
 
     expect(events.some((e) => e.type === 'harnesses.discovered')).toBe(true);
+    // The picker (App) owns the choice; the client must not auto-confirm.
+    expect(send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'select_team' }),
+    );
+    // The explicit selection helper carries the app's choice.
+    client.selectTeam('codex', 'codex', 'one');
     expect(send).toHaveBeenCalledWith({
       type: 'select_team',
-      one: 'claude',
+      one: 'codex',
       two: 'codex',
-      lead_slot: 'two',
+      lead_slot: 'one',
     });
     client.shutdown();
   });

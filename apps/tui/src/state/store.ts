@@ -146,10 +146,12 @@ export interface DiscoveryState {
   proposal: TeamProposal;
   /** True when the core auto-confirmed the proposal (no picker needed). */
   auto: boolean;
+  /** The core's refusal of the last select_team attempt, shown in place. */
+  selectionError?: string;
 }
 
 export interface AppState {
-  phase: 'starting' | 'ready' | 'fatal';
+  phase: 'starting' | 'selecting-team' | 'ready' | 'fatal';
   fatalMessage?: string;
   session?: SessionInfo;
   discovery?: DiscoveryState;
@@ -270,6 +272,8 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
     case 'harnesses.discovered':
       return {
         ...state,
+        // auto: the core is proceeding on its own; stay in 'starting'.
+        phase: event.auto ? state.phase : 'selecting-team',
         discovery: {
           harnesses: event.harnesses,
           proposal: event.proposal,
@@ -583,10 +587,19 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
       return next;
     }
 
-    case 'warning':
     case 'error':
-      // Non-fatal diagnostics stay out of the conversation; surface invalid
-      // command errors as a notice only if no turn is running.
+      // A refusal while picking is the picker's to display; other errors
+      // stay out of the conversation.
+      if (state.phase === 'selecting-team' && state.discovery) {
+        return {
+          ...state,
+          discovery: { ...state.discovery, selectionError: event.message },
+        };
+      }
+      return state;
+
+    case 'warning':
+      // Non-fatal diagnostics stay out of the conversation.
       return state;
   }
 }

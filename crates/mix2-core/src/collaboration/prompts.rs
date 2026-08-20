@@ -28,6 +28,20 @@ pub fn lead_instructions(team: Team, project: bool) -> String {
          plans still go to `.mix2/` when worth keeping.\n"
             .to_owned()
     };
+    // The handoff command names this team's actual CLIs, not a hardcoded
+    // pair; a same-harness team hands off to its one harness.
+    let handoff = if team.one == team.two {
+        format!(
+            "run `{} \"implement the plan in .mix2/auth-refactor-plan.md\"`",
+            team.lead_harness()
+        )
+    } else {
+        format!(
+            "run `{} \"implement the plan in .mix2/auth-refactor-plan.md\"` (or `{}`)",
+            team.lead_harness(),
+            team.teammate_harness()
+        )
+    };
     format!(
         r#"You are {lead_name}, working inside mix2: a two-agent AI engineering team. Your teammate is {teammate_name}. You coordinate the team and own the conversation with the user.
 
@@ -68,7 +82,7 @@ QUALIFY BROAD REQUESTS BEFORE ENGAGING THE TEAM. Consultations cost real minutes
 
 TEAM SCRATCHPAD — the only place you write. `.mix2/` inside the working directory is the team's shared scratchpad; create the directory when first needed. You may create and edit files there and NOWHERE else — never modify the project's own files, even where tooling would let you. Use it for durable output: implementation plans, design notes, review findings, decision records, with clear names like `.mix2/auth-refactor-plan.md`.
 
-WHEN ASKED TO IMPLEMENT OR CHANGE CODE: do everything except touch the code. Investigate, consult, reconcile — then write a complete, actionable plan to `.mix2/<topic>-plan.md`: context, the decisions made, step-by-step changes with exact file paths, validation steps, and any open disagreement. In your reply, summarize the plan in a few lines, name the file, and end with the exact handoff command, e.g. run `claude "implement the plan in .mix2/auth-refactor-plan.md"` (or `codex`). Reframe, don't refuse: the user leaves with the plan, never a rejection. The interactive tools are the right place to execute because the user can steer and approve there; mix2 is where the plan gets good.
+WHEN ASKED TO IMPLEMENT OR CHANGE CODE: do everything except touch the code. Investigate, consult, reconcile — then write a complete, actionable plan to `.mix2/<topic>-plan.md`: context, the decisions made, step-by-step changes with exact file paths, validation steps, and any open disagreement. In your reply, summarize the plan in a few lines, name the file, and end with the exact handoff command, e.g. {handoff}. Reframe, don't refuse: the user leaves with the plan, never a rejection. The interactive tools are the right place to execute because the user can steer and approve there; mix2 is where the plan gets good.
 
 EFFORT — match depth to the question, and default LOW. Unless the user explicitly asked for thoroughness (audit, "be thorough", "review everything") or the change at stake is clearly risky, treat the question as conversational: aim to answer within ~2–3 minutes total, reading only the few most relevant files. Every consultation prompt must state a depth budget on its first line, and default to the smallest one:
 - "Quick take — 2 minutes, a handful of file reads, no exhaustive search:" (the default, including for advisory/opinion questions)
@@ -219,6 +233,31 @@ mod tests {
         assert!(p.contains(".mix2/"));
         assert!(p.contains("Reframe, don't refuse"));
         assert!(!p.contains("doesn't look like a software project"));
+        // The handoff names this team's CLIs, lead first.
+        assert!(p.contains(
+            r#"run `claude "implement the plan in .mix2/auth-refactor-plan.md"` (or `codex`)"#
+        ));
+    }
+
+    #[test]
+    fn handoff_follows_the_lead_and_collapses_for_same_harness_teams() {
+        let reversed = Team {
+            lead: SlotId::Two,
+            ..mixed()
+        };
+        let p = lead_instructions(reversed, true);
+        assert!(p.contains(
+            r#"run `codex "implement the plan in .mix2/auth-refactor-plan.md"` (or `claude`)"#
+        ));
+
+        let same = Team {
+            one: HarnessKind::Codex,
+            two: HarnessKind::Codex,
+            lead: SlotId::One,
+        };
+        let p = lead_instructions(same, true);
+        assert!(p.contains(r#"run `codex "implement the plan in .mix2/auth-refactor-plan.md"`"#));
+        assert!(!p.contains("(or `"), "one harness, one handoff");
     }
 
     #[test]

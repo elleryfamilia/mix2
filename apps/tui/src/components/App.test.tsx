@@ -14,6 +14,7 @@ interface Harness {
     cancel: ReturnType<typeof vi.fn>;
     shutdown: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
+    selectTeam: ReturnType<typeof vi.fn>;
   };
   unmount: () => void;
 }
@@ -43,7 +44,14 @@ const ready: Extract<CoreEvent, { type: 'ready' }> = {
 };
 
 function mount(): Harness {
-  const client = { submit: vi.fn(), cancel: vi.fn(), shutdown: vi.fn(), send: vi.fn(), start: vi.fn() };
+  const client = {
+    submit: vi.fn(),
+    cancel: vi.fn(),
+    shutdown: vi.fn(),
+    send: vi.fn(),
+    selectTeam: vi.fn(),
+    start: vi.fn(),
+  };
   let handlers: { onEvent: (e: CoreEvent) => void } = { onEvent: () => {} };
   const instance = render(
     <App
@@ -65,6 +73,148 @@ function mount(): Harness {
 async function tickReact(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
 }
+
+const pickerCaps = {
+  teammate_read_only: 'enforced',
+  lead_permission_scoping: 'enforced',
+  instruction_injection: 'enforced',
+} as const;
+
+const discovered: Extract<CoreEvent, { type: 'harnesses.discovered' }> = {
+  type: 'harnesses.discovered',
+  harnesses: [
+    {
+      harness: 'claude',
+      command: 'claude',
+      version: '2.1.232',
+      auth: 'authenticated',
+      available: true,
+      lead_eligible: true,
+      teammate_eligible: true,
+      capabilities: pickerCaps,
+    },
+    {
+      harness: 'codex',
+      command: 'codex',
+      version: '0.146.0',
+      auth: 'authenticated',
+      available: true,
+      lead_eligible: true,
+      teammate_eligible: true,
+      capabilities: pickerCaps,
+    },
+  ],
+  proposal: { one: 'claude', two: 'codex', lead_slot: 'one' },
+  auto: false,
+};
+
+describe('team picker', () => {
+  it('shows the picker on a non-auto discovery and enter confirms the proposal', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(discovered);
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('pick your team');
+    expect(frame).toContain('slot one');
+    expect(frame).toContain('claude');
+    expect(frame).toContain('codex');
+
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one');
+
+    h.emit(ready);
+    await tickReact();
+    expect(h.lastFrame()).toContain('How can we help?');
+    h.unmount();
+  });
+
+  it('arrow navigation picks a same-harness team and the lead toggles', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(discovered);
+    await tickReact();
+
+    // ↓ in the slot-one column moves onto codex and selects it.
+    h.stdin.write('\x1b[B');
+    await tickReact();
+    // → → to the coordinator control; ↑ toggles the lead to slot two.
+    h.stdin.write('\x1b[C\x1b[C');
+    await tickReact();
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('coordinator: slot two');
+
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('codex', 'codex', 'two');
+    h.unmount();
+  });
+
+  it('escape starts the defaults without picking', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(discovered);
+    await tickReact();
+    h.stdin.write('\x1b[B'); // wander first — esc still means "defaults"
+    await tickReact();
+    h.stdin.write('\x1b');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one');
+    h.unmount();
+  });
+
+  it('a core refusal shows in place and the picker can retry', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(discovered);
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+
+    h.emit({ type: 'error', message: 'Codex — not signed in: run `codex login`' });
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('pick your team');
+    expect(frame).toContain('not signed in');
+
+    // A later valid confirmation still goes through to ready.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledTimes(2);
+    h.emit(ready);
+    await tickReact();
+    expect(h.lastFrame()).toContain('How can we help?');
+    h.unmount();
+  });
+
+  it('a disabled entry shows its reason and cannot be selected', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit({
+      ...discovered,
+      harnesses: [
+        discovered.harnesses[0]!,
+        {
+          ...discovered.harnesses[1]!,
+          available: false,
+          reason: 'not installed: npm i -g @openai/codex',
+        },
+      ],
+    });
+    await tickReact();
+    expect(h.lastFrame()).toContain('not installed: npm i -g @openai/codex');
+
+    // Cursoring onto the disabled codex row must not change slot one.
+    h.stdin.write('\x1b[B');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one');
+    h.unmount();
+  });
+});
 
 describe('App', () => {
   it('startup state shows identity, project, and readiness', async () => {
@@ -542,6 +692,34 @@ describe('App', () => {
     h.emit({ type: 'agent.model', slot: 'one', model: 'sonnet', source: 'selected' });
     await tickReact();
     expect(h.lastFrame()).toContain('claude model set to sonnet');
+    h.unmount();
+  });
+
+  it('/model filter narrows the list and enter applies the match', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    h.stdin.write('/model');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).toContain('◐ models');
+
+    // Typing filters both columns; "son" leaves only sonnet for claude.
+    h.stdin.write('son');
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('filter: son');
+    expect(frame).toContain('sonnet');
+    expect(frame).not.toContain('provider default');
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).toHaveBeenCalledWith({
+      type: 'set_model',
+      slot: 'one',
+      model: 'sonnet',
+    });
     h.unmount();
   });
 

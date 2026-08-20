@@ -659,16 +659,36 @@ function welcomeLines(state: AppState, ctx: RenderContext): Line[] {
   const lines: Line[] = [];
   lines.push(pad(span('How can we help?', { color: theme.text.primary })));
   lines.push(BLANK);
+  // Participant names come from the session; the rivalry wink only fits a
+  // team whose slots actually run different harnesses. Before the session
+  // settles (the beat between discovery and ready) the copy stays generic.
+  const session = state.session;
+  const sameHarness = session ? session.one.harness === session.two.harness : false;
+  const pair = !session
+    ? 'your two agents'
+    : sameHarness
+      ? `two independent ${slotName(ctx, 'one').replace(/ \(one\)$/, '')} agents`
+      : `${slotName(ctx, 'one')} and ${slotName(ctx, 'two')}`;
+  const flavor = !session
+    ? 'independent takes, one voice'
+    : sameHarness
+      ? 'same stock, separate minds'
+      : 'sworn competitors, model colleagues';
+  const handoff = !session
+    ? 'either one'
+    : sameHarness
+      ? slotLabel(ctx, 'one').replace(/ \(one\)$/, '')
+      : `${slotLabel(ctx, 'one')} or ${slotLabel(ctx, 'two')}`;
   const body = project
-    ? 'You are talking to Claude and Codex as one team — sworn competitors, ' +
-      'model colleagues. Substantive questions engage both, working in ' +
+    ? `You are talking to ${pair} as one team — ${flavor}. ` +
+      'Substantive questions engage both, working in ' +
       'parallel with independent takes. Best for brainstorming, design, code ' +
       'review, debugging, and tradeoffs. Asked to implement, the team writes ' +
       'the plan to .mix2/ instead of touching your code — ready to hand to ' +
-      'claude or codex to execute.'
+      `${handoff} to execute.`
     : 'No project detected here, so bring anything: a product idea, business ' +
-      'viability, strategy, a document. You are talking to Claude and Codex ' +
-      'as one team — sworn competitors, model colleagues — and substantive ' +
+      `viability, strategy, a document. You are talking to ${pair} ` +
+      `as one team — ${flavor} — and substantive ` +
       'questions engage both in parallel with independent takes. Notes and ' +
       'plans worth keeping land in .mix2/.';
   for (const line of wrapText(body, width)) {
