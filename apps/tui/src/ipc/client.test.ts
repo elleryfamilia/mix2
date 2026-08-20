@@ -77,6 +77,34 @@ describe('CoreClient selection handshake', () => {
   });
 });
 
+describe('CoreClient restart (/team)', () => {
+  it('relaunches with the picker forced and never misreports the old core exit', async () => {
+    const script = path.join(tmpdir(), `mix2-restart-core-${process.pid}.sh`);
+    writeFileSync(script, '#!/bin/sh\nsleep 2\n');
+    chmodSync(script, 0o755);
+
+    const exits: Array<number | null> = [];
+    const client = new CoreClient(
+      { corePath: script, interactive: true },
+      { onEvent: () => {}, onExit: (code) => exits.push(code) },
+    );
+    const send = vi.spyOn(client, 'send');
+    client.start();
+    client.restart();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const inits = send.mock.calls
+      .map(([cmd]) => cmd)
+      .filter((cmd) => cmd.type === 'initialize');
+    expect(inits).toHaveLength(2);
+    expect(inits[0]).toMatchObject({ pick_team: false });
+    expect(inits[1]).toMatchObject({ pick_team: true, interactive: true });
+    // The deliberately-killed first core must not surface as a crash.
+    expect(exits).toEqual([]);
+    client.shutdown();
+  });
+});
+
 describe('CoreClient lifecycle', () => {
   it('shutdown is idempotent and never throws after the stream ends', async () => {
     // `cat` stands in for the core: reads stdin, echoes, exits on EOF.

@@ -476,6 +476,28 @@ describe('disagreement', () => {
   });
 });
 
+describe('session reset (/team)', () => {
+  it('drops everything session-bound and returns to starting', () => {
+    let s = startedTurn();
+    s = apply(s, {
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'one',
+      lead_slot: 'one',
+      text: 'answer',
+      consultations: 0,
+      duration_ms: 100,
+    });
+    s = apply(s, { type: 'turn.completed', turn_id: 't1', duration_ms: 100, consultations: 0 });
+    s = reduce(s, { type: 'reset-session' });
+    expect(s.phase).toBe('starting');
+    expect(s.session).toBeUndefined();
+    expect(s.discovery).toBeUndefined();
+    expect(s.items).toHaveLength(0);
+    expect(s.lastSummary).toBeUndefined();
+  });
+});
+
 describe('formatting', () => {
   it('formats elapsed and durations', () => {
     expect(formatElapsed(48_000)).toBe('0:48');

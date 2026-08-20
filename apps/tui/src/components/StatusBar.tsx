@@ -139,7 +139,12 @@ export function StatusBar({
     right = [{ text: 'type to filter · ↑↓ ←→ enter · esc close', color: theme.text.faint }];
   }
   if (slashOpen) {
-    left = [{ text: '/exit · /clear · /copy · /model · /activity · /help', color: theme.text.muted }];
+    left = [
+      {
+        text: '/exit · /clear · /copy · /model · /team · /activity · /help',
+        color: theme.text.muted,
+      },
+    ];
   }
   if (flash) {
     left = [{ text: flash, color: theme.agent.team }];

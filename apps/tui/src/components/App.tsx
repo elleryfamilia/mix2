@@ -12,6 +12,7 @@ import {
 } from '../render/modelPanel.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import {
+  entryIndexOf,
   initialSelection,
   pickerEntries,
   renderTeamPicker,
@@ -100,11 +101,12 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const busy = state.turn !== undefined;
 
   // Entering the selecting-team phase seeds the picker with the core's
-  // proposal; leaving it (ready/fatal) clears it.
+  // proposal (cursor on slot one's proposed harness); leaving it
+  // (ready/fatal) clears it.
   useEffect(() => {
     if (state.phase === 'selecting-team' && state.discovery && !picker) {
       setPicker({
-        cursor: { column: 0, index: 0 },
+        cursor: { column: 0, index: entryIndexOf(state.discovery, state.discovery.proposal.one) },
         selection: initialSelection(state.discovery),
       });
     }
@@ -325,7 +327,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         dispatch({
           type: 'local-notice',
           text:
-            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /model show or set models · /activity toggle the activity panel · /help this list\n' +
+            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /model show or set models · /team pick a new team (new session) · /activity toggle the activity panel · /help this list\n' +
             'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t activity · ctrl+y copy answer · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
         });
         return;
@@ -336,8 +338,17 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           dispatch({ type: 'clear-conversation' });
         }
         return;
+      case 'team':
+        // Switching teams is a fresh session: relaunch the core with the
+        // picker forced (was a legacy alias for /activity).
+        if (busy) {
+          dispatch({ type: 'local-notice', text: '/team is unavailable while a turn is running' });
+        } else {
+          dispatch({ type: 'reset-session' });
+          client.restart();
+        }
+        return;
       case 'activity':
-      case 'team': // legacy alias
         dispatch({ type: 'toggle-team-panel' });
         return;
       default:
@@ -368,16 +379,31 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     if (state.phase === 'selecting-team' && state.discovery && picker) {
       const discovery = state.discovery;
       const entries = pickerEntries(discovery);
-      const confirm = (selection: TeamPickerSelection) => {
-        client.selectTeam(selection.one, selection.two, selection.leadSlot);
-      };
+      const equippedIndex = (column: 0 | 1, selection: TeamPickerSelection) =>
+        entryIndexOf(discovery, column === 0 ? selection.one : selection.two);
       if (key.return) {
-        confirm(picker.selection);
+        // Enter is pick-equip-advance on the slot columns; the coordinator
+        // control is where the team actually starts. The IPC send stays
+        // outside any state updater — updaters may run more than once.
+        const { cursor, selection } = picker;
+        if (cursor.column === 2) {
+          client.selectTeam(selection.one, selection.two, selection.leadSlot);
+          return;
+        }
+        const slot = cursor.column === 0 ? 'one' : 'two';
+        const entry = entries[cursor.index];
+        // A disabled entry cannot be equipped; its reason is on screen.
+        if (!entry || !selectable(entry, slot, selection.leadSlot)) return;
+        const nextSelection = { ...selection, [slot]: entry.harness };
+        const column = (cursor.column + 1) as TeamPickerCursor['column'];
+        const index = column === 2 ? 0 : equippedIndex(column, nextSelection);
+        setPicker({ selection: nextSelection, cursor: { column, index } });
         return;
       }
       if (key.escape) {
         // Esc opts out of picking: the proposal (the defaults) starts.
-        confirm(initialSelection(discovery));
+        const proposal = initialSelection(discovery);
+        client.selectTeam(proposal.one, proposal.two, proposal.leadSlot);
         return;
       }
       if (key.leftArrow || key.rightArrow || key.tab) {
@@ -385,17 +411,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           if (!prev) return prev;
           const delta = key.leftArrow ? 2 : 1; // left cycles backwards
           const column = ((prev.cursor.column + delta) % 3) as TeamPickerCursor['column'];
-          const index =
-            column === 2
-              ? 0
-              : Math.max(
-                  0,
-                  entries.findIndex(
-                    (e) =>
-                      e.harness ===
-                      (column === 0 ? prev.selection.one : prev.selection.two),
-                  ),
-                );
+          const index = column === 2 ? 0 : equippedIndex(column, prev.selection);
           return { ...prev, cursor: { column, index } };
         });
         return;
@@ -408,20 +424,11 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
             const leadSlot = prev.selection.leadSlot === 'one' ? 'two' : 'one';
             return { ...prev, selection: { ...prev.selection, leadSlot } };
           }
+          // Arrows only move the highlight; equipping is the explicit
+          // enter. Disabled entries stay reachable so their reason reads.
           const delta = key.upArrow ? -1 : 1;
-          const index = Math.max(
-            0,
-            Math.min(entries.length - 1, prev.cursor.index + delta),
-          );
-          const entry = entries[index];
-          if (!entry) return prev;
-          const slot = prev.cursor.column === 0 ? 'one' : 'two';
-          // Moving over a selectable entry chooses it; disabled entries can
-          // still be cursored so their reason is readable.
-          const selection = selectable(entry, slot, prev.selection.leadSlot)
-            ? { ...prev.selection, [slot]: entry.harness }
-            : prev.selection;
-          return { cursor: { ...prev.cursor, index }, selection };
+          const index = Math.max(0, Math.min(entries.length - 1, prev.cursor.index + delta));
+          return { ...prev, cursor: { ...prev.cursor, index } };
         });
         return;
       }

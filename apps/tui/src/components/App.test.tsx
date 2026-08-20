@@ -15,6 +15,7 @@ interface Harness {
     shutdown: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
     selectTeam: ReturnType<typeof vi.fn>;
+    restart: ReturnType<typeof vi.fn>;
   };
   unmount: () => void;
 }
@@ -50,6 +51,7 @@ function mount(): Harness {
     shutdown: vi.fn(),
     send: vi.fn(),
     selectTeam: vi.fn(),
+    restart: vi.fn(),
     start: vi.fn(),
   };
   let handlers: { onEvent: (e: CoreEvent) => void } = { onEvent: () => {} };
@@ -72,6 +74,16 @@ function mount(): Harness {
 
 async function tickReact(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+/** Poll for content instead of sleeping blind: the picker needs two render
+ * cycles (reducer, then the seeding effect), and fixed ticks get marginal
+ * when the whole suite loads the machine. */
+async function waitForFrame(h: Harness, needle: string): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (!h.lastFrame()?.includes(needle) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 }
 
 const pickerCaps = {
@@ -109,17 +121,26 @@ const discovered: Extract<CoreEvent, { type: 'harnesses.discovered' }> = {
 };
 
 describe('team picker', () => {
-  it('shows the picker on a non-auto discovery and enter confirms the proposal', async () => {
+  it('pick–equip–advance: enter equips each slot, then starts from the coordinator', async () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     const frame = h.lastFrame()!;
     expect(frame).toContain('pick your team');
     expect(frame).toContain('slot one');
-    expect(frame).toContain('claude');
-    expect(frame).toContain('codex');
+    expect(frame).toContain('enter equip');
 
+    // Equip slot one (claude highlighted) → focus advances to slot two.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).not.toHaveBeenCalled();
+    // Equip slot two (codex highlighted) → focus advances to coordinator.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).not.toHaveBeenCalled();
+    expect(h.lastFrame()).toContain('enter start');
+    // Coordinator enter starts the team.
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one');
@@ -130,17 +151,21 @@ describe('team picker', () => {
     h.unmount();
   });
 
-  it('arrow navigation picks a same-harness team and the lead toggles', async () => {
+  it('arrows highlight without equipping; a same-harness team builds explicitly', async () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
 
-    // ↓ in the slot-one column moves onto codex and selects it.
+    // ↓ only moves the highlight onto codex — nothing is equipped yet…
     h.stdin.write('\x1b[B');
     await tickReact();
-    // → → to the coordinator control; ↑ toggles the lead to slot two.
-    h.stdin.write('\x1b[C\x1b[C');
+    // …enter equips codex for slot one and advances to slot two, cursor
+    // seeded on slot two's equipped harness (codex).
+    h.stdin.write('\r');
+    await tickReact();
+    // Equip codex for slot two → coordinator; ↑ toggles the lead.
+    h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\x1b[A');
     await tickReact();
@@ -156,7 +181,7 @@ describe('team picker', () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     h.stdin.write('\x1b[B'); // wander first — esc still means "defaults"
     await tickReact();
     h.stdin.write('\x1b');
@@ -169,9 +194,15 @@ describe('team picker', () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
+    await waitForFrame(h, 'slot one');
+    // Equip both slots and start.
+    h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledTimes(1);
 
     h.emit({ type: 'error', message: 'Codex — not signed in: run `codex login`' });
     await tickReact();
@@ -179,7 +210,7 @@ describe('team picker', () => {
     expect(frame).toContain('pick your team');
     expect(frame).toContain('not signed in');
 
-    // A later valid confirmation still goes through to ready.
+    // Focus stayed on the coordinator: one enter retries.
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).toHaveBeenCalledTimes(2);
@@ -189,7 +220,7 @@ describe('team picker', () => {
     h.unmount();
   });
 
-  it('a disabled entry shows its reason and cannot be selected', async () => {
+  it('a disabled entry shows its reason and enter refuses to equip it', async () => {
     const h = mount();
     await tickReact();
     h.emit({
@@ -203,15 +234,74 @@ describe('team picker', () => {
         },
       ],
     });
-    await tickReact();
+    await waitForFrame(h, 'slot one');
     expect(h.lastFrame()).toContain('not installed: npm i -g @openai/codex');
 
-    // Cursoring onto the disabled codex row must not change slot one.
+    // Enter on the disabled codex row is a no-op — focus stays put.
     h.stdin.write('\x1b[B');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
-    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one');
+    expect(h.client.selectTeam).not.toHaveBeenCalled();
+
+    // Recover: equip claude on both slots, then start.
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    h.stdin.write('\r'); // equip slot one → advance (cursor lands on codex, slot two's pick)
+    await tickReact();
+    h.stdin.write('\x1b[A'); // highlight claude
+    await tickReact();
+    h.stdin.write('\r'); // equip slot two → coordinator
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'claude', 'one');
+    h.unmount();
+  });
+
+  it('/team relaunches the core with the picker for a fresh session', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    h.emit({ type: 'message.user', turn_id: 't1', text: 'old conversation' });
+    h.emit({
+      type: 'message.final',
+      turn_id: 't1',
+      speaker: 'one',
+      lead_slot: 'one',
+      text: 'old answer',
+      consultations: 0,
+      duration_ms: 100,
+    });
+    h.emit({ type: 'turn.completed', turn_id: 't1', duration_ms: 100, consultations: 0 });
+    await tickReact();
+
+    h.stdin.write('/team');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.restart).toHaveBeenCalledTimes(1);
+    // Session state reset: the old conversation is gone, startup runs again.
+    expect(h.lastFrame()).not.toContain('old answer');
+
+    h.emit(discovered);
+    await waitForFrame(h, 'slot one');
+    expect(h.lastFrame()).toContain('pick your team');
+    h.unmount();
+  });
+
+  it('/team refuses while a turn is running', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    h.emit({ type: 'message.user', turn_id: 't1', text: 'busy now' });
+    await tickReact();
+    h.stdin.write('/team');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.restart).not.toHaveBeenCalled();
+    expect(h.lastFrame()).toContain('/team is unavailable while a turn is running');
     h.unmount();
   });
 });
@@ -457,7 +547,7 @@ describe('App', () => {
     h.stdin.write('/help');
     await tickReact();
     // Slash hint appears while typing a command.
-    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /model · /activity · /help');
+    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /model · /team · /activity · /help');
     h.stdin.write('\r');
     await tickReact();
     expect(h.lastFrame()).toContain('commands  /exit');

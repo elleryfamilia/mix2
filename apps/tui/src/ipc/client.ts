@@ -102,6 +102,9 @@ export class CoreClient {
 
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
+      // Identity guard: a slow-dying pre-restart core must not feed the
+      // fresh session's buffer or dispatch stale events into it.
+      if (this.child !== child) return;
       this.buffer += chunk;
       let index: number;
       while ((index = this.buffer.indexOf('\n')) >= 0) {
@@ -115,6 +118,7 @@ export class CoreClient {
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
+      if (this.child !== child) return;
       this.log('!!', chunk.trimEnd());
       for (const line of chunk.split('\n')) {
         if (!line.trim()) continue;
@@ -123,7 +127,10 @@ export class CoreClient {
       }
     });
 
+    // Guard both handlers on identity: after a restart, the OLD child's
+    // late exit/error must not be reported as the current core dying.
     child.on('error', () => {
+      if (this.child !== child) return;
       this.handlers.onEvent({
         type: 'fatal',
         message:
@@ -132,6 +139,7 @@ export class CoreClient {
       });
     });
     child.on('exit', (code) => {
+      if (this.child !== child) return;
       if (!this.shuttingDown) this.handlers.onExit(code, this.stderrTail.join('\n'));
     });
 
@@ -166,6 +174,32 @@ export class CoreClient {
 
   selectTeam(one: string, two: string, leadSlot: string): void {
     this.send({ type: 'select_team', one, two, lead_slot: leadSlot });
+  }
+
+  /** Tear down the current core and start a fresh one with the team
+   * picker forced (`/team`). A new session by design: a re-slotted team
+   * cannot inherit the previous lead's provider conversation. */
+  restart(): void {
+    const old = this.child;
+    try {
+      this.send({ type: 'shutdown' });
+      old?.stdin.end();
+    } catch {
+      // already gone
+    }
+    if (old) {
+      setTimeout(() => {
+        if (old.exitCode === null) old.kill('SIGKILL');
+      }, 1500).unref();
+    }
+    // Reset stream state before the fresh spawn; the identity guards in
+    // start() keep the old child's late exit from being misreported.
+    this.child = null;
+    this.buffer = '';
+    this.stderrTail = [];
+    this.shuttingDown = false;
+    this.options.pickTeam = true;
+    this.start();
   }
 
   cancel(turnId: string): void {
