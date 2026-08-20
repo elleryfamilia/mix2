@@ -1,7 +1,10 @@
 pub mod agent;
 pub mod claude;
 pub mod codex;
+pub mod descriptor;
 pub mod events;
+pub mod registry;
+pub mod runner;
 
 pub use agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion};
 pub use events::AgentEvent;
@@ -57,7 +60,7 @@ impl FromStr for SlotId {
 
 /// Which provider CLI backs a slot. Selects behavior only (invocation,
 /// decoding, probes); participant identity lives in [`SlotId`]. New
-/// providers extend this enum plus the adapter registry in `for_kind`.
+/// providers extend this enum plus the adapter registry in `registry.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HarnessKind {

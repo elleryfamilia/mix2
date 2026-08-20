@@ -1,3 +1,4 @@
+use crate::agents::registry;
 use crate::agents::{HarnessKind, SlotId, Team};
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -79,14 +80,15 @@ impl Config {
                 HarnessKind::Codex => SlotId::Two,
             },
         };
+        let default_command =
+            |harness: HarnessKind| registry::descriptor(harness).default_command.to_owned();
         Ok(Self {
-            team,
             one: SlotSettings {
                 command: file
                     .claude
                     .command
                     .clone()
-                    .unwrap_or_else(|| "claude".to_owned()),
+                    .unwrap_or_else(|| default_command(team.one)),
                 model: file.claude.model.clone(),
             },
             two: SlotSettings {
@@ -94,9 +96,10 @@ impl Config {
                     .codex
                     .command
                     .clone()
-                    .unwrap_or_else(|| "codex".to_owned()),
+                    .unwrap_or_else(|| default_command(team.two)),
                 model: file.codex.model.clone(),
             },
+            team,
             max_consults_per_turn: file
                 .collaboration
                 .max_consults_per_turn

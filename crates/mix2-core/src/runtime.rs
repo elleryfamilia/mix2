@@ -1,6 +1,6 @@
 use crate::agents::agent::{Agent, AgentRequest, AgentResult, AgentSession, AuthStatus};
-use crate::agents::claude::ClaudeAgent;
-use crate::agents::codex::CodexAgent;
+use crate::agents::registry;
+use crate::agents::runner::HarnessAgent;
 use crate::agents::{AgentEvent, AgentRole, HarnessKind, SlotId, Team};
 use crate::collaboration::consult::{ActiveTurn, ConsultServer, ConsultUpdate};
 use crate::collaboration::ConsultBudget;
@@ -52,17 +52,13 @@ pub struct RuntimeOptions {
 }
 
 fn build_agent(harness: HarnessKind, command: &str) -> Arc<dyn Agent> {
-    // Test/dev injection: MIX2_CLAUDE_CMD / MIX2_CODEX_CMD point the
-    // adapters at fake provider fixtures without touching user config.
-    let env_override = match harness {
-        HarnessKind::Claude => std::env::var("MIX2_CLAUDE_CMD").ok(),
-        HarnessKind::Codex => std::env::var("MIX2_CODEX_CMD").ok(),
-    };
-    let command = env_override.unwrap_or_else(|| command.to_owned());
-    match harness {
-        HarnessKind::Claude => Arc::new(ClaudeAgent::new(command)),
-        HarnessKind::Codex => Arc::new(CodexAgent::new(command)),
-    }
+    let descriptor = registry::descriptor(harness);
+    // Test/dev injection: the descriptor's env override (MIX2_CLAUDE_CMD /
+    // MIX2_CODEX_CMD) points the adapter at fake provider fixtures without
+    // touching user config.
+    let command =
+        std::env::var(descriptor.command_env_override).unwrap_or_else(|_| command.to_owned());
+    Arc::new(HarnessAgent::new(descriptor, command))
 }
 
 fn emit(event: &Event) {
@@ -177,17 +173,18 @@ impl Runtime {
         // what fixes each one.
         if !ready_for_duty(&one_installed, one_auth) || !ready_for_duty(&two_installed, two_auth) {
             let status = |harness: HarnessKind, installed: &Option<String>, auth: AuthStatus| {
+                let descriptor = registry::descriptor(harness);
                 if installed.is_none() {
                     format!(
                         "{} — not installed: {}",
                         harness.display_name(),
-                        install_hint(harness)
+                        descriptor.install_hint
                     )
                 } else if auth == AuthStatus::Unauthenticated {
                     format!(
                         "{} — not signed in: {}",
                         harness.display_name(),
-                        login_hint(harness)
+                        descriptor.login_hint
                     )
                 } else {
                     format!("{} — ready", harness.display_name())
@@ -601,24 +598,6 @@ fn auth_flag(status: AuthStatus) -> Option<bool> {
         AuthStatus::Authenticated => Some(true),
         AuthStatus::Unauthenticated => Some(false),
         AuthStatus::Unknown => None,
-    }
-}
-
-fn install_hint(harness: HarnessKind) -> String {
-    match harness {
-        HarnessKind::Claude => {
-            "install Claude Code from https://claude.com/claude-code, then run `claude` once to sign in"
-                .to_owned()
-        }
-        HarnessKind::Codex => "install Codex from https://developers.openai.com/codex/cli (`npm i -g @openai/codex`), then run `codex login`"
-            .to_owned(),
-    }
-}
-
-fn login_hint(harness: HarnessKind) -> String {
-    match harness {
-        HarnessKind::Claude => "run `claude` once (or `claude auth login`) to sign in".to_owned(),
-        HarnessKind::Codex => "run `codex login`".to_owned(),
     }
 }
 

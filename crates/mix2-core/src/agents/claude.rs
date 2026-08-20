@@ -1,245 +1,99 @@
-use super::agent::{Agent, AgentRequest, AgentResult, AgentSession, AgentVersion, AuthStatus};
+//! Adapter for the Claude Code CLI: a descriptor plus pure builders and a
+//! decoder. All process handling lives in the shared runner.
+//!
+//! Invocation shape (verified against claude 2.1.x):
+//!   claude -p --output-format stream-json --verbose --include-partial-messages \
+//!          --append-system-prompt <role instructions> [--resume <session-id>]
+//! with the prompt on stdin. `--append-system-prompt` layers mix2's role
+//! instructions on top of Claude Code's own system prompt instead of
+//! replacing it, and `--allowedTools` permits exactly the consult helper
+//! and scratchpad-scoped writes (`.mix2/**`) without widening anything
+//! else.
+
+use super::agent::AgentRequest;
+use super::descriptor::{
+    AuthProbe, Capabilities, CapabilityLevel, DecodeOutcome, Decoder, Descriptor,
+};
 use super::{AgentEvent, AgentRole, HarnessKind};
-use crate::process::child::{ChildProcess, SpawnOptions};
-use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio::sync::mpsc::Sender;
-use tokio_util::sync::CancellationToken;
 
-/// Adapter for the Claude Code CLI.
-///
-/// Invocation shape (verified against claude 2.1.x):
-///   claude -p --output-format stream-json --verbose --include-partial-messages \
-///          --append-system-prompt <role instructions> [--resume <session-id>]
-/// with the prompt on stdin. `--append-system-prompt` layers mix2's role
-/// instructions on top of Claude Code's own system prompt instead of
-/// replacing it, and `--allowedTools` permits exactly the consult helper
-/// and scratchpad-scoped writes (`.mix2/**`) without widening anything
-/// else.
-pub struct ClaudeAgent {
-    pub command: String,
+pub static DESCRIPTOR: Descriptor = Descriptor {
+    harness: HarnessKind::Claude,
+    label: "claude",
+    default_command: "claude",
+    command_env_override: "MIX2_CLAUDE_CMD",
+    install_hint:
+        "install Claude Code from https://claude.com/claude-code, then run `claude` once to sign in",
+    login_hint: "run `claude` once (or `claude auth login`) to sign in",
+    capabilities: Capabilities {
+        // Teammate consultations add no permission flags: writes are blocked
+        // only by Claude Code's non-interactive default deny, which the
+        // user's own permission config can widen.
+        teammate_read_only: CapabilityLevel::Unverified,
+        // Leads get exactly the consult helper plus `.mix2/**` writes via
+        // --allowedTools — mechanically scoped.
+        lead_permission_scoping: CapabilityLevel::Enforced,
+        instruction_injection: CapabilityLevel::Enforced,
+    },
+    // The documented `--model` aliases (each resolves to the latest in its
+    // family), plus explicit latest names.
+    known_models: &["fable", "opus", "sonnet", "haiku"],
+    version_args: &["--version"],
+    parse_version,
+    // `claude auth status` prints JSON with a `loggedIn` field.
+    auth_probe: AuthProbe::JsonLoggedIn {
+        args: &["auth", "status"],
+    },
+    build_args,
+    new_decoder,
+};
+
+fn new_decoder() -> Box<dyn Decoder> {
+    Box::new(ClaudeStreamParser::default())
 }
 
-impl ClaudeAgent {
-    pub fn new(command: impl Into<String>) -> Self {
-        Self {
-            command: command.into(),
-        }
-    }
-
-    fn build_args(&self, request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
-        let mut args: Vec<String> = vec![
-            "-p".into(),
-            "--output-format".into(),
-            "stream-json".into(),
-            "--verbose".into(),
-            "--include-partial-messages".into(),
-            "--append-system-prompt".into(),
-            request.instructions.clone(),
-        ];
-        if let Some(model) = &request.model {
-            args.push("--model".into());
-            args.push(model.clone());
-        }
-        if request.role == AgentRole::Lead {
-            // Targeted permissions only: the consult helper, plus writes
-            // scoped to the team scratchpad (`.mix2/`) so the lead can leave
-            // plans and notes without gaining any access to project files.
-            // Everything else follows the user's own Claude Code permission
-            // configuration.
-            args.push("--allowedTools".into());
-            args.push("Bash(mix2-consult:*)".into());
-            args.push("Write(.mix2/**)".into());
-            args.push("Edit(.mix2/**)".into());
-        }
-        if let Some(id) = resume {
-            args.push("--resume".into());
-            args.push(id.into());
-        }
-        args
-    }
-
-    async fn run(
-        &self,
-        request: AgentRequest,
-        resume: Option<&str>,
-        events: Sender<AgentEvent>,
-        cancel: CancellationToken,
-    ) -> Result<AgentResult> {
-        let args = self.build_args(&request, resume);
-        let mut env = request.env.clone();
-        if let Some(prepend) = &request.path_prepend {
-            let path = std::env::var("PATH").unwrap_or_default();
-            env.insert("PATH".into(), format!("{}:{}", prepend.display(), path));
-        }
-
-        let mut child = ChildProcess::spawn(SpawnOptions {
-            program: &self.command,
-            args: &args,
-            cwd: &request.cwd,
-            env: &env,
-            stdin: Some(&request.prompt),
-        })?;
-
-        let _ = events.send(AgentEvent::Started).await;
-
-        let mut lines = child.stdout_lines()?;
-        let stderr = child.stderr_tail()?;
-        let mut parser = ClaudeStreamParser::default();
-
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    child.kill_tree().await;
-                    bail!("cancelled");
-                }
-                line = lines.next_line() => {
-                    match line {
-                        Ok(Some(line)) => {
-                            for ev in parser.parse_line(&line) {
-                                let _ = events.send(ev).await;
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            tracing::warn!("claude stdout read error: {e}");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        let status = child.wait().await?;
-        let stderr_tail = stderr.await.unwrap_or_default();
-
-        if let Some(err) = parser.error.take() {
-            let _ = events
-                .send(AgentEvent::Failed {
-                    message: err.clone(),
-                })
-                .await;
-            bail!("claude failed: {err}");
-        }
-        if !status.success() && parser.final_text.is_none() {
-            let msg = friendly_failure("claude", &status, &stderr_tail);
-            let _ = events
-                .send(AgentEvent::Failed {
-                    message: msg.clone(),
-                })
-                .await;
-            bail!("{msg}");
-        }
-
-        let _ = events.send(AgentEvent::Completed).await;
-        Ok(AgentResult {
-            text: parser.take_final_text(),
-            session_id: parser.session_id.clone(),
-        })
-    }
+/// Loadout-style shell hooks can prepend banner lines; take the line that
+/// actually looks like a version.
+fn parse_version(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .find(|l| l.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .or_else(|| raw.lines().map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("unknown")
+        .to_owned()
 }
 
-pub(crate) fn friendly_failure(
-    provider: &str,
-    status: &std::process::ExitStatus,
-    stderr_tail: &str,
-) -> String {
-    let tail = stderr_tail.trim();
-    if tail.is_empty() {
-        format!("{provider} exited with {status}")
-    } else {
-        format!("{provider} exited with {status}: {tail}")
+fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
+        "--include-partial-messages".into(),
+        "--append-system-prompt".into(),
+        request.instructions.clone(),
+    ];
+    if let Some(model) = &request.model {
+        args.push("--model".into());
+        args.push(model.clone());
     }
-}
-
-#[async_trait]
-impl Agent for ClaudeAgent {
-    fn harness(&self) -> HarnessKind {
-        HarnessKind::Claude
+    if request.role == AgentRole::Lead {
+        // Targeted permissions only: the consult helper, plus writes
+        // scoped to the team scratchpad (`.mix2/`) so the lead can leave
+        // plans and notes without gaining any access to project files.
+        // Everything else follows the user's own Claude Code permission
+        // configuration.
+        args.push("--allowedTools".into());
+        args.push("Bash(mix2-consult:*)".into());
+        args.push("Write(.mix2/**)".into());
+        args.push("Edit(.mix2/**)".into());
     }
-
-    async fn version(&self) -> Result<AgentVersion> {
-        let out = tokio::process::Command::new(&self.command)
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .output()
-            .await
-            .with_context(|| format!("`{}` not found or not executable", self.command))?;
-        if !out.status.success() {
-            bail!("`{} --version` failed", self.command);
-        }
-        let raw = String::from_utf8_lossy(&out.stdout);
-        // Loadout-style shell hooks can prepend banner lines; take the line
-        // that actually looks like a version.
-        let line = raw
-            .lines()
-            .map(str::trim)
-            .find(|l| l.chars().next().is_some_and(|c| c.is_ascii_digit()))
-            .or_else(|| raw.lines().map(str::trim).find(|l| !l.is_empty()))
-            .unwrap_or("unknown");
-        Ok(AgentVersion {
-            raw: line.to_owned(),
-        })
+    if let Some(id) = resume {
+        args.push("--resume".into());
+        args.push(id.into());
     }
-
-    fn known_models(&self) -> Vec<String> {
-        // The documented `--model` aliases (each resolves to the latest in
-        // its family), plus explicit latest names.
-        ["fable", "opus", "sonnet", "haiku"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    }
-
-    async fn auth_status(&self) -> AuthStatus {
-        // `claude auth status` prints JSON with a `loggedIn` field; shell
-        // hooks may prepend banner lines, so scan from the first brace.
-        let out = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            tokio::process::Command::new(&self.command)
-                .args(["auth", "status"])
-                .stdin(std::process::Stdio::null())
-                .output(),
-        )
-        .await;
-        let Ok(Ok(out)) = out else {
-            return AuthStatus::Unknown;
-        };
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let json_start = match stdout.find('{') {
-            Some(i) => i,
-            None => return AuthStatus::Unknown,
-        };
-        match serde_json::from_str::<Value>(&stdout[json_start..]) {
-            Ok(v) => match v.get("loggedIn").and_then(Value::as_bool) {
-                Some(true) => AuthStatus::Authenticated,
-                Some(false) => AuthStatus::Unauthenticated,
-                None => AuthStatus::Unknown,
-            },
-            Err(_) => AuthStatus::Unknown,
-        }
-    }
-
-    async fn start(
-        &self,
-        request: AgentRequest,
-        events: Sender<AgentEvent>,
-        cancel: CancellationToken,
-    ) -> Result<AgentResult> {
-        self.run(request, None, events, cancel).await
-    }
-
-    async fn resume(
-        &self,
-        session: &AgentSession,
-        request: AgentRequest,
-        events: Sender<AgentEvent>,
-        cancel: CancellationToken,
-    ) -> Result<AgentResult> {
-        self.run(request, Some(&session.id), events, cancel).await
-    }
+    args
 }
 
 /// Tolerant parser for `claude --output-format stream-json` lines.
@@ -254,6 +108,23 @@ pub struct ClaudeStreamParser {
     delta_buf: String,
     tool_names: HashMap<String, String>,
     model_reported: bool,
+}
+
+impl Decoder for ClaudeStreamParser {
+    fn parse_line(&mut self, line: &str) -> Vec<AgentEvent> {
+        ClaudeStreamParser::parse_line(self, line)
+    }
+
+    fn finish(&mut self) -> DecodeOutcome {
+        DecodeOutcome {
+            error: self.error.take(),
+            final_text: self.final_text.take(),
+            // The stream can end without a result line; the accumulated
+            // deltas are the best remaining answer.
+            fallback_text: std::mem::take(&mut self.delta_buf),
+            session_id: self.session_id.clone(),
+        }
+    }
 }
 
 impl ClaudeStreamParser {
@@ -440,6 +311,94 @@ fn tool_detail(name: &str, input: Option<&Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::agent::AgentRequest;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn request(role: AgentRole, model: Option<&str>) -> AgentRequest {
+        AgentRequest {
+            prompt: "the prompt".into(),
+            cwd: PathBuf::from("/repo"),
+            role,
+            turn_id: Uuid::nil(),
+            model: model.map(str::to_owned),
+            instructions: "ROLE\nsays \"hi\"".into(),
+            env: HashMap::new(),
+            path_prepend: None,
+            runtime_dir: None,
+        }
+    }
+
+    #[test]
+    fn build_args_lead_start_golden() {
+        assert_eq!(
+            build_args(&request(AgentRole::Lead, Some("sonnet")), None),
+            vec![
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--append-system-prompt",
+                "ROLE\nsays \"hi\"", // verbatim: one argv element, no quoting
+                "--model",
+                "sonnet",
+                "--allowedTools",
+                "Bash(mix2-consult:*)",
+                "Write(.mix2/**)",
+                "Edit(.mix2/**)",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_args_teammate_resume_golden() {
+        // Teammates get no extra permissions; resume appends last.
+        assert_eq!(
+            build_args(&request(AgentRole::Teammate, None), Some("sess-1")),
+            vec![
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--append-system-prompt",
+                "ROLE\nsays \"hi\"",
+                "--resume",
+                "sess-1",
+            ]
+        );
+    }
+
+    #[test]
+    fn version_parser_skips_banner_lines() {
+        assert_eq!(
+            parse_version("loadout ready\n2.1.232 (Claude Code)\n"),
+            "2.1.232 (Claude Code)"
+        );
+        assert_eq!(parse_version("\nno digits here\n"), "no digits here");
+        assert_eq!(parse_version(""), "unknown");
+    }
+
+    #[test]
+    fn decoder_finish_prefers_result_and_falls_back_to_deltas() {
+        let mut p = ClaudeStreamParser::default();
+        Decoder::parse_line(
+            &mut p,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}},"parent_tool_use_id":null}"#,
+        );
+        let outcome = Decoder::finish(&mut p);
+        assert_eq!(outcome.final_text, None);
+        assert_eq!(outcome.fallback_text, "partial");
+
+        let mut p = ClaudeStreamParser::default();
+        p.parse_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"Hello","session_id":"s1"}"#);
+        let outcome = Decoder::finish(&mut p);
+        assert_eq!(outcome.final_text.as_deref(), Some("Hello"));
+        assert_eq!(outcome.session_id.as_deref(), Some("s1"));
+        assert!(outcome.error.is_none());
+    }
 
     #[test]
     fn parses_session_id_from_init() {
@@ -526,6 +485,8 @@ mod tests {
             r#"{"type":"result","subtype":"error","is_error":true,"result":"rate limited"}"#,
         );
         assert_eq!(p.error.as_deref(), Some("rate limited"));
+        let outcome = Decoder::finish(&mut p);
+        assert_eq!(outcome.error.as_deref(), Some("rate limited"));
     }
 
     #[test]
