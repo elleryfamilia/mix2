@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Fake GitHub Copilot CLI for mix2 tests.
+
+Speaks the JSONL vocabulary of `copilot -p --output-format json` (pinned
+by the plan's live probe against copilot 1.0.78): session.* bookkeeping,
+user.message, assistant.turn_start, ephemeral assistant.message_delta
+chunks, the authoritative assistant.message (content/model/toolRequests/
+outputTokens), assistant.reasoning (never surfaced), assistant.turn_end,
+and a final result with sessionId/exitCode/usage.
+
+The invocation contract is asserted hard: the read-only permission recipe
+(-p <text> --output-format json --no-color --no-custom-instructions
+--disable-builtin-mcps --allow-all-tools --deny-tool write --deny-tool
+shell) must be present or the fixture exits 2.
+
+Scenario markers (first token of any line of the prompt):
+  SCENARIO:fail       exit non-zero with stderr noise
+  SCENARIO:auth_fail  simulate an expired token: stderr + exit 1
+  SCENARIO:empty      exit 0 with no output at all
+  SCENARIO:malformed  emit stderr-looking noise on stdout mid-stream
+  SCENARIO:slow       sleep a long time before responding
+
+Markers in the final text: [session:<id>] [resumed:yes|no]
+[role:teammate|none] [model:<m>] [deny:write,shell]
+"""
+import json
+import os
+import sys
+import time
+import uuid
+
+VALUE_FLAGS = {"-p", "--output-format", "--model"}
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args or "-v" in args:
+        print("GitHub Copilot CLI 9.9.9-fake.")
+        return 0
+
+    flags = {}
+    denies = []
+    resume_id = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--deny-tool" and i + 1 < len(args):
+            denies.append(args[i + 1])
+            i += 2
+            continue
+        if a.startswith("--resume="):
+            resume_id = a.split("=", 1)[1]
+            i += 1
+            continue
+        if a in VALUE_FLAGS and i + 1 < len(args):
+            flags[a] = args[i + 1]
+            i += 2
+            continue
+        flags[a] = True
+        i += 1
+
+    required = (
+        "-p" in flags
+        and flags.get("--output-format") == "json"
+        and flags.get("--no-color") is True
+        and flags.get("--no-custom-instructions") is True
+        and flags.get("--disable-builtin-mcps") is True
+        and flags.get("--allow-all-tools") is True
+        and denies == ["write", "shell"]
+    )
+    if not required:
+        sys.stderr.write(
+            f"fake-copilot: unexpected argv (contract drift): {args!r}\n"
+        )
+        return 2
+
+    prompt = flags["-p"]
+    model = flags.get("--model", "auto-routed")
+    scenarios = _line_scenarios(prompt)
+
+    if "fail" in scenarios:
+        sys.stderr.write("fake-copilot: simulated provider failure\n")
+        return 1
+
+    if "auth_fail" in scenarios:
+        sys.stderr.write(
+            "Error: authentication required. Run `copilot login` or set "
+            "COPILOT_GITHUB_TOKEN.\n"
+        )
+        return 1
+
+    if "empty" in scenarios:
+        return 0
+
+    session_id = resume_id or f"cs_{uuid.uuid4().hex[:12]}"
+    resumed = "yes" if resume_id else "no"
+    role = "teammate" if "consulting engineer" in prompt else "none"
+
+    # Bookkeeping noise the decoder must ignore.
+    out({"type": "session.mcp_server_status_changed", "server": "user-mcp", "status": "ready"})
+    out({"type": "session.skills_loaded", "count": 9})
+    out({"type": "session.auto_mode_resolved", "mode": "auto"})
+    out({"type": "user.message", "content": prompt[:40]})
+    out({"type": "assistant.turn_start"})
+    out({"type": "assistant.reasoning", "ephemeral": True, "content": "hidden thoughts"})
+
+    if "malformed" in scenarios:
+        sys.stdout.write("warning: something noisy leaked to stdout\n")
+        sys.stdout.flush()
+
+    if "slow" in scenarios:
+        time.sleep(120)
+
+    text = (
+        f"fake-copilot reply [session:{session_id}] [resumed:{resumed}] "
+        f"[role:{role}] [model:{model}] [deny:{','.join(denies)}]"
+    )
+
+    out({"type": "assistant.message_start", "ephemeral": True})
+    for chunk in (text[i:i + 24] for i in range(0, len(text), 24)):
+        out({"type": "assistant.message_delta", "ephemeral": True, "content": chunk})
+    out({
+        "type": "assistant.message",
+        "content": text,
+        "model": model,
+        "toolRequests": [],
+        "outputTokens": len(text) // 4,
+    })
+    out({"type": "assistant.turn_end"})
+    out({
+        "type": "result",
+        "sessionId": session_id,
+        "exitCode": 0,
+        "usage": {"input_tokens": 13, "output_tokens": len(text) // 4},
+    })
+    return 0
+
+
+def _line_scenarios(prompt):
+    scenarios = set()
+    for line in prompt.splitlines():
+        for token in line.split():
+            if token.startswith("SCENARIO:"):
+                scenarios.add(token[len("SCENARIO:"):])
+            else:
+                break
+    return scenarios
+
+
+if __name__ == "__main__":
+    sys.exit(main())

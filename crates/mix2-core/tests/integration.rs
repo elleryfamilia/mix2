@@ -32,6 +32,8 @@ struct CoreOptions {
     cursor_cmd: Option<String>,
     /// Same hermetic default for the real opencode install.
     opencode_cmd: Option<String>,
+    /// Same hermetic default for the real copilot install.
+    copilot_cmd: Option<String>,
     max_consults: Option<u32>,
     /// Raw TOML appended to the generated config file (slot tables, legacy
     /// sections) for the config-schema tests.
@@ -49,6 +51,7 @@ impl Default for CoreOptions {
             codex_cmd: Some(fixtures_dir().join("fake-codex").display().to_string()),
             cursor_cmd: Some("/nonexistent/cursor-agent-binary".into()),
             opencode_cmd: Some("/nonexistent/opencode-binary".into()),
+            copilot_cmd: Some("/nonexistent/copilot-binary".into()),
             max_consults: None,
             config_extra: String::new(),
             pick_team: false,
@@ -84,7 +87,8 @@ impl Core {
             .env_remove("MIX2_CLAUDE_CMD")
             .env_remove("MIX2_CODEX_CMD")
             .env_remove("MIX2_CURSOR_CMD")
-            .env_remove("MIX2_OPENCODE_CMD");
+            .env_remove("MIX2_OPENCODE_CMD")
+            .env_remove("MIX2_COPILOT_CMD");
         if let Some(claude) = &options.claude_cmd {
             cmd.env("MIX2_CLAUDE_CMD", claude);
         }
@@ -96,6 +100,9 @@ impl Core {
         }
         if let Some(opencode) = &options.opencode_cmd {
             cmd.env("MIX2_OPENCODE_CMD", opencode);
+        }
+        if let Some(copilot) = &options.copilot_cmd {
+            cmd.env("MIX2_COPILOT_CMD", copilot);
         }
         for (key, value) in &options.env {
             cmd.env(key, value);
@@ -1370,6 +1377,103 @@ fn opencode_error_envelope_fails_the_consult_cleanly() {
         .unwrap()
         .contains("provider exploded"));
     assert_eq!(find(&events, "message.final").unwrap()["speaker"], "one");
+}
+
+#[test]
+fn copilot_teammate_full_consult() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        copilot_cmd: Some(fixtures_dir().join("fake-copilot").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"copilot\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    let ready = find(&startup, "ready").unwrap();
+    assert_eq!(ready["two"]["harness"], "copilot");
+    assert_eq!(ready["two"]["name"], "Copilot");
+    // No quota-free probe exists; state is unsupported, and it must not
+    // have blocked startup.
+    assert_eq!(ready["two"]["auth"], "unsupported");
+
+    core.submit("t1", "SCENARIO:consult what does the team think?");
+    let events = core.events_until("turn.completed", LONG);
+    let completed = find(&events, "consult.completed").unwrap();
+    assert_eq!(completed["slot"], "two");
+    let text = completed["text"].as_str().unwrap();
+    assert!(text.contains("fake-copilot reply"), "got: {text}");
+    assert!(text.contains("[role:teammate]"), "got: {text}");
+    assert!(
+        text.contains("[deny:write,shell]"),
+        "mutation denials must be present: {text}"
+    );
+    assert_eq!(find(&events, "message.final").unwrap()["speaker"], "team");
+}
+
+#[test]
+fn copilot_auth_failure_surfaces_cleanly_at_run_time() {
+    // The plan's contract for an unsupported auth probe: never trial
+    // prompts at startup; a run-time auth failure carries the stderr tail.
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        copilot_cmd: Some(fixtures_dir().join("fake-copilot").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"copilot\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    core.events_until("ready", LONG);
+
+    core.submit("t1", "SCENARIO:consult CONSULT_PROMPT:SCENARIO:auth_fail");
+    let events = core.events_until("turn.completed", LONG);
+    let failed = find(&events, "consult.failed").unwrap();
+    let message = failed["message"].as_str().unwrap();
+    assert!(
+        message.contains("authentication required"),
+        "stderr tail must surface: {message}"
+    );
+    assert_eq!(find(&events, "message.final").unwrap()["speaker"], "one");
+}
+
+#[test]
+fn copilot_empty_output_completes_without_failing_the_session() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        copilot_cmd: Some(fixtures_dir().join("fake-copilot").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"copilot\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    core.events_until("ready", LONG);
+
+    // Exit 0 with no output: the consult completes (empty response), the
+    // turn and session march on.
+    core.submit("t1", "SCENARIO:consult CONSULT_PROMPT:SCENARIO:empty");
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(count(&events, "consult.completed"), 1);
+
+    core.submit("t2", "hi again");
+    core.events_until("turn.completed", LONG);
+}
+
+#[test]
+fn cancelling_a_turn_kills_a_slow_copilot_consult() {
+    let mut core = Core::start(CoreOptions {
+        lead: None,
+        copilot_cmd: Some(fixtures_dir().join("fake-copilot").display().to_string()),
+        config_extra: "[slot.two]\nharness = \"copilot\"\n".to_owned(),
+        ..CoreOptions::default()
+    });
+    core.events_until("ready", LONG);
+
+    core.submit(
+        "t1",
+        "SCENARIO:consult_abandon CONSULT_PROMPT:SCENARIO:slow fire and forget",
+    );
+    core.events_until("consult.started", LONG);
+    core.send(&serde_json::json!({"type": "cancel", "turn_id": "t1"}));
+    let events = core.events_until("turn.cancelled", LONG);
+    assert!(find(&events, "message.final").is_none());
+
+    // The session stays usable afterwards.
+    core.submit("t2", "still there?");
+    core.events_until("turn.completed", LONG);
 }
 
 fn extract_marker(text: &str, key: &str) -> String {
