@@ -156,9 +156,15 @@ pub(crate) fn friendly_failure(
              sandbox off for this harness. ({status})"
         );
     }
-    // The engine itself refusing (bad profile, missing binary) prints its
-    // own diagnostic; surface it as a sandbox failure, not a harness one.
-    if sandboxed && tail.contains("sandbox-exec:") {
+    // The engine itself refusing (bad profile, missing binary, user
+    // namespaces denied) prints its own diagnostic; surface it as a sandbox
+    // failure, not a harness one. Covers both engines' error prefixes.
+    if sandboxed
+        && (tail.contains("sandbox-exec:")
+            || tail.contains("bwrap:")
+            || tail.contains("setting up uid map")
+            || tail.contains("user namespace"))
+    {
         return format!("sandbox: engine error starting {provider}: {tail} ({status})");
     }
     // Otherwise the harness ran under the sandbox and failed on its own
@@ -352,6 +358,20 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn friendly_failure_attributes_bwrap_engine_errors() {
+        // A bwrap startup error (e.g. userns denied) is a sandbox failure,
+        // not a harness one.
+        let msg = friendly_failure(
+            "opencode",
+            &status_from_code(1),
+            "bwrap: setting up uid map: Permission denied",
+            true,
+        );
+        assert!(msg.starts_with("sandbox:"), "{msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn friendly_failure_does_not_blame_the_sandbox_for_a_harness_error() {
         // A harness that ran fine under the sandbox and failed on its own
         // terms keeps its own message — no misleading sandbox prefix.
@@ -445,20 +465,22 @@ mod tests {
     /// runner with a sandbox spec is actually confined — a write outside the
     /// granted root is denied by the kernel, and the same script with no
     /// sandbox succeeds. This is what ties build_args + wrap + spawn
-    /// together; the pure tests cover each piece in isolation.
-    #[cfg(target_os = "macos")]
+    /// together; the pure tests cover each piece in isolation. Engine-
+    /// agnostic: runs under whichever engine the host provides (Seatbelt on
+    /// macOS, bubblewrap on Linux), skipping where none is available.
+    #[cfg(unix)]
     #[tokio::test]
     async fn sandboxed_lead_write_outside_scope_is_denied_by_the_runner() {
-        use crate::sandbox::{prepare_writable_root, SandboxEngine, SandboxPolicy, SandboxSpec};
-        if !crate::sandbox::seatbelt_available() {
-            eprintln!("skipping: sandbox-exec unavailable");
+        use crate::sandbox::{prepare_writable_root, SandboxPolicy, SandboxSpec};
+        let Some(engine) = SandboxSpec::detect_engine() else {
+            eprintln!("skipping: no sandbox engine available on this host");
             return;
-        }
+        };
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().canonicalize().unwrap();
         let mix2 = prepare_writable_root(&proj.join(".mix2"), true).unwrap();
         let spec = SandboxSpec {
-            engine: SandboxEngine::Seatbelt,
+            engine,
             policy: SandboxPolicy::with_writable(vec![mix2.clone()]),
             env_remove: Vec::new(),
         };

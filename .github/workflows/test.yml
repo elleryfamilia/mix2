@@ -1,0 +1,62 @@
+name: test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # The Rust core, where the OS-specific sandbox behavior lives, on both
+  # platforms. The Linux job installs bubblewrap so the
+  # `#[cfg(target_os = "linux")]` behavioral denial matrix actually runs on
+  # GitHub's VM runners (which permit unprivileged user namespaces).
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install bubblewrap + enable userns (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor,
+          # which would make bwrap_available() false and silently skip the
+          # behavioral denial matrix. Lift the restriction so the sandbox
+          # enforcement is actually exercised, and prove bwrap works here.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --unshare-user -- /bin/true && echo "bwrap userns OK"
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      # --nocapture so a skipped behavioral matrix (no engine) is visible in
+      # the log rather than a silent pass.
+      - name: test
+        run: cargo test -- --nocapture
+
+  # The Ink/React TUI is OS-agnostic Node; macOS coverage is sufficient (and
+  # the vitest suite has a Linux-only teardown hang tracked separately).
+  tui:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm typecheck
+      - name: test
+        run: pnpm test
