@@ -29,7 +29,7 @@ use super::agent::AgentRequest;
 use super::descriptor::{
     AuthProbe, Capabilities, CapabilityLevel, DecodeOutcome, Decoder, Descriptor,
 };
-use super::{AgentEvent, HarnessKind};
+use super::{AgentEvent, AgentRole, HarnessKind};
 use serde_json::Value;
 
 pub static DESCRIPTOR: Descriptor = Descriptor {
@@ -99,13 +99,14 @@ fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
         "--stream-partial-output".into(),
         "--trust".into(),
     ];
-    // Read-only planning mode is how a Cursor *teammate* is kept from
-    // editing. A sandboxed lead must be able to write `.mix2/`, so it drops
-    // plan mode and relies on the OS sandbox for scoping instead. Keyed on
-    // the resolved sandbox, never the role: with no sandbox the argv is
-    // byte-identical to today (and an unsandboxed Cursor lead is refused
-    // upstream), so `mode = off` is a true rollback.
-    if request.sandbox.is_none() {
+    // Read-only planning mode keeps a Cursor teammate from editing. Only a
+    // sandboxed *lead* drops it (the lead must write `.mix2/`, and the OS
+    // sandbox scopes it); a sandboxed teammate keeps plan mode on top of the
+    // sandbox — defense in depth. With no sandbox the argv is byte-identical
+    // to today (and an unsandboxed Cursor lead is refused upstream), so
+    // `mode = off` is a true rollback.
+    let sandboxed_lead = request.sandbox.is_some() && request.role == AgentRole::Lead;
+    if !sandboxed_lead {
         args.push("--mode".into());
         args.push("plan".into());
     }

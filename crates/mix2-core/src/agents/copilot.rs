@@ -40,7 +40,7 @@ use super::agent::AgentRequest;
 use super::descriptor::{
     AuthProbe, Capabilities, CapabilityLevel, DecodeOutcome, Decoder, Descriptor,
 };
-use super::{AgentEvent, HarnessKind};
+use super::{AgentEvent, AgentRole, HarnessKind};
 use serde_json::Value;
 
 pub static DESCRIPTOR: Descriptor = Descriptor {
@@ -122,14 +122,16 @@ fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
         // Non-interactive mode requires blanket tool approval.
         "--allow-all-tools".into(),
     ];
-    // The write/shell denials are what keep a Copilot *teammate* read-only
-    // (they outrank `--allow-all-tools` by documented precedence). A
-    // sandboxed lead needs to write `.mix2/` and run `mix2-consult`, so it
-    // drops the denials and relies on the OS sandbox for scoping. Keyed on
-    // the resolved sandbox, never the role: with no sandbox the denials
-    // stay, so the argv is byte-identical to today and `mode = off` is a
-    // true rollback.
-    if request.sandbox.is_none() {
+    // The write/shell denials are what keep a Copilot teammate read-only
+    // (they outrank `--allow-all-tools` by documented precedence). Only a
+    // sandboxed *lead* drops them (it must write `.mix2/` and run
+    // `mix2-consult`, scoped by the OS sandbox); a sandboxed teammate keeps
+    // the denials on top of the sandbox — defense in depth, which matters
+    // most for Copilot since its personal MCP servers can otherwise mutate.
+    // With no sandbox the denials stay, so the argv is byte-identical to
+    // today and `mode = off` is a true rollback.
+    let sandboxed_lead = request.sandbox.is_some() && request.role == AgentRole::Lead;
+    if !sandboxed_lead {
         args.push("--deny-tool".into());
         args.push("write".into());
         args.push("--deny-tool".into());
@@ -324,14 +326,18 @@ mod tests {
         );
     }
 
-    fn sandboxed(mut request: AgentRequest) -> AgentRequest {
-        request.role = AgentRole::Lead;
+    fn with_sandbox(mut request: AgentRequest) -> AgentRequest {
         request.sandbox = Some(crate::sandbox::SandboxSpec {
             engine: crate::sandbox::SandboxEngine::Seatbelt,
             policy: crate::sandbox::SandboxPolicy::with_writable(vec![]),
             env_remove: Vec::new(),
         });
         request
+    }
+
+    fn sandboxed(mut request: AgentRequest) -> AgentRequest {
+        request.role = AgentRole::Lead;
+        with_sandbox(request)
     }
 
     #[test]
@@ -345,6 +351,16 @@ mod tests {
         assert!(!args.contains(&"write".to_owned()));
         assert!(!args.contains(&"shell".to_owned()));
         assert!(args.contains(&"--allow-all-tools".to_owned()));
+    }
+
+    #[test]
+    fn build_args_keeps_deny_tools_for_a_sandboxed_teammate() {
+        // A sandboxed teammate keeps its native denials on top of the
+        // sandbox — defense in depth. `request()` is already a teammate.
+        let args = build_args(&with_sandbox(request(Some("auto"), "ROLE")), None);
+        assert!(args.contains(&"--deny-tool".to_owned()));
+        assert!(args.contains(&"write".to_owned()));
+        assert!(args.contains(&"shell".to_owned()));
     }
 
     #[test]

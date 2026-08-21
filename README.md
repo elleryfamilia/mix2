@@ -290,19 +290,28 @@ capability facts (enforced / unverified / unsupported) decide which
 roles a harness may hold — Claude and Codex lead with native scoping,
 and Cursor/OpenCode/Copilot lead under the OS sandbox (below).
 
-### Sandboxed leads
+### Sandboxed leads and teammates
 
-Cursor, OpenCode, and Copilot can't scope their own writes to `.mix2/`,
-so mix2 wraps them in an OS sandbox (macOS `sandbox-exec`/Seatbelt;
-Linux `bubblewrap` planned) that confines project-file writes at the
-kernel. When an engine is available (`[sandbox] mode = "auto"`, the
-default), those harnesses become lead-eligible and the picker discloses
-"leads via OS sandbox — project writes limited to `.mix2/`"; where it
-isn't, they stay teammate-only. The guarantee is *write* scoping — it
-does not filter network and reads stay open except for a credential
-deny-list, the same exposure the native `--allowedTools` lead has.
-Set `[sandbox] mode = "off"` (or `MIX2_SANDBOX_MODE=off`) to keep only
-natively-scoped leads.
+Some harnesses can't scope their own filesystem access, so mix2 wraps
+them in an OS sandbox (macOS `sandbox-exec`/Seatbelt; Linux `bubblewrap`)
+that confines writes at the kernel:
+
+- **Leads** — Cursor, OpenCode, and Copilot can't limit their own writes
+  to `.mix2/`. When an engine is available (`[sandbox] mode = "auto"`,
+  the default) they become lead-eligible, wrapped so project writes are
+  confined to `.mix2/`; the picker discloses "leads via OS sandbox".
+  Where no engine is available they stay teammate-only.
+- **Teammates** — teammates are read-only consultants. Codex, Cursor, and
+  OpenCode enforce that themselves; Claude and Copilot only enforce it by
+  policy (widenable config / auto-loading MCP servers), so mix2 wraps
+  *those two* teammates in a stricter sandbox with **no project write at
+  all** — mechanically enforcing read-only.
+
+The guarantee is *write* scoping — it does not filter network, and reads
+stay open except for a credential deny-list, the same class of exposure
+the native mechanisms have. Set `[sandbox] mode = "off"` (or
+`MIX2_SANDBOX_MODE=off`) to disable all wrapping and use only native
+enforcement.
 
 ## Limitations
 

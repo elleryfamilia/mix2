@@ -39,7 +39,7 @@ use super::agent::AgentRequest;
 use super::descriptor::{
     AuthProbe, Capabilities, CapabilityLevel, DecodeOutcome, Decoder, Descriptor,
 };
-use super::{AgentEvent, HarnessKind};
+use super::{AgentEvent, AgentRole, HarnessKind};
 use serde_json::Value;
 
 pub static DESCRIPTOR: Descriptor = Descriptor {
@@ -103,12 +103,13 @@ fn parse_version(raw: &str) -> String {
 
 fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = vec!["run".into(), "--format".into(), "json".into()];
-    // The read-only planning agent keeps an OpenCode *teammate* from
-    // editing. A sandboxed lead needs to write `.mix2/`, so it drops the
-    // plan agent and relies on the OS sandbox instead. Keyed on the
-    // resolved sandbox (not the role): unsandboxed argv is byte-identical
-    // to today, and an unsandboxed OpenCode lead is refused upstream.
-    if request.sandbox.is_none() {
+    // The read-only planning agent keeps an OpenCode teammate from editing.
+    // Only a sandboxed *lead* drops it (it must write `.mix2/`, scoped by
+    // the OS sandbox); a sandboxed teammate keeps the plan agent on top of
+    // the sandbox. Unsandboxed argv is byte-identical to today, and an
+    // unsandboxed OpenCode lead is refused upstream.
+    let sandboxed_lead = request.sandbox.is_some() && request.role == AgentRole::Lead;
+    if !sandboxed_lead {
         args.push("--agent".into());
         args.push("plan".into());
     }

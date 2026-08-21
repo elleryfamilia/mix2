@@ -398,6 +398,7 @@ impl Runtime {
             project,
             teammate_model,
             consult_updates,
+            sandbox_engine,
         )
         .await?;
 
@@ -507,8 +508,9 @@ impl Runtime {
                         .filter(|h| *h != lead_harness)
                         .flat_map(|h| registry::descriptor(h).credential_files.iter().copied())
                         .collect();
-                    match crate::sandbox::build_lead_spec(crate::sandbox::LeadSpecInputs {
+                    match crate::sandbox::build_spec(crate::sandbox::SandboxInputs {
                         engine,
+                        role: crate::sandbox::SandboxRole::Lead,
                         cwd: &self.session.cwd,
                         runtime_dir: &self.runtime_dir,
                         state_dirs: descriptor.state_dirs,
