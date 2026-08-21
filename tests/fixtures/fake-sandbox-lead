@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Fake Cursor-format lead that probes the sandbox by attempting writes.
+
+Used by the sandbox integration test to prove — through the full serve
+loop — that a sandboxed lead may write `.mix2/` but not the rest of the
+project. Registered via MIX2_CURSOR_CMD so mix2 treats it as Cursor
+(sandboxable_lead). When wrapped as a sandboxed lead, mix2 drops
+`--mode plan`, so unlike fake-cursor-agent this fixture accepts the argv
+WITHOUT it.
+
+On the turn invocation it attempts two writes, relative to its cwd (the
+session cwd mix2 spawns it in):
+  - `<cwd>/SANDBOX-PROBE-LEAKED.txt`  — outside `.mix2`, must be DENIED
+  - `<cwd>/.mix2/sandbox-ok.txt`      — inside `.mix2`, must be ALLOWED
+
+It reports both outcomes in the result text as
+`[leaked:yes|no] [mix2write:yes|no]`, and the test asserts the leak file
+never appears while the `.mix2` file does — end-to-end kernel enforcement.
+"""
+import json
+import os
+import sys
+import uuid
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def try_write(path):
+    # Ensure the parent exists first so a missing `.mix2/` reports a real
+    # sandbox denial, never a stray ENOENT. `.mix2` is pre-created by the
+    # runtime, so makedirs is a no-op there; the parent of the leak path is
+    # the cwd, which always exists — either way the OSError we care about is
+    # the sandbox denying the open.
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("probe\n")
+        return True
+    except OSError:
+        return False
+
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args or "-v" in args:
+        print("2026.99.9-fake-sandbox")
+        return 0
+    if args[:1] == ["status"]:
+        print("✓ Logged in as fake@familia.me")
+        return 0
+    if "--list-models" in args:
+        print("auto - Auto (current, default)")
+        return 0
+
+    # Turn invocation: attempt the two writes relative to cwd.
+    leaked = try_write(os.path.join(os.getcwd(), "SANDBOX-PROBE-LEAKED.txt"))
+    mix2write = try_write(os.path.join(os.getcwd(), ".mix2", "sandbox-ok.txt"))
+
+    session_id = str(uuid.uuid4())
+    text = (
+        f"sandbox probe done [leaked:{'yes' if leaked else 'no'}] "
+        f"[mix2write:{'yes' if mix2write else 'no'}]"
+    )
+    out({
+        "type": "system", "subtype": "init",
+        "session_id": session_id, "model": "auto", "permissionMode": "default",
+    })
+    out({
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": text}]},
+        "session_id": session_id,
+    })
+    out({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": text, "session_id": session_id,
+        "usage": {"input_tokens": 5, "output_tokens": 5},
+    })
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
