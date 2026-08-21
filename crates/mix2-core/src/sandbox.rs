@@ -648,9 +648,14 @@ mod tests {
         assert!(program.ends_with("bwrap"));
         let joined = args.join(" ");
         // Base: read-only root (incl. /tmp, so it is never a blanket
-        // writable escape), no netns unshare (network open).
+        // writable escape), no netns unshare (network open). Exact argv-pair
+        // check for the /tmp mount — a substring match would false-positive
+        // on a credential dir that happens to live under /tmp.
         assert!(joined.contains("--ro-bind / /"));
-        assert!(!joined.contains("--tmpfs /tmp"));
+        assert!(
+            !args.windows(2).any(|w| w == ["--tmpfs", "/tmp"]),
+            "/tmp must not be mounted as a writable tmpfs"
+        );
         assert!(!joined.contains("--unshare-net"));
         assert!(joined.contains("--new-session"));
         // Writable re-bind, exec-surface ro-bind, dir mask via tmpfs, file
