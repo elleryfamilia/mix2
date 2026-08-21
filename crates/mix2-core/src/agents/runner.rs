@@ -67,6 +67,13 @@ impl HarnessAgent {
             Some(spec) => &spec.env_remove,
             None => &[],
         };
+        if sandboxed && std::env::var("MIX2_SANDBOX_DEBUG").is_ok() {
+            // The sandbox flags only (everything up to the `--` separator);
+            // the wrapped command and prompt after it are omitted.
+            let sep = args.iter().position(|a| a == "--").unwrap_or(args.len());
+            eprintln!("[sandbox-debug] {program} {}", args[..sep].join(" "));
+            eprintln!("[sandbox-debug] env_remove={env_remove:?}");
+        }
 
         let mut child = ChildProcess::spawn(SpawnOptions {
             program: &program,
