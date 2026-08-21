@@ -71,7 +71,13 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     // the credential strip.
     sandboxable_lead: true,
     state_dirs: &["~/.copilot", "~/.config/github-copilot"],
-    credential_files: &["~/.config/github-copilot/apps.json", "~/.config/github-copilot/hosts.json"],
+    // Copilot authenticates through GitHub, so the GitHub CLI's credential
+    // store is its own — readable when Copilot leads, denied to other leads.
+    credential_files: &[
+        "~/.config/gh",
+        "~/.config/github-copilot/apps.json",
+        "~/.config/github-copilot/hosts.json",
+    ],
     env_keep_sandboxed: &["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"],
     // `auto` lets Copilot route; named-model ids are account-dependent, so
     // typed /model entry covers the rest.

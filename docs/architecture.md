@@ -173,15 +173,22 @@ Seatbelt today, Linux `bubblewrap` planned). Descriptors stay honest —
 one function shared across the discovery report, `validate_selection`,
 and the `Runtime::initialize` backstop, so every path agrees. At turn
 time the runner wraps the lead command via `sandbox::wrap` (paths as
-`-D` params, exec'd directly — no shell), granting writes only to
-`.mix2/`, a per-session scratch, and the harness's own state dirs, with
-an exec-surface deny overlay, credential deny-read, and a credential env
-strip. The read-only teammate flag is dropped for a sandboxed lead only
-(keyed on the resolved sandbox, never the role — an unsandboxed argv is
-byte-identical to today). `[sandbox] mode` (`auto`|`off`, or
-`MIX2_SANDBOX_MODE`) gates it. The guarantee is *write* scoping: network
-is unfiltered and reads are open except the credential deny-list — the
-same exposure the native lead has, disclosed in the picker.
+`-D` params, exec'd directly — no shell). The *project* write scope is
+`.mix2/` only; the lead also gets a per-session scratch, the harness's
+own state dirs (with an exec-surface deny overlay), its own credential
+store (read+write, so its auth CLI can sign in — e.g. Copilot needs
+`~/.config/gh`, which `gh` rewrites), and the platform temp/cache root
+(macOS CLIs reach the per-user Darwin cache via `confstr`, ignoring
+`TMPDIR`). Foreign credential dirs are denied read+write and credential
+env vars stripped. The read-only teammate flag is dropped for a
+sandboxed lead only (keyed on the resolved sandbox, never the role — an
+unsandboxed argv is byte-identical to today). `[sandbox] mode`
+(`auto`|`off`, or `MIX2_SANDBOX_MODE`) gates it. The guarantee is
+*project write* scoping: the lead cannot write project files outside
+`.mix2/`; network is unfiltered, reads are open except the credential
+deny-list, and ephemeral temp/cache and its own auth store are writable
+— the same class of exposure the native lead has, disclosed in the
+picker.
 
 **Discovery and selection.** Startup probes every candidate
 `(harness, command)` pair once — version and sign-in, in parallel,

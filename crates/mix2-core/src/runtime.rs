@@ -513,6 +513,7 @@ impl Runtime {
                         runtime_dir: &self.runtime_dir,
                         state_dirs: descriptor.state_dirs,
                         other_credential_files: &others,
+                        own_credential_files: descriptor.credential_files,
                         env_keep: descriptor.env_keep_sandboxed,
                     }) {
                         Ok((spec, lead_tmp)) => {

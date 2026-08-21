@@ -158,6 +158,67 @@ pub fn prepare_writable_root(path: &Path, create: bool) -> std::io::Result<PathB
     path.canonicalize()
 }
 
+/// Canonical path of an existing, non-symlink filesystem entry, for adding
+/// to the writable set. Returns `None` when the path is missing or a symlink
+/// (never grant writes through a link). Unlike [`prepare_writable_root`] this
+/// neither creates the path nor requires it to be a directory — a credential
+/// store may be a single file (`~/.netrc`) or a directory (`~/.config/gh`).
+fn existing_non_symlink(path: &Path) -> Option<PathBuf> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() {
+        return None;
+    }
+    path.canonicalize().ok()
+}
+
+/// The platform temp/cache root a sandboxed lead's CLI needs writable.
+///
+/// On macOS, tools reach the per-user temp *and* cache dirs via
+/// `confstr(_CS_DARWIN_USER_{TEMP,CACHE}_DIR)` — `/var/folders/<hash>/{T,C}`
+/// — and the cache path ignores `$TMPDIR`, so pointing `TMPDIR` at our
+/// scratch isn't enough; the CLI (and its node/`gh` subprocesses) fail to
+/// start without it. Grant the per-user folder (the `<hash>` parent of both).
+/// It's ephemeral scratch, not project or durable state, so it doesn't widen
+/// the "writes only `.mix2/`" guarantee for the project.
+///
+/// On Linux the temp dir is `/tmp` (kept read-only so the consult socket
+/// stays put); the lead's `TMPDIR` points at the writable `lead-tmp` scratch
+/// instead. A CLI that bypasses `TMPDIR` there is a Task-5 follow-up.
+fn platform_temp_root() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        // Query the true per-user Darwin temp dir via confstr, NOT
+        // `std::env::temp_dir()` — the latter honors `$TMPDIR`, which a
+        // parent process may have redirected, whereas the child CLI reads
+        // the confstr value directly. Take its parent so the grant covers
+        // both the temp (T) and cache (C) siblings.
+        // SAFETY: standard two-call confstr pattern (size, then fill).
+        unsafe {
+            let name = libc::_CS_DARWIN_USER_TEMP_DIR;
+            let len = libc::confstr(name, std::ptr::null_mut(), 0);
+            if len == 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; len];
+            let got = libc::confstr(name, buf.as_mut_ptr() as *mut libc::c_char, len);
+            if got == 0 || got > len {
+                return None;
+            }
+            let path = std::ffi::CStr::from_bytes_with_nul(&buf[..got])
+                .ok()?
+                .to_str()
+                .ok()?;
+            std::path::Path::new(path)
+                .parent()
+                .and_then(|p| p.canonicalize().ok())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// A parameterized Seatbelt profile: the SBPL text plus the `KEY=value`
 /// parameter bindings it references. Paths live only in `params`, never in
 /// `profile`, so no path can alter the profile's structure.
@@ -474,6 +535,14 @@ pub struct LeadSpecInputs<'a> {
     /// Other harnesses' credential files (tilde-relative), denied read+write
     /// so one harness can't exfiltrate another's token.
     pub other_credential_files: &'a [&'a str],
+    /// The leading harness's *own* credential paths (tilde-relative) — the
+    /// stores it authenticates from — granted read+write so it can sign in
+    /// and let its auth CLI refresh the token. Copilot authenticates through
+    /// GitHub, so it needs `~/.config/gh` (which `gh` rewrites on sign-in)
+    /// that a Cursor lead would rightly be denied. A lead touching its own
+    /// credential store is expected; the guarantee is that it can't write the
+    /// *project* outside `.mix2/`.
+    pub own_credential_files: &'a [&'a str],
     /// Env vars this harness must keep despite the credential strip.
     pub env_keep: &'a [&'a str],
 }
@@ -487,6 +556,12 @@ pub fn build_lead_spec(inputs: LeadSpecInputs<'_>) -> std::io::Result<(SandboxSp
     let lead_tmp = prepare_writable_root(&inputs.runtime_dir.join("lead-tmp"), true)?;
 
     let mut writable = vec![mix2, lead_tmp.clone()];
+    // The platform temp/cache root, where the harness CLI and its
+    // subprocesses write scratch (macOS reaches it via confstr, ignoring
+    // TMPDIR for the cache dir).
+    if let Some(temp_root) = platform_temp_root() {
+        writable.push(temp_root);
+    }
     let mut deny_write: Vec<PathBuf> = Vec::new();
     for dir in inputs.state_dirs {
         let expanded = expand_tilde(dir);
@@ -503,11 +578,32 @@ pub fn build_lead_spec(inputs: LeadSpecInputs<'_>) -> std::io::Result<(SandboxSp
         writable.push(root);
     }
 
-    let mut deny_read_write: Vec<PathBuf> =
-        CREDENTIAL_DENY.iter().map(|p| expand_tilde(p)).collect();
-    for cred in inputs.other_credential_files {
-        deny_read_write.push(expand_tilde(cred));
+    // The lead's own credential stores stay read+write accessible: it must
+    // both read its token and let the auth CLI refresh it (e.g. `gh`
+    // rewrites `~/.config/gh` when Copilot signs in). Grant write to each
+    // that exists (skipping symlinks) and subtract them from the deny-list
+    // so the later deny clause doesn't override the grant.
+    let own: std::collections::HashSet<PathBuf> = inputs
+        .own_credential_files
+        .iter()
+        .map(|p| expand_tilde(p))
+        .collect();
+    for path in &own {
+        if let Some(p) = existing_non_symlink(path) {
+            writable.push(p);
+        }
     }
+    let deny_read_write: Vec<PathBuf> = CREDENTIAL_DENY
+        .iter()
+        .map(|p| expand_tilde(p))
+        .chain(
+            inputs
+                .other_credential_files
+                .iter()
+                .map(|p| expand_tilde(p)),
+        )
+        .filter(|p| !own.contains(p))
+        .collect();
 
     let spec = SandboxSpec {
         engine: inputs.engine,
@@ -790,6 +886,12 @@ mod tests {
         let state = dir.path().join("state");
         std::fs::create_dir(&state).unwrap();
         let state_str = state.to_string_lossy().into_owned();
+        // A real own-credential dir so the writable/deny assertions are
+        // deterministic (stands in for ~/.config/gh, which is also in the
+        // central deny-list on real machines).
+        let own_cred = dir.path().join("own-creds");
+        std::fs::create_dir(&own_cred).unwrap();
+        let own_cred_str = own_cred.to_string_lossy().into_owned();
 
         let (spec, lead_tmp) = build_lead_spec(LeadSpecInputs {
             engine: SandboxEngine::Seatbelt,
@@ -797,18 +899,30 @@ mod tests {
             runtime_dir: &runtime,
             state_dirs: &[state_str.as_str()],
             other_credential_files: &["~/.local/share/opencode/auth.json"],
+            own_credential_files: &[own_cred_str.as_str(), "~/.config/gh"],
             env_keep: &[],
         })
         .unwrap();
 
-        // Writable: .mix2, the lead-tmp scratch, and the state dir.
+        // Writable: .mix2, the lead-tmp scratch, the state dir, and the
+        // lead's own credential store (so its auth CLI can refresh a token).
         let writable: Vec<_> = spec.policy.writable.iter().collect();
         assert!(writable.iter().any(|p| p.ends_with(".mix2")));
         assert!(writable.iter().any(|p| p.ends_with("lead-tmp")));
         assert!(writable
             .iter()
             .any(|p| p.canonicalize().ok() == state.canonicalize().ok()));
+        assert!(writable
+            .iter()
+            .any(|p| p.canonicalize().ok() == own_cred.canonicalize().ok()));
         assert!(lead_tmp.ends_with("lead-tmp"));
+        // macOS: the per-user Darwin temp/cache root is granted so the
+        // harness CLI's confstr-based scratch works.
+        #[cfg(target_os = "macos")]
+        assert!(writable
+            .iter()
+            .any(|p| p.canonicalize().ok()
+                == platform_temp_root().and_then(|r| r.canonicalize().ok())));
 
         // Exec-surface deny overlay lives inside the granted state dir.
         assert!(spec
@@ -828,6 +942,13 @@ mod tests {
             .deny_read_write
             .iter()
             .any(|p| p.ends_with("opencode/auth.json")));
+        // ...but the lead's own credential store is subtracted, so it stays
+        // readable (a Copilot lead must reach its GitHub token).
+        assert!(!spec
+            .policy
+            .deny_read_write
+            .iter()
+            .any(|p| p.ends_with(".config/gh")));
     }
 
     #[cfg(unix)]
@@ -851,6 +972,7 @@ mod tests {
             runtime_dir: &runtime,
             state_dirs: &[],
             other_credential_files: &[],
+            own_credential_files: &[],
             env_keep: &[],
         });
         assert!(result.is_err(), "a symlinked .mix2 must fail assembly");
