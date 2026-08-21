@@ -6,9 +6,12 @@ import { renderConversationWithAnchors, type PromptAnchor } from '../render/conv
 import type { Line } from '../render/lines.js';
 import {
   filteredModelEntries,
+  initialModelSelection,
+  modelEntryIndexOf,
   renderModelPanel,
   PROVIDER_DEFAULT,
   type ModelCursor,
+  type ModelSelection,
 } from '../render/modelPanel.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import {
@@ -72,7 +75,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const [scroll, setScroll] = useState<{ top: number; stick: boolean }>({ top: 0, stick: true });
   const [selection, setSelection] = useState<Selection | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [modelPanel, setModelPanel] = useState<ModelCursor | null>(null);
+  const [modelPanel, setModelPanel] = useState<{
+    cursor: ModelCursor;
+    selection: ModelSelection;
+  } | null>(null);
   const [modelFilter, setModelFilter] = useState('');
   const [picker, setPicker] = useState<{
     cursor: TeamPickerCursor;
@@ -105,9 +111,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   // (ready/fatal) clears it.
   useEffect(() => {
     if (state.phase === 'selecting-team' && state.discovery && !picker) {
+      const selection = initialSelection(state.discovery);
       setPicker({
-        cursor: { column: 0, index: entryIndexOf(state.discovery, state.discovery.proposal.one) },
-        selection: initialSelection(state.discovery),
+        cursor: { column: 0, index: entryIndexOf(state.discovery, selection.one) },
+        selection,
       });
     }
     if (state.phase !== 'selecting-team' && picker) {
@@ -153,7 +160,13 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     }
     if (modelPanel && state.session) {
       return {
-        lines: renderModelPanel(state.session, modelPanel, width, modelFilter),
+        lines: renderModelPanel(
+          state.session,
+          modelPanel.selection,
+          modelPanel.cursor,
+          width,
+          modelFilter,
+        ),
         anchors: [],
       };
     }
@@ -304,7 +317,14 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         const [, agent, ...modelParts] = text.slice(1).split(/\s+/);
         const model = modelParts.join(' ').trim();
         if (!agent) {
-          setModelPanel({ column: 0, index: 0 });
+          if (!state.session) return;
+          // Seed the pending selection with what's active now; the cursor
+          // starts on the lead's equipped entry, like the team picker.
+          const selection = initialModelSelection(state.session);
+          setModelPanel({
+            selection,
+            cursor: { column: 0, index: modelEntryIndexOf(leadInfo(state.session), selection, '') },
+          });
           setModelFilter('');
           return;
         }
@@ -393,7 +413,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         const slot = cursor.column === 0 ? 'one' : 'two';
         const entry = entries[cursor.index];
         // A disabled entry cannot be equipped; its reason is on screen.
-        if (!entry || !selectable(entry, slot, selection.leadSlot)) return;
+        if (!entry || !selectable(entry, slot, selection, entries)) return;
         const nextSelection = { ...selection, [slot]: entry.harness };
         const column = (cursor.column + 1) as TeamPickerCursor['column'];
         const index = column === 2 ? 0 : equippedIndex(column, nextSelection);
@@ -485,47 +505,66 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         column === 0 ? leadInfo(session) : teammateInfo(session);
       const entryCount = (column: 0 | 1) =>
         filteredModelEntries(infoFor(column).models ?? [], modelFilter).length;
+      const equippedIndex = (column: 0 | 1 | 2, selection: ModelSelection) =>
+        column === 2 ? 0 : modelEntryIndexOf(infoFor(column), selection, modelFilter);
+      if (key.return) {
+        // Enter is pick-equip-advance on the agent columns; the continue
+        // button is where the choices apply, matching the team picker.
+        // The IPC sends stay outside any state updater — updaters may run
+        // more than once.
+        const { cursor, selection } = modelPanel;
+        if (cursor.column === 2) {
+          for (const info of [session.one, session.two]) {
+            const pending = selection[info.slot];
+            if (pending !== (info.model ?? null)) {
+              client.send({ type: 'set_model', slot: info.slot, model: pending });
+            }
+          }
+          setModelPanel(null);
+          setModelFilter('');
+          return;
+        }
+        const info = infoFor(cursor.column);
+        const entry = filteredModelEntries(info.models ?? [], modelFilter)[cursor.index];
+        if (!entry) return;
+        const nextSelection: ModelSelection = {
+          ...selection,
+          [info.slot]: entry === PROVIDER_DEFAULT ? null : entry,
+        };
+        const column = (cursor.column + 1) as ModelCursor['column'];
+        setModelPanel({
+          selection: nextSelection,
+          cursor: { column, index: equippedIndex(column, nextSelection) },
+        });
+        return;
+      }
       // Functional updates: batched key events must each see the latest
       // cursor, not the snapshot from this render.
-      if (key.upArrow) {
-        setModelPanel((prev) => prev && { ...prev, index: Math.max(0, prev.index - 1) });
-      } else if (key.downArrow) {
-        setModelPanel(
-          (prev) =>
-            prev && {
-              ...prev,
-              index: Math.min(Math.max(0, entryCount(prev.column) - 1), prev.index + 1),
-            },
-        );
+      if (key.upArrow || key.downArrow) {
+        setModelPanel((prev) => {
+          if (!prev || prev.cursor.column === 2) return prev;
+          const delta = key.upArrow ? -1 : 1;
+          const index = Math.max(
+            0,
+            Math.min(entryCount(prev.cursor.column) - 1, prev.cursor.index + delta),
+          );
+          return { ...prev, cursor: { ...prev.cursor, index } };
+        });
       } else if (key.leftArrow || key.rightArrow || key.tab) {
         setModelPanel((prev) => {
           if (!prev) return prev;
-          const column: 0 | 1 = prev.column === 0 ? 1 : 0;
-          return { column, index: Math.min(prev.index, Math.max(0, entryCount(column) - 1)) };
+          const delta = key.leftArrow ? 2 : 1; // left cycles backwards
+          const column = ((prev.cursor.column + delta) % 3) as ModelCursor['column'];
+          return { ...prev, cursor: { column, index: equippedIndex(column, prev.selection) } };
         });
-      } else if (key.return) {
-        // Select-and-leave, matching the team picker: enter applies the
-        // highlighted model and closes the panel. The IPC send stays
-        // outside any state updater — updaters may run more than once.
-        const info = infoFor(modelPanel.column);
-        const entry = filteredModelEntries(info.models ?? [], modelFilter)[modelPanel.index];
-        if (entry) {
-          client.send({
-            type: 'set_model',
-            slot: info.slot,
-            model: entry === PROVIDER_DEFAULT ? null : entry,
-          });
-          setModelPanel(null);
-          setModelFilter('');
-        }
       } else if (key.backspace || key.delete) {
         // Narrow the filter; the cursor re-clamps against the wider list.
         setModelFilter((f) => f.slice(0, -1));
-        setModelPanel((prev) => prev && { ...prev, index: 0 });
+        setModelPanel((prev) => prev && { ...prev, cursor: { ...prev.cursor, index: 0 } });
       } else if (input && !key.ctrl && !key.meta) {
         // Type-to-filter: harnesses with long model lists stay navigable.
         setModelFilter((f) => f + input);
-        setModelPanel((prev) => prev && { ...prev, index: 0 });
+        setModelPanel((prev) => prev && { ...prev, cursor: { ...prev.cursor, index: 0 } });
       }
       return;
     }

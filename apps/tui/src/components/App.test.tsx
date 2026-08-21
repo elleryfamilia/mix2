@@ -155,7 +155,7 @@ describe('team picker', () => {
     h.unmount();
   });
 
-  it('arrows highlight without equipping; a same-harness team builds explicitly', async () => {
+  it("arrows highlight without equipping; one slot's pick is blocked on the other", async () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
@@ -166,15 +166,27 @@ describe('team picker', () => {
     await tickReact();
     expect(h.lastFrame()).toContain('slot two coordinates');
 
+    // Each slot's pick is disabled on the opposite slot, labelled with
+    // whose it is — a team is two different CLIs when two are detected.
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('selected for slot one');
+    expect(frame).toContain('selected for slot two');
+
     // ↓ only moves the highlight onto codex — nothing is equipped yet…
     h.stdin.write('\x1b[B');
     await tickReact();
-    // …enter equips codex for slot one and advances to slot two, cursor
-    // seeded on slot two's equipped harness (codex).
+    // …and enter refuses: codex is slot two's pick, so slot one can't
+    // take it. Focus stays put; nothing starts.
     h.stdin.write('\r');
     await tickReact();
-    // Equip codex for slot two → continue; ↑ there is a no-op, not a
-    // hidden coordinator toggle.
+    expect(h.client.selectTeam).not.toHaveBeenCalled();
+
+    // ↑ back to claude, equip both slots as proposed, then continue; ↑ on
+    // continue is a no-op, not a hidden coordinator toggle.
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
     h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\x1b[A');
@@ -183,7 +195,7 @@ describe('team picker', () => {
 
     h.stdin.write('\r');
     await tickReact();
-    expect(h.client.selectTeam).toHaveBeenCalledWith('codex', 'codex', 'two');
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'two');
     h.unmount();
   });
 
@@ -239,13 +251,13 @@ describe('team picker', () => {
         discovered.harnesses[0]!,
         {
           ...discovered.harnesses[1]!,
-          available: false,
-          reason: 'not installed: npm i -g @openai/codex',
+          auth: 'unauthenticated',
+          reason: 'not signed in: run `codex login`',
         },
       ],
     });
     await waitForFrame(h, 'slot one');
-    expect(h.lastFrame()).toContain('not installed: npm i -g @openai/codex');
+    expect(h.lastFrame()).toContain('not signed in: run `codex login`');
 
     // Enter on the disabled codex row is a no-op — focus stays put.
     h.stdin.write('\x1b[B');
@@ -254,7 +266,8 @@ describe('team picker', () => {
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
 
-    // Recover: equip claude on both slots, then start.
+    // Recover: with codex signed out, claude is each slot's only eligible
+    // CLI, so the duplicate stays allowed — equip it on both, then start.
     h.stdin.write('\x1b[A');
     await tickReact();
     h.stdin.write('\r'); // equip slot one → advance (cursor lands on codex, slot two's pick)
@@ -264,6 +277,35 @@ describe('team picker', () => {
     h.stdin.write('\r'); // equip slot two → continue
     await tickReact();
     h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'claude', 'one');
+    h.unmount();
+  });
+
+  it('an undetected CLI is hidden and the defaults remap onto what exists', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit({
+      ...discovered,
+      harnesses: [
+        discovered.harnesses[0]!,
+        {
+          ...discovered.harnesses[1]!,
+          available: false,
+          reason: 'not installed: npm i -g @openai/codex',
+        },
+      ],
+    });
+    await waitForFrame(h, 'slot one');
+    const frame = h.lastFrame()!;
+    // No dead row for codex — the picker lists detected CLIs, and points
+    // at how to add one instead.
+    expect(frame).not.toContain('codex');
+    expect(frame).toContain('detected CLIs');
+    expect(frame).toContain('~/.config/mix2/config.toml');
+
+    // Esc starts the defaults, remapped off the undetected codex.
+    h.stdin.write('\x1b');
     await tickReact();
     expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'claude', 'one');
     h.unmount();
@@ -730,7 +772,7 @@ describe('App', () => {
     instance.unmount();
   });
 
-  it('/model opens the picker; enter applies the highlight and leaves', async () => {
+  it('/model opens the picker; enter equips per agent, continue applies', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -744,13 +786,26 @@ describe('App', () => {
     expect(frame).toContain('provider default');
     expect(frame).toContain('sonnet');
     expect(frame).toContain('gpt-5.3-codex');
+    expect(frame).toContain('continue');
+    expect(frame).toContain('enter equip');
 
-    // ↓↓↓ to "sonnet" (default, fable, opus, sonnet); enter applies and
-    // closes — select-and-leave, matching the team picker.
+    // ↓↓↓ to "sonnet" (default, fable, opus, sonnet); enter equips it and
+    // advances to the codex column — nothing is sent yet, exactly like
+    // the team picker's pick-equip-advance.
     h.stdin.write('\x1b[B\x1b[B\x1b[B');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
+    expect(h.client.send).not.toHaveBeenCalled();
+    // Equip codex's provider default (unchanged) → focus lands on continue.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).not.toHaveBeenCalled();
+    expect(h.lastFrame()).toContain('enter apply');
+    // Continue applies only what changed and closes the panel.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).toHaveBeenCalledTimes(1);
     expect(h.client.send).toHaveBeenCalledWith({
       type: 'set_model',
       slot: 'one',
@@ -759,7 +814,7 @@ describe('App', () => {
     expect(h.lastFrame()).not.toContain('◐ models');
 
     // The other slot is a fresh /model: → to the codex column, ↓↓ to
-    // gpt-5-codex, enter applies and leaves again.
+    // gpt-5-codex, equip, then continue applies it.
     h.stdin.write('/model');
     await tickReact();
     h.stdin.write('\r');
@@ -768,6 +823,8 @@ describe('App', () => {
     h.stdin.write('\x1b[C');
     await tickReact();
     h.stdin.write('\x1b[B\x1b[B');
+    await tickReact();
+    h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
@@ -800,7 +857,7 @@ describe('App', () => {
     h.unmount();
   });
 
-  it('/model filter narrows the list and enter applies the match', async () => {
+  it('/model filter narrows the list; equip + continue applies the match', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -818,6 +875,17 @@ describe('App', () => {
     expect(frame).toContain('filter: son');
     expect(frame).toContain('sonnet');
     expect(frame).not.toContain('provider default');
+    // Enter equips the match and advances to codex — where nothing
+    // matches "son", so enter there is a no-op, not an accidental pick.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).toContain('no models match');
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).not.toHaveBeenCalled();
+    // → moves on to continue; enter applies the equipped sonnet.
+    h.stdin.write('\x1b[C');
+    await tickReact();
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.send).toHaveBeenCalledWith({

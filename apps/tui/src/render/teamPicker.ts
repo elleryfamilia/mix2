@@ -1,11 +1,13 @@
 /**
  * The startup team picker (`selecting-team` phase): one column per slot
- * listing every discovered harness, then a continue button. The
- * coordinator is a described default (`c` swaps it), not a focus stop —
- * leaving the picker should read as "continue", not as one more setting.
- * The configured proposal arrives preselected; unavailable or ineligible
- * entries stay visible but disabled, each carrying its actionable reason.
- * The same harness on both slots is a supported choice, not an error.
+ * listing the detected CLIs, then a continue button. The coordinator is a
+ * described default (`c` swaps it), not a focus stop — leaving the picker
+ * should read as "continue", not as one more setting. The configured
+ * proposal arrives preselected; undetected CLIs are hidden entirely (a
+ * footer hint covers installing or configuring one), while detected-but-
+ * blocked entries stay visible with their actionable reason. Each slot
+ * gets its own CLI: one slot's pick is disabled on the other, except on a
+ * single-CLI machine where the duplicate is the only way to start.
  */
 import type { DiscoveredHarness } from '../ipc/protocol.js';
 import type { DiscoveryState } from '../state/store.js';
@@ -35,8 +37,10 @@ export interface TeamPickerSelection {
   leadSlot: SlotName;
 }
 
-/** Harness choices for a slot: unique by harness name, preferring an
- * available entry when the same harness was probed at several commands. */
+/** Harness choices for a slot: detected CLIs only, unique by harness name
+ * (preferring an available entry when the same harness was probed at
+ * several commands). Undetected candidates are hidden — the picker lists
+ * what's actually on this machine, not the whole registry. */
 export function pickerEntries(discovery: DiscoveryState): DiscoveredHarness[] {
   const byHarness = new Map<string, DiscoveredHarness>();
   for (const entry of discovery.harnesses) {
@@ -45,38 +49,73 @@ export function pickerEntries(discovery: DiscoveryState): DiscoveredHarness[] {
       byHarness.set(entry.harness, entry);
     }
   }
-  return [...byHarness.values()];
+  return [...byHarness.values()].filter((entry) => entry.available);
 }
 
-/** Whether an entry can be chosen for a slot at all. */
-export function selectable(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): boolean {
+/** Whether an entry could ever back this slot: signed in and role-eligible.
+ * (Availability is a given — undetected entries never reach the picker.) */
+function eligible(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): boolean {
   if (!entry.available || entry.auth === 'unauthenticated') return false;
   return slot === leadSlot ? entry.lead_eligible : entry.teammate_eligible;
 }
 
+/** Whether an entry can be chosen for a slot right now: eligible, and not
+ * already equipped on the other slot — each slot gets its own CLI. The one
+ * carve-out: when a slot has no other eligible choice (a single-CLI
+ * machine), the duplicate stays selectable so a team can still start. */
+export function selectable(
+  entry: DiscoveredHarness,
+  slot: SlotName,
+  selection: TeamPickerSelection,
+  entries: DiscoveredHarness[],
+): boolean {
+  if (!eligible(entry, slot, selection.leadSlot)) return false;
+  const otherChosen = slot === 'one' ? selection.two : selection.one;
+  if (entry.harness !== otherChosen) return true;
+  return !entries.some(
+    (e) => e.harness !== entry.harness && eligible(e, slot, selection.leadSlot),
+  );
+}
+
 /** One-line status label for a disabled entry. */
-function disabledLabel(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): string {
-  if (!entry.available) return entry.reason ?? 'unavailable';
+function disabledLabel(
+  entry: DiscoveredHarness,
+  slot: SlotName,
+  selection: TeamPickerSelection,
+): string {
   if (entry.auth === 'unauthenticated') return entry.reason ?? 'not signed in';
   // The why matters: this slot coordinates, and a teammate-only harness
   // can't — on the other slot the same entry is selectable. When the
   // harness *could* lead under the OS sandbox but it isn't available here,
   // say so — that's an actionable fix, not a permanent limit.
-  if (slot === leadSlot && !entry.lead_eligible) {
+  if (slot === selection.leadSlot && !entry.lead_eligible) {
     return entry.sandboxable_lead
       ? 'needs the OS sandbox to coordinate'
       : "teammate-only: can't coordinate";
   }
+  const other = slot === 'one' ? 'two' : 'one';
+  if (entry.harness === (slot === 'one' ? selection.two : selection.one)) {
+    return `selected for slot ${other}`;
+  }
   return 'not eligible';
 }
 
-/** The picker's initial selection: the core's proposal. */
+/** The picker's initial selection: the core's proposal, remapped onto a
+ * detected CLI wherever the proposal names one that isn't on this machine
+ * — a preselection hidden from the list would be unexplainable. */
 export function initialSelection(discovery: DiscoveryState): TeamPickerSelection {
-  return {
+  const entries = pickerEntries(discovery);
+  const selection: TeamPickerSelection = {
     one: discovery.proposal.one,
     two: discovery.proposal.two,
     leadSlot: discovery.proposal.lead_slot,
   };
+  for (const slot of ['one', 'two'] as const) {
+    if (entries.some((e) => e.harness === selection[slot])) continue;
+    const fallback = entries.find((e) => selectable(e, slot, selection, entries));
+    if (fallback) selection[slot] = fallback.harness;
+  }
+  return selection;
 }
 
 /** Where a harness sits in the picker's entry list (cursor seeding). */
@@ -104,7 +143,7 @@ function slotTile(
   const bodyWidth = width - 4;
   const body: Line[] = [];
   entries.forEach((entry, i) => {
-    const enabled = selectable(entry, slot, selection.leadSlot);
+    const enabled = selectable(entry, slot, selection, entries);
     const isChosen = entry.harness === chosen;
     const isCursor = active && i === cursorIndex;
     const marker = isCursor ? '›' : ' ';
@@ -127,7 +166,7 @@ function slotTile(
       span(chosenMark, { color: agentColor(slot) }),
     ]);
     if (!enabled) {
-      const reason = truncate(disabledLabel(entry, slot, selection.leadSlot), Math.max(8, bodyWidth - 2));
+      const reason = truncate(disabledLabel(entry, slot, selection), Math.max(8, bodyWidth - 2));
       body.push([span('  '), span(reason, { color: theme.text.faint })]);
     } else if (isChosen) {
       // Selection disclosures surface right where the choice is made —
@@ -172,7 +211,7 @@ export function renderTeamPicker(
       [
         span(' '.repeat(INDENT)),
         span('◐ pick your team', { color: theme.agent.team, bold: true }),
-        span(' — two slots, any agents', { color: theme.text.faint }),
+        span(' — detected CLIs', { color: theme.text.faint }),
       ],
       [span('esc defaults ', { color: theme.text.faint })],
       w,
@@ -193,6 +232,15 @@ export function renderTeamPicker(
     lines.push(...zipTiles(left, right, 3));
   }
 
+  lines.push(BLANK);
+  // Only detected CLIs are listed, so say how to grow the list — install
+  // the CLI, or point mix2 at a custom command when it's off the PATH.
+  for (const line of wrapText(
+    'missing a CLI? install it and relaunch — or set its command in ~/.config/mix2/config.toml',
+    w - INDENT,
+  )) {
+    lines.push([span(' '.repeat(INDENT)), span(line, { color: theme.text.faint })]);
+  }
   lines.push(BLANK);
   // The coordinator is a description, not a control: the default is fine
   // almost always, so it never costs a focus stop — `c` swaps it.
