@@ -182,6 +182,10 @@ struct Shared {
         tokio::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<ConsultResponse>>>>,
     active: RwLock<Option<ActiveTurn>>,
     consult_timeout: Duration,
+    /// OS sandbox engine to wrap a teammate whose native read-only isn't
+    /// mechanically enforced (`teammate_read_only` is `Unverified`, i.e.
+    /// Claude/Copilot). `None` runs teammates natively.
+    sandbox_engine: Option<crate::sandbox::SandboxEngine>,
 }
 
 impl ConsultServer {
@@ -201,6 +205,7 @@ impl ConsultServer {
         project: bool,
         teammate_model: Option<String>,
         updates: mpsc::Sender<ConsultUpdate>,
+        sandbox_engine: Option<crate::sandbox::SandboxEngine>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(runtime_dir.join(FILE_DIR_NAME))
             .await
@@ -219,6 +224,7 @@ impl ConsultServer {
             pending: tokio::sync::Mutex::new(HashMap::new()),
             active: RwLock::new(None),
             consult_timeout: Duration::from_secs(15 * 60),
+            sandbox_engine,
         });
 
         let sock_path = runtime_dir.join(SOCKET_NAME);
@@ -687,6 +693,54 @@ async fn run_consultation(
         shared.runtime_dir.display().to_string(),
     );
 
+    // Wrap the teammate in a read-only sandbox when its harness can't
+    // enforce read-only itself (`teammate_read_only` is not `Enforced` —
+    // Claude/Copilot). The teammate gets NO project write (not even
+    // `.mix2/`); it reads the repo and answers. Harnesses that already
+    // enforce read-only natively (Codex/Cursor/OpenCode) are left alone —
+    // which also avoids nesting (Codex self-sandboxes). A failed spec
+    // assembly degrades to native, like the lead path.
+    let teammate_harness = shared.teammate.harness();
+    let descriptor = crate::agents::registry::descriptor(teammate_harness);
+    let sandbox = shared.sandbox_engine.filter(|_| {
+        descriptor.capabilities.teammate_read_only
+            != crate::agents::descriptor::CapabilityLevel::Enforced
+    });
+    let sandbox = match sandbox {
+        Some(engine) => {
+            let others: Vec<&str> = crate::agents::registry::ALL
+                .into_iter()
+                .filter(|h| *h != teammate_harness)
+                .flat_map(|h| {
+                    crate::agents::registry::descriptor(h)
+                        .credential_files
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            match crate::sandbox::build_spec(crate::sandbox::SandboxInputs {
+                engine,
+                role: crate::sandbox::SandboxRole::Teammate,
+                cwd: &shared.cwd,
+                runtime_dir: &shared.runtime_dir,
+                state_dirs: descriptor.state_dirs,
+                other_credential_files: &others,
+                own_credential_files: descriptor.credential_files,
+                env_keep: descriptor.env_keep_sandboxed,
+            }) {
+                Ok((spec, scratch)) => {
+                    env.insert("TMPDIR".to_owned(), scratch.display().to_string());
+                    Some(spec)
+                }
+                Err(e) => {
+                    tracing::warn!("teammate sandbox assembly failed, running native: {e}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let request = AgentRequest {
         prompt: prompt.to_owned(),
         cwd: shared.cwd.clone(),
@@ -697,7 +751,7 @@ async fn run_consultation(
         env,
         path_prepend: shared.helper_dir.clone(),
         runtime_dir: None,
-        sandbox: None,
+        sandbox,
     };
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
@@ -830,6 +884,7 @@ mod tests {
                 pending: tokio::sync::Mutex::new(HashMap::new()),
                 active: RwLock::new(None),
                 consult_timeout: Duration::from_secs(30),
+                sandbox_engine: None,
             });
             Self {
                 server: ConsultServer {

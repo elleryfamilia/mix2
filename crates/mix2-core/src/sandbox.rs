@@ -1,24 +1,28 @@
-//! OS-level write confinement for a coordinator (lead) process.
+//! OS-level write confinement for a participant process.
 //!
-//! The product guarantee is that the lead only writes `.mix2/` in the cwd
-//! (plus a narrow session area). Harnesses whose own CLIs can enforce that
-//! do; for the others we wrap the lead process in an OS sandbox so *any*
-//! harness can coordinate with the write scope enforced by the kernel, not
-//! by the model's cooperation.
+//! Both roles are scoped by the same engine, differing only in policy
+//! ([`SandboxRole`]):
+//! - a **lead** may write `.mix2/` (it produces plans and notes there);
+//! - a **teammate** is a read-only consultant and writes no project files
+//!   at all.
+//!
+//! Harnesses whose own CLIs enforce their role natively run unwrapped; for
+//! the others we wrap the process so the guarantee is enforced by the
+//! kernel, not the model's cooperation — letting any harness lead, and
+//! making a Claude/Copilot teammate mechanically read-only.
 //!
 //! This module is pure policy + command generation — it never spawns. The
-//! runner wraps a lead command with [`wrap`] just before spawning; the
-//! generated argv execs the real command under the platform engine.
+//! runner wraps a command with [`wrap`] just before spawning; the generated
+//! argv execs the real command under the platform engine.
 //!
 //! ## What is (and isn't) enforced
 //!
 //! The sandbox scopes **filesystem writes**. It deliberately does **not**
-//! filter network egress (the lead must reach its provider API), and reads
-//! are open except for an explicit credential deny-list. A prompt-injected
-//! lead can still read project files (including `.env`) and exfiltrate over
-//! the network — the same exposure the native `--allowedTools` lead has
-//! today. The picker discloses this; callers must not imply full
-//! confinement.
+//! filter network egress (the process must reach its provider API), and
+//! reads are open except for an explicit credential deny-list. A
+//! prompt-injected process can still read project files (including `.env`)
+//! and exfiltrate over the network — the same exposure the native
+//! mechanisms have. Callers must not imply full confinement.
 //!
 //! ## Engines
 //!
@@ -521,41 +525,73 @@ pub fn credential_env_removals(keep: &[&str]) -> Vec<String> {
     out
 }
 
-/// Inputs for assembling a lead's sandbox policy. Paths are tilde-relative
-/// where noted; the builder expands, creates, and canonicalizes them.
-pub struct LeadSpecInputs<'a> {
+/// Which participant a sandbox is being built for. It decides the *project*
+/// write scope: a `Lead` may write `.mix2/`; a `Teammate` is a read-only
+/// consultant and gets no project write at all — the sandbox mechanically
+/// enforces the read-only guarantee for harnesses whose CLI can't
+/// (`teammate_read_only` is `Unverified`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxRole {
+    Lead,
+    Teammate,
+}
+
+impl SandboxRole {
+    /// The scratch subdir name under the runtime dir, distinct per role so a
+    /// concurrent lead and teammate never share it.
+    fn scratch_name(self) -> &'static str {
+        match self {
+            SandboxRole::Lead => "lead-tmp",
+            SandboxRole::Teammate => "teammate-tmp",
+        }
+    }
+}
+
+/// Inputs for assembling a participant's sandbox policy. Paths are
+/// tilde-relative where noted; the builder expands, creates, and
+/// canonicalizes them.
+pub struct SandboxInputs<'a> {
     pub engine: SandboxEngine,
-    /// The project directory whose `.mix2/` the lead may write.
+    /// Lead grants `<cwd>/.mix2` writable; Teammate grants no project write.
+    pub role: SandboxRole,
+    /// The project directory. `<cwd>/.mix2` is the lead's only project-write
+    /// grant; a teammate reads the project but writes none of it.
     pub cwd: &'a Path,
-    /// The per-session runtime dir; a `lead-tmp` subdir under it becomes the
-    /// only broadly-writable scratch (also the child's `TMPDIR`).
+    /// The per-session runtime dir; a per-role scratch subdir under it becomes
+    /// the broadly-writable scratch (also the child's `TMPDIR`).
     pub runtime_dir: &'a Path,
     /// The leading harness's own state dirs (tilde-relative), granted write.
     pub state_dirs: &'a [&'a str],
     /// Other harnesses' credential files (tilde-relative), denied read+write
     /// so one harness can't exfiltrate another's token.
     pub other_credential_files: &'a [&'a str],
-    /// The leading harness's *own* credential paths (tilde-relative) — the
-    /// stores it authenticates from — granted read+write so it can sign in
-    /// and let its auth CLI refresh the token. Copilot authenticates through
-    /// GitHub, so it needs `~/.config/gh` (which `gh` rewrites on sign-in)
-    /// that a Cursor lead would rightly be denied. A lead touching its own
-    /// credential store is expected; the guarantee is that it can't write the
-    /// *project* outside `.mix2/`.
+    /// The harness's *own* credential paths (tilde-relative) — the stores it
+    /// authenticates from — granted read+write so it can sign in and let its
+    /// auth CLI refresh the token. Copilot authenticates through GitHub, so it
+    /// needs `~/.config/gh` (which `gh` rewrites on sign-in) that another
+    /// harness would rightly be denied. A harness touching its own credential
+    /// store is expected; the guarantee is about *project* writes.
     pub own_credential_files: &'a [&'a str],
     /// Env vars this harness must keep despite the credential strip.
     pub env_keep: &'a [&'a str],
 }
 
-/// Assemble the sandbox spec for a lead invocation: writable roots (`.mix2`,
-/// the lead-tmp scratch, the harness state dirs), an exec-surface deny-write
-/// overlay inside those state dirs, credential deny-read, and the env strip.
-/// The returned `lead_tmp` is the dir the caller should point `TMPDIR` at.
-pub fn build_lead_spec(inputs: LeadSpecInputs<'_>) -> std::io::Result<(SandboxSpec, PathBuf)> {
-    let mix2 = prepare_writable_root(&inputs.cwd.join(".mix2"), true)?;
-    let lead_tmp = prepare_writable_root(&inputs.runtime_dir.join("lead-tmp"), true)?;
+/// Assemble the sandbox spec for a participant: a per-role scratch (the
+/// child's `TMPDIR`), the platform temp/cache root, the harness state dirs
+/// (with an exec-surface deny-write overlay) and its own credential store,
+/// credential deny-read for everything else, and the env strip. A `Lead`
+/// additionally gets `<cwd>/.mix2` writable; a `Teammate` gets no project
+/// write. The returned scratch path is what the caller points `TMPDIR` at.
+pub fn build_spec(inputs: SandboxInputs<'_>) -> std::io::Result<(SandboxSpec, PathBuf)> {
+    let scratch =
+        prepare_writable_root(&inputs.runtime_dir.join(inputs.role.scratch_name()), true)?;
 
-    let mut writable = vec![mix2, lead_tmp.clone()];
+    let mut writable = vec![scratch.clone()];
+    // A lead writes plans to `.mix2/`; a teammate is read-only and writes no
+    // project files at all.
+    if inputs.role == SandboxRole::Lead {
+        writable.push(prepare_writable_root(&inputs.cwd.join(".mix2"), true)?);
+    }
     // The platform temp/cache root, where the harness CLI and its
     // subprocesses write scratch (macOS reaches it via confstr, ignoring
     // TMPDIR for the cache dir).
@@ -615,7 +651,7 @@ pub fn build_lead_spec(inputs: LeadSpecInputs<'_>) -> std::io::Result<(SandboxSp
         },
         env_remove: credential_env_removals(inputs.env_keep),
     };
-    Ok((spec, lead_tmp))
+    Ok((spec, scratch))
 }
 
 /// Whether the macOS sandbox engine is usable here: run a trivial
@@ -893,8 +929,9 @@ mod tests {
         std::fs::create_dir(&own_cred).unwrap();
         let own_cred_str = own_cred.to_string_lossy().into_owned();
 
-        let (spec, lead_tmp) = build_lead_spec(LeadSpecInputs {
+        let (spec, lead_tmp) = build_spec(SandboxInputs {
             engine: SandboxEngine::Seatbelt,
+            role: SandboxRole::Lead,
             cwd: &cwd,
             runtime_dir: &runtime,
             state_dirs: &[state_str.as_str()],
@@ -951,6 +988,49 @@ mod tests {
             .any(|p| p.ends_with(".config/gh")));
     }
 
+    #[test]
+    fn teammate_spec_grants_no_project_write() {
+        // A teammate is a read-only consultant: it gets a scratch and state
+        // dirs, but NOT `.mix2` or any project path. That's what makes the
+        // sandbox mechanically enforce read-only for Claude/Copilot.
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("proj");
+        std::fs::create_dir(&cwd).unwrap();
+        let runtime = dir.path().join("rt");
+        std::fs::create_dir(&runtime).unwrap();
+
+        let (spec, scratch) = build_spec(SandboxInputs {
+            engine: SandboxEngine::Seatbelt,
+            role: SandboxRole::Teammate,
+            cwd: &cwd,
+            runtime_dir: &runtime,
+            state_dirs: &[],
+            other_credential_files: &[],
+            own_credential_files: &[],
+            env_keep: &[],
+        })
+        .unwrap();
+
+        // The scratch is a teammate-tmp, and no writable path is under the
+        // project cwd (so writes to the project — including `.mix2` — are
+        // denied by the base deny-write).
+        assert!(scratch.ends_with("teammate-tmp"));
+        let cwd_canon = cwd.canonicalize().unwrap();
+        assert!(
+            !spec
+                .policy
+                .writable
+                .iter()
+                .any(|p| p.starts_with(&cwd_canon)),
+            "teammate must have no writable path inside the project: {:?}",
+            spec.policy.writable
+        );
+        assert!(
+            !spec.policy.writable.iter().any(|p| p.ends_with(".mix2")),
+            "teammate must not be granted .mix2"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn build_lead_spec_fails_when_mix2_is_a_symlink() {
@@ -966,8 +1046,9 @@ mod tests {
         let runtime = dir.path().join("rt");
         std::fs::create_dir(&runtime).unwrap();
 
-        let result = build_lead_spec(LeadSpecInputs {
+        let result = build_spec(SandboxInputs {
             engine: SandboxEngine::Seatbelt,
+            role: SandboxRole::Lead,
             cwd: &cwd,
             runtime_dir: &runtime,
             state_dirs: &[],
@@ -976,6 +1057,61 @@ mod tests {
             env_keep: &[],
         });
         assert!(result.is_err(), "a symlinked .mix2 must fail assembly");
+    }
+
+    /// The teammate confinement proof: under a real engine, a teammate spec
+    /// denies a write to `.mix2` (which the *lead* is allowed) — the teammate
+    /// writes no project files at all. Engine-agnostic; skips where none.
+    #[cfg(unix)]
+    #[test]
+    fn teammate_sandbox_denies_even_mix2_writes() {
+        use std::process::Stdio;
+        let Some(engine) = SandboxSpec::detect_engine() else {
+            eprintln!("skipping: no sandbox engine available");
+            return;
+        };
+        // Anchor the project under /tmp, NOT the default temp dir: on macOS
+        // `tempdir()` lives under the per-user Darwin folder that the spec
+        // grants writable, which would mask the point of the test.
+        let dir = tempfile::Builder::new()
+            .prefix("mix2-teammate-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let cwd = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(cwd.join(".mix2")).unwrap();
+        let runtime = cwd.join("rt");
+        std::fs::create_dir(&runtime).unwrap();
+
+        let (spec, _scratch) = build_spec(SandboxInputs {
+            engine,
+            role: SandboxRole::Teammate,
+            cwd: &cwd,
+            runtime_dir: &runtime,
+            state_dirs: &[],
+            other_credential_files: &[],
+            own_credential_files: &[],
+            env_keep: &[],
+        })
+        .unwrap();
+
+        let (program, args) = wrap(
+            engine,
+            &spec.policy,
+            "/bin/sh",
+            &[
+                "-c".to_owned(),
+                format!("echo x > {}/.mix2/should-fail.txt", cwd.display()),
+            ],
+        );
+        let ok = std::process::Command::new(program)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!ok, "a teammate must not be able to write .mix2");
+        assert!(!cwd.join(".mix2/should-fail.txt").exists());
     }
 
     #[cfg(unix)]

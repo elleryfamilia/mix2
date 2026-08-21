@@ -165,6 +165,20 @@ which is why Claude and Codex lead natively while Cursor (`--mode
 plan`), OpenCode (read-only `plan` agent), and Copilot (write/shell
 denied by documented precedence) enforce read-only only as teammates.
 
+**Sandboxed teammates.** A teammate is a read-only consultant. Codex,
+Cursor, and OpenCode enforce that natively (`teammate_read_only:
+enforced` — a read-only sandbox / `--mode plan` / `--agent plan`), so
+they run unwrapped. Claude and Copilot enforce it only by policy
+(`unverified` — Claude's default-deny is widenable by the user's own
+config; Copilot's `--deny-tool` can be undercut by an auto-loading
+personal MCP server), so when an engine is available mix2 wraps *them* in
+the **same OS sandbox with a stricter policy**: no project write at all,
+not even `.mix2/` (`SandboxRole::Teammate` in `build_spec`). That
+mechanically enforces the read-only guarantee the label couldn't. A
+sandboxed teammate also keeps its native read-only flag on top of the
+sandbox (defense in depth); the Enforced harnesses are left native, which
+also avoids nesting (Codex self-sandboxes).
+
 **Sandboxed leads.** A teammate-only harness (`sandboxable_lead`) becomes
 lead-eligible when an OS sandbox engine is available to enforce its write
 scope in place of native scoping (`sandbox.rs`; macOS `sandbox-exec`
