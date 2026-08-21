@@ -285,16 +285,20 @@ pub fn bwrap_program() -> String {
     "bwrap".to_owned()
 }
 
-/// Build the `bwrap` argv enforcing `policy`. The filesystem is bound
+/// Build the `bwrap` argv enforcing `policy`. The whole filesystem is bound
 /// read-only (`--ro-bind / /`) so reads stay open and writes are denied by
-/// default; the writable roots are re-bound read-write on top; credential
-/// dirs are masked with an empty `tmpfs` and credential files shadowed by
-/// `/dev/null`; exec-surface files are re-bound read-only. The network
-/// namespace is left shared (network stays available — the guarantee is
-/// write scoping), and `--new-session` isolates the controlling terminal.
+/// default — including `/tmp`, which must stay read-only so the consult
+/// socket under `/tmp/mix2/<session>` remains reachable and a write there
+/// isn't an escape hatch. The writable roots (`.mix2`, the lead-tmp scratch
+/// the child's `TMPDIR` points at, the harness state dirs) are re-bound
+/// read-write on top; credential dirs are masked with an empty `tmpfs` and
+/// credential files shadowed by `/dev/null`; exec-surface files are re-bound
+/// read-only. The network namespace is left shared (network stays available
+/// — the guarantee is write scoping), and `--new-session` isolates the
+/// controlling terminal.
 ///
-/// Order matters (later mounts win): the base `--ro-bind / /` and the
-/// `--tmpfs /tmp` come first, then the writable re-binds, then the denies.
+/// Order matters (later mounts win): the base `--ro-bind / /` comes first,
+/// then the writable re-binds, then the denies.
 fn bwrap_args(policy: &SandboxPolicy, program: &str, args: &[String]) -> Vec<String> {
     let mut out: Vec<String> = vec![
         "--die-with-parent".into(),
@@ -306,15 +310,13 @@ fn bwrap_args(policy: &SandboxPolicy, program: &str, args: &[String]) -> Vec<Str
         "/dev".into(),
         "--proc".into(),
         "/proc".into(),
-        "--tmpfs".into(),
-        "/tmp".into(),
     ];
     let push2 = |out: &mut Vec<String>, flag: &str, path: &str| {
         out.push(flag.into());
         out.push(path.into());
         out.push(path.into());
     };
-    // Writable roots (re-bound rw after the ro-bind and the /tmp tmpfs).
+    // Writable roots (re-bound rw on top of the read-only root).
     for w in &policy.writable {
         push2(&mut out, "--bind", &w.to_string_lossy());
     }
@@ -645,9 +647,10 @@ mod tests {
         );
         assert!(program.ends_with("bwrap"));
         let joined = args.join(" ");
-        // Base: read-only root, tmpfs /tmp, no netns unshare (network open).
+        // Base: read-only root (incl. /tmp, so it is never a blanket
+        // writable escape), no netns unshare (network open).
         assert!(joined.contains("--ro-bind / /"));
-        assert!(joined.contains("--tmpfs /tmp"));
+        assert!(!joined.contains("--tmpfs /tmp"));
         assert!(!joined.contains("--unshare-net"));
         assert!(joined.contains("--new-session"));
         // Writable re-bind, exec-surface ro-bind, dir mask via tmpfs, file
