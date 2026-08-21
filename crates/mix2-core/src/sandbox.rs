@@ -285,14 +285,19 @@ mod tests {
     #[test]
     fn profile_orders_clauses_allow_then_deny_then_hardening() {
         let profile = seatbelt_profile(&policy()).profile;
+        // Anchor each clause on a marker unique to it: the bare withdraw
+        // line and the per-block param references (WRITE0 / DENYW0 /
+        // DENYRW0 each appear in exactly one block). The clause headers
+        // `(deny file-write*)` and `(deny file-write*\n` differ by a single
+        // character, so keying on them is too fragile to prove ordering.
         let allow_default = profile.find("(allow default)").unwrap();
         let deny_all_writes = profile.find("(deny file-write*)\n").unwrap();
-        let allow_writes = profile.find("(allow file-write*\n").unwrap();
-        let deny_exec = profile.find("(deny file-write*\n").unwrap();
-        let deny_creds = profile.find("(deny file-read* file-write*\n").unwrap();
+        let allow_writes = profile.find("WRITE0").unwrap();
+        let deny_exec = profile.find("DENYW0").unwrap();
+        let deny_creds = profile.find("DENYRW0").unwrap();
         let deny_appleevents = profile.find("(deny appleevent-send)").unwrap();
-        // Last match wins, so denies must come after the re-grant, and the
-        // credential/exec denies after the write grant.
+        // Last match wins, so the withdraw precedes the re-grant, and the
+        // exec-surface and credential denies come after the write grant.
         assert!(allow_default < deny_all_writes);
         assert!(deny_all_writes < allow_writes);
         assert!(allow_writes < deny_exec);
