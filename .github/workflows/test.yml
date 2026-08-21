@@ -6,37 +6,48 @@ on:
   pull_request:
 
 jobs:
-  check:
+  # The Rust core, where the OS-specific sandbox behavior lives, on both
+  # platforms. The Linux job installs bubblewrap so the
+  # `#[cfg(target_os = "linux")]` behavioral denial matrix actually runs on
+  # GitHub's VM runners (which permit unprivileged user namespaces).
+  rust:
     strategy:
       fail-fast: false
       matrix:
         runner: [macos-14, ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-
-      # bubblewrap backs the Linux sandbox engine; installing it means the
-      # behavioral denial matrix (`#[cfg(target_os = "linux")]`) actually
-      # runs on the GitHub VM runners (which permit unprivileged user
-      # namespaces) instead of silently skipping.
+      - uses: Swatinem/rust-cache@v2
       - name: Install bubblewrap (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: test
+        run: cargo test
 
+  # The Ink/React TUI is OS-agnostic Node; macOS coverage is sufficient (and
+  # the vitest suite has a Linux-only teardown hang tracked separately).
+  tui:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
       - name: pnpm install
         run: pnpm install --frozen-lockfile
-
-      # `pnpm check` runs the TUI suite, the Rust unit + integration tests
-      # (including the OS-sandbox behavioral matrices), clippy, and fmt.
-      - name: Check
-        run: pnpm check
+      - name: typecheck
+        run: pnpm typecheck
+      - name: test
+        run: pnpm test
