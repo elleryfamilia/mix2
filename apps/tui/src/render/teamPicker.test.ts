@@ -50,6 +50,9 @@ describe('team picker', () => {
     expect(joined).toContain('pick your team');
     expect(joined).toContain('● slot one');
     expect(joined).toContain('○ slot two');
+    // The slot lists render as bordered tiles.
+    expect(joined).toContain('╭ ● slot one');
+    expect(joined).toContain('╰');
     expect(joined).toContain('coordinates');
     // The coordinator is a description with a swap key, and leaving the
     // picker is a plain continue button — not a coordinator focus stop.
@@ -107,7 +110,7 @@ describe('team picker', () => {
       proposal: { one: 'claude', two: 'codex', lead_slot: 'two' },
     });
     // With slot two leading, codex is now blocked there and says why.
-    expect(frame(d).join('\n')).toContain('teammate-only for now');
+    expect(frame(d).join('\n')).toContain("teammate-only: can't coordinate");
   });
 
   it('shows a selection note on the chosen entry — disclosures are visible', () => {

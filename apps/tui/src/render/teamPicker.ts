@@ -18,7 +18,7 @@ import {
   theme,
   type SlotName,
 } from '../theme/theme.js';
-import { BLANK, Line, span, spread, truncate, wrapText } from './lines.js';
+import { BLANK, Line, buildTile, span, spread, truncate, wrapText, zipTiles } from './lines.js';
 
 const INDENT = 2;
 
@@ -58,7 +58,9 @@ export function selectable(entry: DiscoveredHarness, slot: SlotName, leadSlot: S
 function disabledLabel(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): string {
   if (!entry.available) return entry.reason ?? 'unavailable';
   if (entry.auth === 'unauthenticated') return entry.reason ?? 'not signed in';
-  if (slot === leadSlot && !entry.lead_eligible) return 'teammate-only for now';
+  // The why matters: this slot coordinates, and a teammate-only harness
+  // can't — on the other slot the same entry is selectable.
+  if (slot === leadSlot && !entry.lead_eligible) return "teammate-only: can't coordinate";
   return 'not eligible';
 }
 
@@ -79,7 +81,10 @@ export function entryIndexOf(discovery: DiscoveryState, harness: string): number
   );
 }
 
-function columnLines(
+/** One slot's harness list as a bordered tile: the border carries the
+ * slot's identity color when focused (quiet otherwise), and the equipped
+ * entry reads in the slot color — the `●` mark alone was too subtle. */
+function slotTile(
   discovery: DiscoveryState,
   slot: SlotName,
   selection: TeamPickerSelection,
@@ -90,12 +95,8 @@ function columnLines(
   const entries = pickerEntries(discovery);
   const chosen = slot === 'one' ? selection.one : selection.two;
   const isLead = selection.leadSlot === slot;
-  const lines: Line[] = [];
-  lines.push([
-    span(agentGlyph(slot), { color: agentColor(slot) }),
-    span(` slot ${slot}`, { color: agentColor(slot), bold: true }),
-    span(isLead ? '  · coordinates' : '', { color: theme.text.faint }),
-  ]);
+  const bodyWidth = width - 4;
+  const body: Line[] = [];
   entries.forEach((entry, i) => {
     const enabled = selectable(entry, slot, selection.leadSlot);
     const isChosen = entry.harness === chosen;
@@ -103,27 +104,45 @@ function columnLines(
     const marker = isCursor ? '›' : ' ';
     const chosenMark = isChosen ? ' ●' : '';
     const version = entry.version ? `  ${entry.version}` : '';
-    const label = truncate(`${entry.harness}${version}`, Math.max(8, width - 6));
-    lines.push([
+    const label = truncate(`${entry.harness}${version}`, Math.max(8, bodyWidth - 4));
+    body.push([
       span(`${marker} `, { color: theme.agent.team, bold: true }),
       span(label, {
-        color: !enabled ? theme.text.faint : isCursor ? theme.text.primary : theme.text.secondary,
-        bold: isCursor,
+        color: !enabled
+          ? theme.text.faint
+          : isChosen
+            ? agentColor(slot)
+            : isCursor
+              ? theme.text.primary
+              : theme.text.secondary,
+        bold: isCursor || (enabled && isChosen),
         inverse: isCursor,
       }),
       span(chosenMark, { color: agentColor(slot) }),
     ]);
     if (!enabled) {
-      const reason = truncate(disabledLabel(entry, slot, selection.leadSlot), Math.max(8, width - 4));
-      lines.push([span('   '), span(reason, { color: theme.text.faint })]);
+      const reason = truncate(disabledLabel(entry, slot, selection.leadSlot), Math.max(8, bodyWidth - 2));
+      body.push([span('  '), span(reason, { color: theme.text.faint })]);
     } else if (entry.note && isChosen) {
       // Selection disclosures (e.g. a trust flag) surface right where the
       // choice is made — nothing is passed silently.
-      const note = truncate(entry.note, Math.max(8, width - 4));
-      lines.push([span('   '), span(note, { color: theme.text.faint })]);
+      const note = truncate(entry.note, Math.max(8, bodyWidth - 2));
+      body.push([span('  '), span(note, { color: theme.text.faint })]);
     }
   });
-  return lines;
+  return buildTile(
+    {
+      headerLeft: [
+        span(agentGlyph(slot), { color: agentColor(slot) }),
+        span(` slot ${slot}`, { color: agentColor(slot), bold: true }),
+        ...(isLead ? [span(` ${glyphs.dot} coordinates`, { color: theme.text.faint })] : []),
+      ],
+      headerRight: [],
+      body,
+      borderColor: active ? agentColor(slot) : theme.border.bridge,
+    },
+    width,
+  );
 }
 
 export function renderTeamPicker(
@@ -149,26 +168,16 @@ export function renderTeamPicker(
   lines.push(BLANK);
 
   const stacked = width < TILE_BREAKPOINT;
-  const colWidth = stacked ? w - INDENT : Math.floor((w - INDENT) / 2) - 2;
-  const left = columnLines(discovery, 'one', selection, cursor.column === 0, cursor.index, colWidth);
-  const right = columnLines(discovery, 'two', selection, cursor.column === 1, cursor.index, colWidth);
+  const colWidth = stacked ? w - INDENT : Math.floor((w - INDENT - 3) / 2);
+  const left = slotTile(discovery, 'one', selection, cursor.column === 0, cursor.index, colWidth);
+  const right = slotTile(discovery, 'two', selection, cursor.column === 1, cursor.index, colWidth);
 
   if (stacked) {
     for (const line of left) lines.push([span(' '.repeat(INDENT)), ...line]);
     lines.push(BLANK);
     for (const line of right) lines.push([span(' '.repeat(INDENT)), ...line]);
   } else {
-    const height = Math.max(left.length, right.length);
-    for (let i = 0; i < height; i++) {
-      const l = left[i] ?? [span('')];
-      const lw = l.reduce((n, s) => n + s.text.length, 0);
-      lines.push([
-        span(' '.repeat(INDENT)),
-        ...l,
-        span(' '.repeat(Math.max(0, colWidth - lw) + 4)),
-        ...(right[i] ?? []),
-      ]);
-    }
+    lines.push(...zipTiles(left, right, 3));
   }
 
   lines.push(BLANK);

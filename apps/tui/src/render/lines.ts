@@ -92,3 +92,58 @@ export function indent(line: Line, spaces: number): Line {
 }
 
 export const BLANK: Line = [span('')];
+
+/** A bordered tile — one of the design system's sanctioned box exceptions
+ * (consultation tiles, the composer, the team picker's slot columns). */
+export interface TileSpec {
+  headerLeft: Line;
+  headerRight: Line;
+  body: Line[];
+  borderColor: string;
+}
+
+export function buildTile(spec: TileSpec, width: number): Line[] {
+  const inner = width - 2;
+  const border = { color: spec.borderColor };
+  const hl = spec.headerLeft.reduce((n, s) => n + s.text.length, 0);
+  const hr = spec.headerRight.reduce((n, s) => n + s.text.length, 0);
+  // With no right header the dashes run flush to the corner.
+  const top: Line =
+    hr === 0
+      ? [
+          span('╭ ', border),
+          ...spec.headerLeft,
+          span(' '),
+          span('─'.repeat(Math.max(1, inner - 2 - hl)) + '╮', border),
+        ]
+      : [
+          span('╭ ', border),
+          ...spec.headerLeft,
+          span(' '),
+          span('─'.repeat(Math.max(1, inner - 2 - hl - hr - 2)), border),
+          span(' '),
+          ...spec.headerRight,
+          span(' ╮', border),
+        ];
+  const rows = spec.body.map((line) => {
+    const text = line.reduce((n, s) => n + s.text.length, 0);
+    const fill = Math.max(0, inner - 2 - text);
+    return [span('│ ', border), ...line, span(' '.repeat(fill)), span(' │', border)];
+  });
+  const bottom: Line = [span('╰' + '─'.repeat(Math.max(0, width - 2)) + '╯', border)];
+  return [top, ...rows, bottom];
+}
+
+/** Stitch two tiles side by side with a two-space left margin. */
+export function zipTiles(left: Line[], right: Line[], gap: number): Line[] {
+  const height = Math.max(left.length, right.length);
+  const leftWidth = Math.max(...left.map((l) => l.reduce((n, s) => n + s.text.length, 0)));
+  const out: Line[] = [];
+  for (let i = 0; i < height; i++) {
+    const l = left[i] ?? [span(' '.repeat(leftWidth))];
+    const lw = l.reduce((n, s) => n + s.text.length, 0);
+    const r = right[i] ?? [];
+    out.push([span('  '), ...l, span(' '.repeat(Math.max(0, leftWidth - lw) + gap)), ...r]);
+  }
+  return out;
+}

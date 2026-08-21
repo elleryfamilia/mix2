@@ -366,20 +366,26 @@ consultations to list in the exchange below it.
 
 Shown between discovery and ready whenever the core is not auto-confirming
 (no explicit `[slot.*]` config in an interactive session, or `--pick-team`).
-Panel pattern: `◐ pick your team` header, one column per **slot** (slot
-colors, stacked under 88 cols) listing every discovered harness with its
-version, then a coordinator *description* and a **continue button**. The
-coordinator is not a control you land on — the default is right almost
-always, so it reads as a described fact (`⇄ slot one coordinates`) with a
-single swap key, and leaving the picker is a plain continue. The
-configured proposal arrives preselected with the `●` mark.
+Panel pattern: `◐ pick your team` header, one bordered tile per **slot**
+(the tile idiom from consultations — a sanctioned box exception; stacked
+under 88 cols) listing every discovered harness with its version, then a
+coordinator *description* and a **continue button**. The focused tile's
+border takes the slot's identity color (`border.bridge` quiet otherwise),
+so which slot you're equipping is unmissable. The coordinator is not a
+control you land on — the default is right almost always, so it reads as
+a described fact (`⇄ slot one coordinates`) with a single swap key, and
+leaving the picker is a plain continue. The configured proposal arrives
+preselected: each slot's equipped entry renders **bold in the slot
+color** with the `●` mark — color carries the state, the mark survives
+NO_COLOR.
 
 ```text
   ◐ pick your team — two slots, any agents          esc defaults
 
-  ● slot one  · coordinates        ○ slot two
-  › claude  2.1.232 ●                claude  2.1.232
-    codex   0.146.0                › codex   0.146.0 ●
+  ╭ ● slot one · coordinates ────╮   ╭ ○ slot two ─────────────╮
+  │ › claude  2.1.232 ●          │   │   claude  2.1.232       │
+  │   codex   0.146.0            │   │ › codex   0.146.0 ●     │
+  ╰──────────────────────────────╯   ╰─────────────────────────╯
 
   ⇄ slot one coordinates  (press c to swap)
 
@@ -401,8 +407,12 @@ explicit. Esc opts out at any point and starts the defaults.
 
 Unavailable, signed-out, or role-ineligible entries stay visible but
 disabled, each with its actionable reason on a faint line beneath
-(`not installed: …`, `not signed in: …`, `teammate-only for now`) — they
-can be highlighted to read the reason, but enter refuses to equip them.
+(`not installed: …`, `not signed in: …`, `teammate-only: can't
+coordinate`) — they can be highlighted to read the reason, but enter
+refuses to equip them. Eligibility is about the *coordinator*, not the
+slot number: a teammate-only harness is blocked wherever the coordinator
+currently sits and selectable on the other slot, and `c` moves the
+restriction with the role.
 A core refusal (`select_team` rejected) renders in place in the error
 color with focus still on continue, so retrying is one enter — the core
 keeps waiting.
@@ -439,8 +449,8 @@ never outgrows the terminal.
 
 - A rounded full-width frame separates input from output at a glance (a
   deliberate exception to the no-boxes rule, alongside the consultation
-  tiles): border in `text.faint` when ready, `border.subtle` while a turn
-  runs.
+  tiles and the team picker's slot tiles): border in `text.faint` when
+  ready, `border.subtle` while a turn runs.
 - `❯` bold in primary when focused/ready; faint while a turn runs.
 - Multiline: wrapped visually plus hard newlines.
 - Recognized slash commands highlight as you type: the command token

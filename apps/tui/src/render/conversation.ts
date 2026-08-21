@@ -22,12 +22,14 @@ import {
   BLANK,
   Line,
   Span,
+  buildTile,
   displayWidth,
   span,
   spread,
   truncate,
   truncateDisplay,
   wrapText,
+  zipTiles,
 } from './lines.js';
 import { inlineSpans, markdownLines, wrapSpans } from './markdown.js';
 
@@ -320,55 +322,6 @@ function leadWorkingLines(turn: ActiveTurn, ctx: RenderContext): Line[] {
     lines.push(...narratorLines(stream, ctx, 4));
   }
   return lines;
-}
-
-interface TileSpec {
-  headerLeft: Line;
-  headerRight: Line;
-  body: Line[];
-  borderColor: string;
-}
-
-function buildTile(spec: TileSpec, width: number): Line[] {
-  const inner = width - 2;
-  const border = { color: spec.borderColor };
-  const top: Line = [
-    span('╭ ', border),
-    ...spec.headerLeft,
-    span(' '),
-    span(
-      '─'.repeat(
-        Math.max(
-          1,
-          inner - 2 - spec.headerLeft.reduce((n, s) => n + s.text.length, 0) - spec.headerRight.reduce((n, s) => n + s.text.length, 0) - 2,
-        ),
-      ),
-      border,
-    ),
-    span(' '),
-    ...spec.headerRight,
-    span(' ╮', border),
-  ];
-  const rows = spec.body.map((line) => {
-    const text = line.reduce((n, s) => n + s.text.length, 0);
-    const fill = Math.max(0, inner - 2 - text);
-    return [span('│ ', border), ...line, span(' '.repeat(fill)), span(' │', border)];
-  });
-  const bottom: Line = [span('╰' + '─'.repeat(Math.max(0, width - 2)) + '╯', border)];
-  return [top, ...rows, bottom];
-}
-
-function zipTiles(left: Line[], right: Line[], gap: number): Line[] {
-  const height = Math.max(left.length, right.length);
-  const leftWidth = Math.max(...left.map((l) => l.reduce((n, s) => n + s.text.length, 0)));
-  const out: Line[] = [];
-  for (let i = 0; i < height; i++) {
-    const l = left[i] ?? [span(' '.repeat(leftWidth))];
-    const lw = l.reduce((n, s) => n + s.text.length, 0);
-    const r = right[i] ?? [];
-    out.push([span('  '), ...l, span(' '.repeat(Math.max(0, leftWidth - lw) + gap)), ...r]);
-  }
-  return out;
 }
 
 function consultLines(turn: ActiveTurn, consult: ConsultState, ctx: RenderContext): Line[] {
