@@ -465,20 +465,22 @@ mod tests {
     /// runner with a sandbox spec is actually confined — a write outside the
     /// granted root is denied by the kernel, and the same script with no
     /// sandbox succeeds. This is what ties build_args + wrap + spawn
-    /// together; the pure tests cover each piece in isolation.
-    #[cfg(target_os = "macos")]
+    /// together; the pure tests cover each piece in isolation. Engine-
+    /// agnostic: runs under whichever engine the host provides (Seatbelt on
+    /// macOS, bubblewrap on Linux), skipping where none is available.
+    #[cfg(unix)]
     #[tokio::test]
     async fn sandboxed_lead_write_outside_scope_is_denied_by_the_runner() {
-        use crate::sandbox::{prepare_writable_root, SandboxEngine, SandboxPolicy, SandboxSpec};
-        if !crate::sandbox::seatbelt_available() {
-            eprintln!("skipping: sandbox-exec unavailable");
+        use crate::sandbox::{prepare_writable_root, SandboxPolicy, SandboxSpec};
+        let Some(engine) = SandboxSpec::detect_engine() else {
+            eprintln!("skipping: no sandbox engine available on this host");
             return;
-        }
+        };
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().canonicalize().unwrap();
         let mix2 = prepare_writable_root(&proj.join(".mix2"), true).unwrap();
         let spec = SandboxSpec {
-            engine: SandboxEngine::Seatbelt,
+            engine,
             policy: SandboxPolicy::with_writable(vec![mix2.clone()]),
             env_remove: Vec::new(),
         };
