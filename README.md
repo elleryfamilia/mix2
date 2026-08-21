@@ -287,18 +287,30 @@ Verified against `claude` 2.1.x (`-p --output-format stream-json`,
 tolerant: unknown events from newer CLIs are ignored, never fatal.
 Missing required capabilities produce a clear startup error, and
 capability facts (enforced / unverified / unsupported) decide which
-roles a harness may hold — Claude and Codex are the lead-capable pair;
-the newer adapters consult as teammates until their lead-side
-permission scoping is verified.
+roles a harness may hold — Claude and Codex lead with native scoping,
+and Cursor/OpenCode/Copilot lead under the OS sandbox (below).
+
+### Sandboxed leads
+
+Cursor, OpenCode, and Copilot can't scope their own writes to `.mix2/`,
+so mix2 wraps them in an OS sandbox (macOS `sandbox-exec`/Seatbelt;
+Linux `bubblewrap` planned) that confines project-file writes at the
+kernel. When an engine is available (`[sandbox] mode = "auto"`, the
+default), those harnesses become lead-eligible and the picker discloses
+"leads via OS sandbox — project writes limited to `.mix2/`"; where it
+isn't, they stay teammate-only. The guarantee is *write* scoping — it
+does not filter network and reads stay open except for a credential
+deny-list, the same exposure the native `--allowedTools` lead has.
+Set `[sandbox] mode = "off"` (or `MIX2_SANDBOX_MODE=off`) to keep only
+natively-scoped leads.
 
 ## Limitations
 
 - Two slots, one coordinator. Slots are pluggable (any registered
   harness, same harness twice included), but the team is exactly two —
   wider fan-out would be a budgeted verb, not a default.
-- Cursor, OpenCode, and Copilot are teammate-only for now; leads stay
-  Claude/Codex until instruction injection and scoped write/consult
-  permissions are verified per harness.
+- Sandboxed leads confine writes, not network or reads; a prompt-injected
+  lead can still read project files and reach the network.
 - Consultations are stateless between turns by design — independence is
   the point.
 - Execution belongs to the interactive CLIs; mix2 produces the plan.

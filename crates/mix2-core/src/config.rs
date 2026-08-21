@@ -28,6 +28,27 @@ pub struct FileConfig {
     pub codex: ProviderConfig,
     #[serde(default)]
     pub slot: SlotTables,
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
+}
+
+/// The `[sandbox]` section: whether to let a harness lead under the OS
+/// sandbox when its native scoping is absent.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxConfig {
+    /// `"auto"` (default) enables sandboxed leads when an engine is present;
+    /// `"off"` keeps only natively-scoped leads (today's behavior).
+    pub mode: Option<String>,
+}
+
+/// Resolved sandbox policy mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// Wrap a lead in the OS sandbox when needed and an engine is available.
+    Auto,
+    /// Never wrap; only harnesses with native lead scoping may coordinate.
+    Off,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -91,6 +112,9 @@ pub struct Config {
     /// Non-fatal configuration conflicts (a slot value shadowing a
     /// differing legacy value), surfaced as warning events at startup.
     pub warnings: Vec<String>,
+    /// Whether a harness may lead under the OS sandbox. `MIX2_SANDBOX_MODE`
+    /// (auto|off) overrides the `[sandbox] mode` file value.
+    pub sandbox_mode: SandboxMode,
 }
 
 pub const DEFAULT_MAX_CONSULTS: u32 = 2;
@@ -223,6 +247,25 @@ impl Config {
             },
         };
 
+        // Sandbox mode: env override wins over the file, matching the
+        // command-override convention. An unrecognized value warns and
+        // falls back to auto rather than failing startup.
+        let sandbox_mode = {
+            let raw = std::env::var("MIX2_SANDBOX_MODE")
+                .ok()
+                .or_else(|| file.sandbox.mode.clone());
+            match raw.as_deref() {
+                None | Some("auto") => SandboxMode::Auto,
+                Some("off") => SandboxMode::Off,
+                Some(other) => {
+                    warnings.push(format!(
+                        "config: unknown [sandbox] mode '{other}' — using 'auto' (expected 'auto' or 'off')"
+                    ));
+                    SandboxMode::Auto
+                }
+            }
+        };
+
         let fallback_commands = registry::ALL
             .into_iter()
             .map(|harness| {
@@ -253,6 +296,7 @@ impl Config {
             fallback_commands,
             fallback_models,
             warnings,
+            sandbox_mode,
         })
     }
 }
@@ -287,6 +331,36 @@ mod tests {
 
     fn parse(s: &str) -> FileConfig {
         toml::from_str(s).expect("valid toml")
+    }
+
+    // ------------------------------------------------------------- sandbox
+    #[test]
+    fn sandbox_mode_defaults_to_auto() {
+        let cfg = Config::resolve(None, &parse("")).unwrap();
+        assert_eq!(cfg.sandbox_mode, SandboxMode::Auto);
+    }
+
+    #[test]
+    fn sandbox_mode_off_is_parsed() {
+        let cfg = Config::resolve(None, &parse("[sandbox]\nmode = \"off\"")).unwrap();
+        assert_eq!(cfg.sandbox_mode, SandboxMode::Off);
+    }
+
+    #[test]
+    fn sandbox_mode_unknown_warns_and_falls_back_to_auto() {
+        let cfg = Config::resolve(None, &parse("[sandbox]\nmode = \"paranoid\"")).unwrap();
+        assert_eq!(cfg.sandbox_mode, SandboxMode::Auto);
+        assert!(cfg
+            .warnings
+            .iter()
+            .any(|w| w.contains("unknown [sandbox] mode")));
+    }
+
+    #[test]
+    fn sandbox_unknown_field_is_rejected() {
+        // The schema is strict, so a typo'd key fails loudly rather than
+        // silently doing nothing.
+        assert!(toml::from_str::<FileConfig>("[sandbox]\nmoed = \"off\"").is_err());
     }
 
     // ---------------------------------------------------------- legacy-only

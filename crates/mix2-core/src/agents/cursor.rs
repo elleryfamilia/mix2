@@ -54,6 +54,11 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
         // dedicated system-prompt flag to make this mechanical.
         instruction_injection: CapabilityLevel::Unverified,
     },
+    // Teammate-only natively, but leadable under the OS sandbox.
+    sandboxable_lead: true,
+    state_dirs: &["~/.cursor"],
+    credential_files: &["~/.cursor/cli-config.json"],
+    env_keep_sandboxed: &[],
     // Curated from `cursor-agent --list-models` (large list; the picker's
     // filter handles the rest via manual entry). `auto` is the default and
     // the safe fallback on plans that restrict named models.
@@ -296,6 +301,7 @@ mod tests {
         request.sandbox = Some(crate::sandbox::SandboxSpec {
             engine: crate::sandbox::SandboxEngine::Seatbelt,
             policy: crate::sandbox::SandboxPolicy::with_writable(vec![]),
+            env_remove: Vec::new(),
         });
         request
     }

@@ -37,6 +37,12 @@ export const discoveredHarnessSchema = z.object({
   note: z.string().optional(),
   lead_eligible: z.boolean(),
   teammate_eligible: z.boolean(),
+  // Additive sandbox disclosure (older cores omit them). `sandboxable_lead`
+  // is a static fact (this harness could lead under the sandbox);
+  // `sandbox_lead` means it is lead-eligible this run *because* the sandbox
+  // is available, not native scoping.
+  sandboxable_lead: z.boolean().optional().default(false),
+  sandbox_lead: z.boolean().optional().default(false),
   capabilities: z.object({
     teammate_read_only: capabilityLevel,
     lead_permission_scoping: capabilityLevel,

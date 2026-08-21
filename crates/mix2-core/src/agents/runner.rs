@@ -63,12 +63,17 @@ impl HarnessAgent {
             }
             None => (self.command.clone(), base_args),
         };
+        let env_remove: &[String] = match &request.sandbox {
+            Some(spec) => &spec.env_remove,
+            None => &[],
+        };
 
         let mut child = ChildProcess::spawn(SpawnOptions {
             program: &program,
             args: &args,
             cwd: &request.cwd,
             env: &env,
+            env_remove,
             stdin,
         })?;
 
@@ -398,6 +403,10 @@ mod tests {
             lead_permission_scoping: CapabilityLevel::Unsupported,
             instruction_injection: CapabilityLevel::Enforced,
         },
+        sandboxable_lead: true,
+        state_dirs: &[],
+        credential_files: &[],
+        env_keep_sandboxed: &[],
         known_models: &[],
         models_args: None,
         version_args: &["--version"],
@@ -451,6 +460,7 @@ mod tests {
         let spec = SandboxSpec {
             engine: SandboxEngine::Seatbelt,
             policy: SandboxPolicy::with_writable(vec![mix2.clone()]),
+            env_remove: Vec::new(),
         };
 
         // Allowed: write inside the granted root, under the sandbox.

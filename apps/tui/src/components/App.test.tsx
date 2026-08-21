@@ -103,6 +103,8 @@ const discovered: Extract<CoreEvent, { type: 'harnesses.discovered' }> = {
       available: true,
       lead_eligible: true,
       teammate_eligible: true,
+      sandboxable_lead: false,
+      sandbox_lead: false,
       capabilities: pickerCaps,
     },
     {
@@ -113,6 +115,8 @@ const discovered: Extract<CoreEvent, { type: 'harnesses.discovered' }> = {
       available: true,
       lead_eligible: true,
       teammate_eligible: true,
+      sandboxable_lead: false,
+      sandbox_lead: false,
       capabilities: pickerCaps,
     },
   ],

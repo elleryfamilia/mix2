@@ -23,6 +23,8 @@ function harness(overrides: Partial<DiscoveredHarness> & { harness: 'claude' | '
     available: true,
     lead_eligible: true,
     teammate_eligible: true,
+    sandboxable_lead: false,
+    sandbox_lead: false,
     capabilities: caps,
     ...overrides,
   };
@@ -111,6 +113,37 @@ describe('team picker', () => {
     });
     // With slot two leading, codex is now blocked there and says why.
     expect(frame(d).join('\n')).toContain("teammate-only: can't coordinate");
+  });
+
+  it('a sandbox-only harness shows the actionable reason, not a permanent block', () => {
+    // sandboxable but not lead-eligible here (no engine) → the label points
+    // at the fix rather than reading as a permanent limitation.
+    const needsSandbox = harness({
+      harness: 'codex',
+      lead_eligible: false,
+      sandboxable_lead: true,
+    });
+    const d = discovery({
+      harnesses: [harness({ harness: 'claude' }), needsSandbox],
+      proposal: { one: 'claude', two: 'codex', lead_slot: 'two' },
+    });
+    const joined = frame(d).join('\n');
+    expect(joined).toContain('needs the OS sandbox to coordinate');
+    expect(joined).not.toContain("teammate-only: can't coordinate");
+  });
+
+  it('a sandbox-led coordinator discloses its confined write scope', () => {
+    const sandboxLed = harness({
+      harness: 'codex',
+      sandbox_lead: true,
+      sandboxable_lead: true,
+    });
+    const d = discovery({
+      harnesses: [harness({ harness: 'claude' }), sandboxLed],
+      proposal: { one: 'claude', two: 'codex', lead_slot: 'two' },
+    });
+    // codex leads (slot two) via the sandbox → the disclosure shows.
+    expect(frame(d).join('\n')).toContain('leads via OS sandbox');
   });
 
   it('shows a selection note on the chosen entry — disclosures are visible', () => {

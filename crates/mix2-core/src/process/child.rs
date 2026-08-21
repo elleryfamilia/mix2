@@ -21,6 +21,9 @@ pub struct SpawnOptions<'a> {
     pub args: &'a [String],
     pub cwd: &'a Path,
     pub env: &'a HashMap<String, String>,
+    /// Inherited environment variables to unset before spawning (credential
+    /// vars stripped from a sandboxed lead). Removed before `env` is applied.
+    pub env_remove: &'a [String],
     /// Written to the child's stdin, which is then closed.
     pub stdin: Option<&'a str>,
 }
@@ -38,6 +41,11 @@ impl ChildProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Strip inherited credential vars first, then apply our additions —
+        // an explicit `env` entry always wins over a removal of the same key.
+        for k in opts.env_remove {
+            cmd.env_remove(k);
+        }
         for (k, v) in opts.env {
             cmd.env(k, v);
         }

@@ -63,6 +63,16 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
         // Role instructions ride in-band ahead of the prompt.
         instruction_injection: CapabilityLevel::Unverified,
     },
+    // Teammate-only natively, but leadable under the OS sandbox.
+    sandboxable_lead: true,
+    state_dirs: &[
+        "~/.local/share/opencode",
+        "~/.config/opencode",
+        "~/.cache/opencode",
+        "~/.local/state/opencode",
+    ],
+    credential_files: &["~/.local/share/opencode/auth.json"],
+    env_keep_sandboxed: &[],
     // Live enumeration via `models_args` supplies the real list; this
     // static fallback stays empty so a failed enumeration degrades to
     // typed `/model two provider/model` entry.
@@ -290,6 +300,7 @@ mod tests {
         request.sandbox = Some(crate::sandbox::SandboxSpec {
             engine: crate::sandbox::SandboxEngine::Seatbelt,
             policy: crate::sandbox::SandboxPolicy::with_writable(vec![]),
+            env_remove: Vec::new(),
         });
         request
     }

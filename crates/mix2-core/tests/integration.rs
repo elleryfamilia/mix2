@@ -55,7 +55,11 @@ impl Default for CoreOptions {
             max_consults: None,
             config_extra: String::new(),
             pick_team: false,
-            env: Vec::new(),
+            // Default the sandbox off so eligibility is deterministic across
+            // hosts: on a Mac with sandbox-exec, `auto` would flip
+            // cursor/opencode/copilot to lead-eligible and break the
+            // "cannot lead" assertions. Sandbox-specific tests opt into auto.
+            env: vec![("MIX2_SANDBOX_MODE".to_owned(), "off".to_owned())],
         }
     }
 }
@@ -1242,13 +1246,50 @@ fn cursor_is_discoverable_with_note_and_refused_as_lead() {
     assert!(find(&events, "error").unwrap()["message"]
         .as_str()
         .unwrap()
-        .contains("cannot lead yet"));
+        .contains("can only lead under the OS sandbox"));
 
     core.send(&serde_json::json!({
         "type": "select_team", "one": "claude", "two": "cursor", "lead_slot": "one",
     }));
     let events = core.events_until("ready", LONG);
     assert_eq!(find(&events, "ready").unwrap()["two"]["harness"], "cursor");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_auto_makes_cursor_lead_eligible() {
+    // With the sandbox available and mode=auto, a Cursor lead is accepted
+    // (the OS sandbox enforces its write scope) and startup reaches ready —
+    // the same config that mode=off refuses. Gated to macOS, where
+    // sandbox-exec is present; elsewhere no engine means no eligibility.
+    let core = Core::start(CoreOptions {
+        lead: None,
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        config_extra:
+            "lead = \"one\"\n[slot.one]\nharness = \"cursor\"\n[slot.two]\nharness = \"claude\"\n"
+                .to_owned(),
+        env: vec![("MIX2_SANDBOX_MODE".to_owned(), "auto".to_owned())],
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let harnesses = find(&startup, "harnesses.discovered").unwrap()["harnesses"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let cursor = harnesses.iter().find(|h| h["harness"] == "cursor").unwrap();
+    // Derived eligibility: not native, but leadable via the sandbox.
+    assert_eq!(cursor["lead_eligible"], true);
+    assert_eq!(cursor["sandbox_lead"], true);
+
+    // Startup settles on the Cursor lead instead of the "cannot lead" fatal.
+    let ready = core.events_until("ready", LONG);
+    assert_eq!(find(&ready, "ready").unwrap()["one"]["harness"], "cursor");
+    let _ = core;
 }
 
 #[test]
@@ -1277,7 +1318,7 @@ fn config_naming_an_ineligible_lead_is_refused_on_the_auto_path() {
         find(&events, "fatal").unwrap()["message"]
             .as_str()
             .unwrap()
-            .contains("cannot lead yet"),
+            .contains("can only lead under the OS sandbox"),
         "auto path must refuse the ineligible lead: {:#?}",
         types(&events)
     );
@@ -1306,12 +1347,15 @@ fn dev_run_refuses_an_ineligible_lead() {
         .env("MIX2_CODEX_CMD", "/nonexistent/codex-binary")
         .env("MIX2_OPENCODE_CMD", "/nonexistent/opencode-binary")
         .env("MIX2_COPILOT_CMD", "/nonexistent/copilot-binary")
+        // Sandbox off so the refusal is deterministic on hosts with an
+        // engine (else auto would make the Cursor lead eligible).
+        .env("MIX2_SANDBOX_MODE", "off")
         .output()
         .expect("run mix2-core dev");
     assert!(!output.status.success(), "dev_run must exit non-zero");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("cannot lead yet"),
+        stderr.contains("can only lead under the OS sandbox"),
         "dev_run must refuse the ineligible lead; stderr: {stderr}"
     );
 }
@@ -1565,7 +1609,7 @@ fn a_teammate_only_pair_cannot_form_a_team() {
     assert!(find(&events, "error").unwrap()["message"]
         .as_str()
         .unwrap()
-        .contains("Cursor cannot lead yet"));
+        .contains("Cursor can only lead under the OS sandbox"));
 
     core.send(&serde_json::json!({
         "type": "select_team", "one": "cursor", "two": "opencode", "lead_slot": "two",
@@ -1574,7 +1618,7 @@ fn a_teammate_only_pair_cannot_form_a_team() {
     assert!(find(&events, "error").unwrap()["message"]
         .as_str()
         .unwrap()
-        .contains("OpenCode cannot lead yet"));
+        .contains("OpenCode can only lead under the OS sandbox"));
 
     core.send(&serde_json::json!({
         "type": "select_team", "one": "claude", "two": "opencode", "lead_slot": "one",
