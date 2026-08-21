@@ -40,6 +40,9 @@ struct CoreOptions {
     config_extra: String,
     /// Sent on initialize: forces the selection handshake.
     pick_team: bool,
+    /// Overrides the working directory sent on initialize (defaults to the
+    /// process cwd). Used by the sandbox test to run in a throwaway tree.
+    cwd: Option<String>,
     env: Vec<(String, String)>,
 }
 
@@ -55,6 +58,7 @@ impl Default for CoreOptions {
             max_consults: None,
             config_extra: String::new(),
             pick_team: false,
+            cwd: None,
             // Default the sandbox off so eligibility is deterministic across
             // hosts: on a Mac with sandbox-exec, `auto` would flip
             // cursor/opencode/copilot to lead-eligible and break the
@@ -131,9 +135,13 @@ impl Core {
             stdin,
             events: rx,
         };
+        let cwd = options
+            .cwd
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap().display().to_string());
         let mut init = serde_json::json!({
             "type": "initialize", "protocol": 3,
-            "cwd": std::env::current_dir().unwrap().display().to_string(),
+            "cwd": cwd,
         });
         if let Some(lead) = options.lead {
             init["lead"] = serde_json::json!(lead);
@@ -1290,6 +1298,81 @@ fn sandbox_auto_makes_cursor_lead_eligible() {
     let ready = core.events_until("ready", LONG);
     assert_eq!(find(&ready, "ready").unwrap()["one"]["harness"], "cursor");
     let _ = core;
+}
+
+/// Full serve-loop proof that a sandboxed lead is actually confined by the
+/// kernel: with `mode = auto` on a host that has a sandbox engine (macOS
+/// Seatbelt, Linux `bwrap`), a lead runs a real turn but a write to the
+/// project outside `.mix2/` is denied while a write inside `.mix2/`
+/// succeeds. Engine-agnostic and self-skipping: on a host with no engine
+/// the harness isn't sandboxed (`sandbox_lead: false`), so the enforcement
+/// assertion is skipped rather than false-failing.
+#[cfg(unix)]
+#[test]
+fn sandboxed_lead_turn_denies_project_writes_end_to_end() {
+    // Anchor the project under /tmp, NOT the default temp dir: on macOS the
+    // per-user Darwin folder is granted writable, which would let the
+    // "leak" write succeed and mask the test.
+    let dir = tempfile::Builder::new()
+        .prefix("mix2-sbx-")
+        .tempdir_in("/tmp")
+        .expect("tempdir under /tmp");
+    let cwd = dir.path().canonicalize().unwrap();
+
+    let core = Core::start(CoreOptions {
+        lead: None,
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-sandbox-lead")
+                .display()
+                .to_string(),
+        ),
+        config_extra:
+            "lead = \"one\"\n[slot.one]\nharness = \"cursor\"\n[slot.two]\nharness = \"claude\"\n"
+                .to_owned(),
+        cwd: Some(cwd.display().to_string()),
+        env: vec![("MIX2_SANDBOX_MODE".to_owned(), "auto".to_owned())],
+        ..CoreOptions::default()
+    });
+
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let harnesses = find(&startup, "harnesses.discovered").unwrap()["harnesses"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let cursor = harnesses.iter().find(|h| h["harness"] == "cursor").unwrap();
+    if cursor["sandbox_lead"] != true {
+        eprintln!("skipping: no sandbox engine on this host (cursor not sandboxed)");
+        return;
+    }
+
+    core.events_until("ready", LONG);
+    // A `mut` handle is needed to submit.
+    let mut core = core;
+    core.submit("t1", "probe the sandbox");
+    let done = core.events_until("turn.completed", LONG);
+
+    // The lead's own report, and the ground truth on disk.
+    let final_text = find(&done, "message.final").unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        final_text.contains("[leaked:no]"),
+        "sandboxed lead reported it could write outside .mix2: {final_text}"
+    );
+    assert!(
+        final_text.contains("[mix2write:yes]"),
+        "sandboxed lead could not write .mix2: {final_text}"
+    );
+    assert!(
+        !cwd.join("SANDBOX-PROBE-LEAKED.txt").exists(),
+        "a project write outside .mix2 escaped the sandbox"
+    );
+    assert!(
+        cwd.join(".mix2/sandbox-ok.txt").exists(),
+        ".mix2 write should be allowed under the sandbox"
+    );
 }
 
 #[test]
