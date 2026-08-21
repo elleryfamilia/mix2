@@ -308,6 +308,50 @@ fn lock_disagreement(
     slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Read a file, refusing to follow a final-component symlink (`O_NOFOLLOW`).
+/// Returns `None` when the path is a symlink, missing, or unreadable — the
+/// caller drops such a request rather than dereferencing an attacker-planted
+/// link. Non-Unix falls back to a plain read (mix2's IPC is Unix-only today).
+async fn read_no_follow(path: &std::path::Path) -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut opts = tokio::fs::OpenOptions::new();
+        opts.read(true).custom_flags(libc::O_NOFOLLOW);
+        let mut file = opts.open(path).await.ok()?;
+        let mut buf = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut file, &mut buf)
+            .await
+            .ok()?;
+        Some(buf)
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::fs::read_to_string(path).await.ok()
+    }
+}
+
+/// Write `payload` to `<dir>/res-<id>.json`, staging through a tmp file
+/// opened with `O_CREAT|O_EXCL|O_NOFOLLOW` so a pre-planted symlink or file
+/// at the tmp name cannot redirect or capture the write. The rename onto the
+/// final name replaces (never follows) any symlink at the destination.
+async fn write_response_no_follow(
+    dir: &std::path::Path,
+    id: &str,
+    payload: &str,
+) -> std::io::Result<()> {
+    let tmp = dir.join(format!("res-{id}.json.tmp"));
+    let fin = dir.join(format!("res-{id}.json"));
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    opts.custom_flags(libc::O_NOFOLLOW);
+    let mut file = opts.open(&tmp).await?;
+    file.write_all(payload.as_bytes()).await?;
+    file.flush().await?;
+    drop(file);
+    tokio::fs::rename(&tmp, &fin).await
+}
+
 /// Watch `<runtime_dir>/consult/` for `req-*.json`, answer with
 /// `res-<id>.json` (written atomically via rename).
 async fn file_transport_loop(shared: Arc<Shared>) {
@@ -336,14 +380,22 @@ async fn file_transport_loop(shared: Arc<Shared>) {
             let id = id.to_owned();
             let path = entry.path();
             tokio::spawn(async move {
-                let line = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+                // Read the request without following symlinks: the lead
+                // writes into this dir, so a `req-*.json` symlink must not
+                // make the core read (and echo, via a parse error) a file
+                // outside it. A symlinked or unreadable request is dropped.
+                let Some(line) = read_no_follow(&path).await else {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return;
+                };
                 let response = handle_line(&shared, &line).await;
                 let payload = serde_json::to_string(&response).unwrap_or_default();
-                let tmp = dir.join(format!("res-{id}.json.tmp"));
-                let fin = dir.join(format!("res-{id}.json"));
-                if tokio::fs::write(&tmp, payload).await.is_ok() {
-                    let _ = tokio::fs::rename(&tmp, &fin).await;
-                }
+                // Write the response without following or clobbering an
+                // existing path: a symlink planted at the tmp name must not
+                // redirect the core's write outside the runtime dir
+                // (confused-deputy hardening; also guards this path when a
+                // future sandboxed lead can write the consult dir).
+                let _ = write_response_no_follow(&dir, &id, &payload).await;
                 let _ = tokio::fs::remove_file(&path).await;
             });
         }
@@ -1113,6 +1165,68 @@ mod tests {
             Some(
                 "no completed consultation this turn — disclose the disagreement in prose instead."
             )
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_response_refuses_a_symlinked_tmp_target() {
+        // Confused-deputy guard: if the tmp name is a symlink pointing
+        // outside the consult dir, the core must refuse rather than write
+        // the response through it. O_CREAT|O_EXCL|O_NOFOLLOW makes the open
+        // fail, and the external target stays untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("victim.txt");
+        std::fs::write(&target, "original").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("res-x.json.tmp")).unwrap();
+
+        let result = write_response_no_follow(dir.path(), "x", "attacker payload").await;
+        assert!(result.is_err(), "symlinked tmp target must be refused");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "original",
+            "the external file must be untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_response_lands_at_the_final_name() {
+        // The happy path still works: no symlink, response renamed into
+        // place under the consult dir.
+        let dir = tempfile::tempdir().unwrap();
+        write_response_no_follow(dir.path(), "abc", "hello")
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("res-abc.json")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_no_follow_drops_a_symlinked_request() {
+        // A `req-*.json` symlink must not make the core read a file outside
+        // the consult dir (whose parse error could echo its contents).
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("secret.txt");
+        std::fs::write(&secret, "top secret").unwrap();
+        let link = dir.path().join("req-1.json");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        assert!(
+            read_no_follow(&link).await.is_none(),
+            "a symlinked request is dropped, not dereferenced"
+        );
+
+        // A real file reads normally.
+        let real = dir.path().join("req-2.json");
+        std::fs::write(&real, "{\"real\":true}").unwrap();
+        assert_eq!(
+            read_no_follow(&real).await.as_deref(),
+            Some("{\"real\":true}")
         );
     }
 }
