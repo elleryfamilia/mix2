@@ -35,7 +35,7 @@ impl HarnessAgent {
         cancel: CancellationToken,
     ) -> Result<AgentResult> {
         let label = self.descriptor.label;
-        let args = (self.descriptor.build_args)(&request, resume);
+        let base_args = (self.descriptor.build_args)(&request, resume);
         let mut env = request.env.clone();
         if let Some(prepend) = &request.path_prepend {
             let path = std::env::var("PATH").unwrap_or_default();
@@ -43,14 +43,29 @@ impl HarnessAgent {
         }
 
         // Prompt delivery is descriptor-declared: positional-argument CLIs
-        // (cursor) already carry it in `args`; the rest read stdin.
+        // (cursor) already carry it in `args`; the rest read stdin. Compute
+        // it against the real command before any sandbox wrapping.
         let stdin = if self.descriptor.prompt_in_args {
             None
         } else {
             Some(request.prompt.as_str())
         };
+
+        // Wrap in the OS sandbox when the request carries one (a lead whose
+        // harness can't scope its own writes). The engine execs the real
+        // command in place, so stdin/stdout and the process-group kill are
+        // unaffected; the argv is otherwise byte-identical to the native
+        // run, which is what makes an unsandboxed run a true rollback.
+        let sandboxed = request.sandbox.is_some();
+        let (program, args) = match &request.sandbox {
+            Some(spec) => {
+                crate::sandbox::wrap(spec.engine, &spec.policy, &self.command, &base_args)
+            }
+            None => (self.command.clone(), base_args),
+        };
+
         let mut child = ChildProcess::spawn(SpawnOptions {
-            program: &self.command,
+            program: &program,
             args: &args,
             cwd: &request.cwd,
             env: &env,
@@ -99,7 +114,7 @@ impl HarnessAgent {
             bail!("{label} failed: {err}");
         }
         if !status.success() && outcome.final_text.is_none() {
-            let msg = friendly_failure(label, &status, &stderr_tail);
+            let msg = friendly_failure(label, &status, &stderr_tail, sandboxed);
             let _ = events
                 .send(AgentEvent::Failed {
                     message: msg.clone(),
@@ -120,8 +135,29 @@ pub(crate) fn friendly_failure(
     provider: &str,
     status: &std::process::ExitStatus,
     stderr_tail: &str,
+    sandboxed: bool,
 ) -> String {
     let tail = stderr_tail.trim();
+    // A sandboxed lead whose harness has started self-sandboxing collides
+    // with the outer engine: macOS reports `sandbox_apply: Operation not
+    // permitted` and exit 71. Attribute that to the sandbox so it never
+    // reads as a harness bug, and so the canary is obvious in logs.
+    if sandboxed
+        && (tail.contains("sandbox_apply: Operation not permitted") || status.code() == Some(71))
+    {
+        return format!(
+            "sandbox: {provider} could not start under the mix2 sandbox — it appears to apply \
+             its own sandbox, which cannot nest. Run it as the teammate, or turn the mix2 \
+             sandbox off for this harness. ({status})"
+        );
+    }
+    // The engine itself refusing (bad profile, missing binary) prints its
+    // own diagnostic; surface it as a sandbox failure, not a harness one.
+    if sandboxed && tail.contains("sandbox-exec:") {
+        return format!("sandbox: engine error starting {provider}: {tail} ({status})");
+    }
+    // Otherwise the harness ran under the sandbox and failed on its own
+    // terms — its message stands, no misleading sandbox prefix.
     if tail.is_empty() {
         format!("{provider} exited with {status}")
     } else {
@@ -276,5 +312,167 @@ impl Agent for HarnessAgent {
         cancel: CancellationToken,
     ) -> Result<AgentResult> {
         self.run(request, Some(&session.id), events, cancel).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::descriptor::{
+        AuthProbe, Capabilities, CapabilityLevel, DecodeOutcome, Decoder,
+    };
+    use crate::agents::AgentRole;
+    use std::process::ExitStatus;
+
+    fn status_from_code(code: i32) -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = code;
+            std::process::Command::new("false").status().unwrap()
+        }
+    }
+
+    #[test]
+    fn friendly_failure_attributes_nested_sandbox_to_the_engine() {
+        // Exit 71 (or the macOS signature) under a sandbox is the harness
+        // self-sandboxing and colliding with the outer engine.
+        let msg = friendly_failure("cursor", &status_from_code(71), "", true);
+        assert!(msg.starts_with("sandbox:"), "{msg}");
+        assert!(msg.contains("cannot nest"), "{msg}");
+    }
+
+    #[test]
+    fn friendly_failure_does_not_blame_the_sandbox_for_a_harness_error() {
+        // A harness that ran fine under the sandbox and failed on its own
+        // terms keeps its own message — no misleading sandbox prefix.
+        let msg = friendly_failure("cursor", &status_from_code(1), "model refused", true);
+        assert!(!msg.starts_with("sandbox:"), "{msg}");
+        assert!(msg.contains("model refused"), "{msg}");
+    }
+
+    #[test]
+    fn friendly_failure_unsandboxed_is_unchanged() {
+        let msg = friendly_failure("codex", &status_from_code(2), "boom", false);
+        assert_eq!(
+            msg,
+            format!("codex exited with {}: boom", status_from_code(2))
+        );
+    }
+
+    // A minimal harness whose "prompt" is a shell script: build_args runs it
+    // via `/bin/sh -c`, and the decoder is a no-op so success/failure is
+    // driven purely by the child's exit status. Used to prove the runner
+    // actually spawns the harness under the sandbox engine.
+    struct NoopDecoder;
+    impl Decoder for NoopDecoder {
+        fn parse_line(&mut self, _line: &str) -> Vec<AgentEvent> {
+            Vec::new()
+        }
+        fn finish(&mut self) -> DecodeOutcome {
+            DecodeOutcome::default()
+        }
+    }
+
+    fn script_args(request: &AgentRequest, _resume: Option<&str>) -> Vec<String> {
+        vec!["-c".to_owned(), request.prompt.clone()]
+    }
+
+    static SCRIPT_DESCRIPTOR: Descriptor = Descriptor {
+        harness: HarnessKind::Cursor,
+        label: "script",
+        default_command: "/bin/sh",
+        aliases: &[],
+        command_env_override: "MIX2_SCRIPT_CMD_UNUSED",
+        install_hint: "",
+        login_hint: "",
+        selection_note: None,
+        prompt_in_args: true,
+        capabilities: Capabilities {
+            teammate_read_only: CapabilityLevel::Enforced,
+            lead_permission_scoping: CapabilityLevel::Unsupported,
+            instruction_injection: CapabilityLevel::Enforced,
+        },
+        known_models: &[],
+        models_args: None,
+        version_args: &["--version"],
+        parse_version: |_| "0".to_owned(),
+        auth_probe: AuthProbe::None,
+        build_args: script_args,
+        new_decoder: || Box::new(NoopDecoder),
+    };
+
+    async fn run_script(
+        script: String,
+        sandbox: Option<crate::sandbox::SandboxSpec>,
+    ) -> Result<()> {
+        let agent = HarnessAgent::new(&SCRIPT_DESCRIPTOR, "/bin/sh");
+        let request = AgentRequest {
+            prompt: script,
+            cwd: std::env::temp_dir(),
+            role: AgentRole::Lead,
+            turn_id: uuid::Uuid::nil(),
+            model: None,
+            instructions: String::new(),
+            env: std::collections::HashMap::new(),
+            path_prepend: None,
+            runtime_dir: None,
+            sandbox,
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        agent
+            .run(request, None, tx, CancellationToken::new())
+            .await
+            .map(|_| ())
+    }
+
+    /// The end-to-end proof for this PR: a lead command spawned through the
+    /// runner with a sandbox spec is actually confined — a write outside the
+    /// granted root is denied by the kernel, and the same script with no
+    /// sandbox succeeds. This is what ties build_args + wrap + spawn
+    /// together; the pure tests cover each piece in isolation.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn sandboxed_lead_write_outside_scope_is_denied_by_the_runner() {
+        use crate::sandbox::{prepare_writable_root, SandboxEngine, SandboxPolicy, SandboxSpec};
+        if !crate::sandbox::seatbelt_available() {
+            eprintln!("skipping: sandbox-exec unavailable");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().canonicalize().unwrap();
+        let mix2 = prepare_writable_root(&proj.join(".mix2"), true).unwrap();
+        let spec = SandboxSpec {
+            engine: SandboxEngine::Seatbelt,
+            policy: SandboxPolicy::with_writable(vec![mix2.clone()]),
+        };
+
+        // Allowed: write inside the granted root, under the sandbox.
+        run_script(
+            format!("echo ok > {}/in.txt", mix2.display()),
+            Some(spec.clone()),
+        )
+        .await
+        .expect("write inside .mix2 should succeed under the sandbox");
+
+        // Denied: write outside the granted root fails the invocation, and
+        // the escape file is never created.
+        let escape = proj.join("escape.txt");
+        let denied = run_script(format!("echo bad > {}", escape.display()), Some(spec)).await;
+        assert!(denied.is_err(), "write outside .mix2 must be denied");
+        assert!(!escape.exists(), "the out-of-scope file must not exist");
+
+        // Control: with no sandbox the same out-of-scope write succeeds,
+        // proving the denial came from the sandbox, not the script.
+        let escape2 = proj.join("escape2.txt");
+        run_script(format!("echo ok > {}", escape2.display()), None)
+            .await
+            .expect("unsandboxed write should succeed");
+        assert!(escape2.exists());
     }
 }

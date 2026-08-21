@@ -697,6 +697,7 @@ async fn run_consultation(
         env,
         path_prepend: shared.helper_dir.clone(),
         runtime_dir: None,
+        sandbox: None,
     };
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);

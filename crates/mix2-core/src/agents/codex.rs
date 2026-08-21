@@ -332,6 +332,7 @@ mod tests {
             env: HashMap::new(),
             path_prepend: None,
             runtime_dir: runtime_dir.map(PathBuf::from),
+            sandbox: None,
         }
     }
 

@@ -38,6 +38,17 @@ pub enum SandboxEngine {
     Seatbelt,
 }
 
+/// A fully-resolved sandbox to apply to one lead invocation: the engine and
+/// the write policy. Attached to an [`crate::agents::agent::AgentRequest`];
+/// the runner wraps the command with it just before spawning. Absent means
+/// "run natively" (teammates, and leads whose harness enforces its own
+/// scoping) — its absence keeps the command byte-identical to today.
+#[derive(Debug, Clone)]
+pub struct SandboxSpec {
+    pub engine: SandboxEngine,
+    pub policy: SandboxPolicy,
+}
+
 /// Absolute path to the macOS sandbox binary — the same trusted path the
 /// availability probe validates, never a `PATH` lookup.
 pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
