@@ -30,12 +30,13 @@
 
 use std::path::{Path, PathBuf};
 
-/// Which OS mechanism backs the sandbox. Linux (`Bwrap`) is added in a
-/// follow-up; the enum exists now so the policy/wrap seam is stable.
+/// Which OS mechanism backs the sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxEngine {
     /// macOS `sandbox-exec` (Seatbelt).
     Seatbelt,
+    /// Linux `bubblewrap` (`bwrap`).
+    Bwrap,
 }
 
 /// A fully-resolved sandbox to apply to one lead invocation: the engine and
@@ -55,15 +56,19 @@ pub struct SandboxSpec {
 }
 
 impl SandboxSpec {
-    /// Detect the platform engine (macOS Seatbelt today), returning `None`
-    /// when no usable engine is present — callers then leave the harness
-    /// lead-ineligible rather than pretending to confine it.
+    /// Detect the platform engine, returning `None` when no usable engine is
+    /// present — callers then leave the harness lead-ineligible rather than
+    /// pretending to confine it. macOS → Seatbelt; Linux → bubblewrap (only
+    /// if a real sandboxed invocation succeeds, since unprivileged user
+    /// namespaces are restricted on some distros).
     pub fn detect_engine() -> Option<SandboxEngine> {
         if seatbelt_available() {
-            Some(SandboxEngine::Seatbelt)
-        } else {
-            None
+            return Some(SandboxEngine::Seatbelt);
         }
+        if bwrap_available() {
+            return Some(SandboxEngine::Bwrap);
+        }
+        None
     }
 }
 
@@ -254,14 +259,116 @@ pub fn wrap(
             out.extend(args.iter().cloned());
             (SANDBOX_EXEC.to_owned(), out)
         }
+        SandboxEngine::Bwrap => {
+            let out = bwrap_args(policy, program, args);
+            (bwrap_program(), out)
+        }
     }
 }
 
-/// Whether the macOS sandbox engine is usable here: run a trivial
-/// allow-default profile around `/usr/bin/true` and require success. A
-/// `which`-style existence check is insufficient — the binary can be
-/// present but the mechanism unusable — so this actually exercises it.
-/// Cheap, quota-free, no model involved; the discovery layer caches it.
+/// The `bwrap` binary path — the first of the common install locations that
+/// exists, else the bare name (resolved via `PATH`). Resolved rather than
+/// bare so the same trusted path the probe validated is the one exec'd.
+pub fn bwrap_program() -> String {
+    for candidate in ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"] {
+        if Path::new(candidate).exists() {
+            return candidate.to_owned();
+        }
+    }
+    "bwrap".to_owned()
+}
+
+/// Build the `bwrap` argv enforcing `policy`. The filesystem is bound
+/// read-only (`--ro-bind / /`) so reads stay open and writes are denied by
+/// default; the writable roots are re-bound read-write on top; credential
+/// dirs are masked with an empty `tmpfs` and credential files shadowed by
+/// `/dev/null`; exec-surface files are re-bound read-only. The network
+/// namespace is left shared (network stays available — the guarantee is
+/// write scoping), and `--new-session` isolates the controlling terminal.
+///
+/// Order matters (later mounts win): the base `--ro-bind / /` and the
+/// `--tmpfs /tmp` come first, then the writable re-binds, then the denies.
+fn bwrap_args(policy: &SandboxPolicy, program: &str, args: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = vec![
+        "--die-with-parent".into(),
+        "--new-session".into(),
+        "--ro-bind".into(),
+        "/".into(),
+        "/".into(),
+        "--dev".into(),
+        "/dev".into(),
+        "--proc".into(),
+        "/proc".into(),
+        "--tmpfs".into(),
+        "/tmp".into(),
+    ];
+    let push2 = |out: &mut Vec<String>, flag: &str, path: &str| {
+        out.push(flag.into());
+        out.push(path.into());
+        out.push(path.into());
+    };
+    // Writable roots (re-bound rw after the ro-bind and the /tmp tmpfs).
+    for w in &policy.writable {
+        push2(&mut out, "--bind", &w.to_string_lossy());
+    }
+    // Exec-surface files stay read-only even inside a writable parent.
+    // `--ro-bind-try` tolerates a not-yet-created surface.
+    for d in &policy.deny_write {
+        push2(&mut out, "--ro-bind-try", &d.to_string_lossy());
+    }
+    // Credential denies: mask an existing directory with an empty tmpfs,
+    // and shadow anything else (a file, or a not-yet-created path) with
+    // /dev/null. Both hide the content (no read) and block writes.
+    for d in &policy.deny_read_write {
+        let s = d.to_string_lossy().into_owned();
+        if d.is_dir() {
+            out.push("--tmpfs".into());
+            out.push(s);
+        } else {
+            out.push("--ro-bind".into());
+            out.push("/dev/null".into());
+            out.push(s);
+        }
+    }
+    for flag in [
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+    ] {
+        out.push(flag.into());
+    }
+    if !policy.allow_network {
+        out.push("--unshare-net".into());
+    }
+    out.push("--".into());
+    out.push(program.to_owned());
+    out.extend(args.iter().cloned());
+    out
+}
+
+/// Whether the Linux sandbox engine is usable here: run a trivial sandboxed
+/// `/bin/true` and require success. Not a `which` check — unprivileged user
+/// namespaces are restricted on some distros (Ubuntu's AppArmor, hardened
+/// kernels), so the mechanism can be installed yet unusable; this exercises
+/// it. Cheap, quota-free; the discovery layer caches the result.
+#[cfg(target_os = "linux")]
+pub fn bwrap_available() -> bool {
+    std::process::Command::new(bwrap_program())
+        .args(["--ro-bind", "/", "/", "--unshare-user", "--", "/bin/true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn bwrap_available() -> bool {
+    false
+}
+
 /// Central credential directories/files denied read+write to any sandboxed
 /// lead. Tilde-relative; expanded against `$HOME` at build time. The lead's
 /// *own* harness credentials are layered back in as readable by the caller.
@@ -403,6 +510,11 @@ pub fn build_lead_spec(inputs: LeadSpecInputs<'_>) -> std::io::Result<(SandboxSp
     Ok((spec, lead_tmp))
 }
 
+/// Whether the macOS sandbox engine is usable here: run a trivial
+/// allow-default profile around `/usr/bin/true` and require success. A
+/// `which`-style existence check is insufficient — the binary can be
+/// present but the mechanism unusable — so this actually exercises it.
+/// Cheap, quota-free, no model involved; the discovery layer caches it.
 #[cfg(target_os = "macos")]
 pub fn seatbelt_available() -> bool {
     std::process::Command::new(SANDBOX_EXEC)
@@ -493,6 +605,108 @@ mod tests {
         assert!(!seatbelt_profile(&p).profile.contains("(deny network*)"));
         p.allow_network = false;
         assert!(seatbelt_profile(&p).profile.contains("(deny network*)"));
+    }
+
+    #[test]
+    fn bwrap_argv_binds_writable_and_masks_denies() {
+        // Use real temp paths so the dir-vs-file dispatch (tmpfs vs
+        // /dev/null) is deterministic.
+        let dir = tempfile::tempdir().unwrap();
+        let mix2 = dir.path().join(".mix2");
+        std::fs::create_dir(&mix2).unwrap();
+        let creddir = dir.path().join("creddir");
+        std::fs::create_dir(&creddir).unwrap();
+        let credfile = dir.path().join("token.json");
+        std::fs::write(&credfile, "x").unwrap();
+        let exec_surface = mix2.join("hooks.json");
+
+        let policy = SandboxPolicy {
+            writable: vec![mix2.clone()],
+            deny_write: vec![exec_surface.clone()],
+            deny_read_write: vec![creddir.clone(), credfile.clone()],
+            allow_network: true,
+        };
+        let (program, args) = wrap(
+            SandboxEngine::Bwrap,
+            &policy,
+            "/usr/bin/opencode",
+            &["run".to_owned()],
+        );
+        assert!(program.ends_with("bwrap"));
+        let joined = args.join(" ");
+        // Base: read-only root, tmpfs /tmp, no netns unshare (network open).
+        assert!(joined.contains("--ro-bind / /"));
+        assert!(joined.contains("--tmpfs /tmp"));
+        assert!(!joined.contains("--unshare-net"));
+        assert!(joined.contains("--new-session"));
+        // Writable re-bind, exec-surface ro-bind, dir mask via tmpfs, file
+        // mask via /dev/null.
+        let m = mix2.to_string_lossy();
+        assert!(joined.contains(&format!("--bind {m} {m}")));
+        let ex = exec_surface.to_string_lossy();
+        assert!(joined.contains(&format!("--ro-bind-try {ex} {ex}")));
+        let cd = creddir.to_string_lossy();
+        assert!(joined.contains(&format!("--tmpfs {cd}")));
+        let cf = credfile.to_string_lossy();
+        assert!(joined.contains(&format!("--ro-bind /dev/null {cf}")));
+        // The real command follows the `--` separator verbatim.
+        let sep = args.iter().position(|a| a == "--").unwrap();
+        assert_eq!(args[sep + 1], "/usr/bin/opencode");
+        assert_eq!(args[sep + 2], "run");
+    }
+
+    #[test]
+    fn bwrap_unshares_net_only_when_network_withdrawn() {
+        let mut p = SandboxPolicy::with_writable(vec![]);
+        assert!(!wrap(SandboxEngine::Bwrap, &p, "/bin/true", &[])
+            .1
+            .contains(&"--unshare-net".to_owned()));
+        p.allow_network = false;
+        assert!(wrap(SandboxEngine::Bwrap, &p, "/bin/true", &[])
+            .1
+            .contains(&"--unshare-net".to_owned()));
+    }
+
+    /// Behavioral denial matrix for Linux, mirroring the macOS one. Runs real
+    /// `bwrap`; skipped where user namespaces are unavailable (containers,
+    /// hardened kernels). This is the load-bearing proof on Linux — the
+    /// golden tests only prove the argv shape.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bwrap_behavioral_denial_matrix() {
+        use std::process::Stdio;
+        if !bwrap_available() {
+            eprintln!("skipping: bwrap/userns unavailable on this host");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().canonicalize().unwrap();
+        let mix2 = prepare_writable_root(&proj.join(".mix2"), true).unwrap();
+        let policy = SandboxPolicy::with_writable(vec![mix2.clone()]);
+        let run = |script: String| -> bool {
+            let (program, args) = wrap(
+                SandboxEngine::Bwrap,
+                &policy,
+                "/bin/sh",
+                &["-c".to_owned(), script],
+            );
+            std::process::Command::new(program)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        assert!(
+            run(format!("echo ok > {}/in.txt", mix2.display())),
+            "write inside .mix2 must be allowed"
+        );
+        let escape = proj.join("escape.txt");
+        assert!(
+            !run(format!("echo bad > {}", escape.display())),
+            "write outside .mix2 must be denied"
+        );
     }
 
     #[test]
