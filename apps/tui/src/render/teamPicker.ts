@@ -59,8 +59,14 @@ function disabledLabel(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotN
   if (!entry.available) return entry.reason ?? 'unavailable';
   if (entry.auth === 'unauthenticated') return entry.reason ?? 'not signed in';
   // The why matters: this slot coordinates, and a teammate-only harness
-  // can't — on the other slot the same entry is selectable.
-  if (slot === leadSlot && !entry.lead_eligible) return "teammate-only: can't coordinate";
+  // can't — on the other slot the same entry is selectable. When the
+  // harness *could* lead under the OS sandbox but it isn't available here,
+  // say so — that's an actionable fix, not a permanent limit.
+  if (slot === leadSlot && !entry.lead_eligible) {
+    return entry.sandboxable_lead
+      ? 'needs the OS sandbox to coordinate'
+      : "teammate-only: can't coordinate";
+  }
   return 'not eligible';
 }
 
@@ -123,11 +129,18 @@ function slotTile(
     if (!enabled) {
       const reason = truncate(disabledLabel(entry, slot, selection.leadSlot), Math.max(8, bodyWidth - 2));
       body.push([span('  '), span(reason, { color: theme.text.faint })]);
-    } else if (entry.note && isChosen) {
-      // Selection disclosures (e.g. a trust flag) surface right where the
-      // choice is made — nothing is passed silently.
-      const note = truncate(entry.note, Math.max(8, bodyWidth - 2));
-      body.push([span('  '), span(note, { color: theme.text.faint })]);
+    } else if (isChosen) {
+      // Selection disclosures surface right where the choice is made —
+      // nothing is passed silently. A sandbox-led coordinator states its
+      // scope; other notes (e.g. a trust flag) still show.
+      if (isLead && entry.sandbox_lead) {
+        const note = truncate('leads via OS sandbox — project writes limited to .mix2/', Math.max(8, bodyWidth - 2));
+        body.push([span('  '), span(note, { color: theme.text.faint })]);
+      }
+      if (entry.note) {
+        const note = truncate(entry.note, Math.max(8, bodyWidth - 2));
+        body.push([span('  '), span(note, { color: theme.text.faint })]);
+      }
     }
   });
   return buildTile(

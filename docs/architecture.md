@@ -159,12 +159,29 @@ adapter.
 
 **Capabilities are facts, not booleans** (`enforced` / `unverified` /
 `unsupported`): teammate read-only enforcement, lead permission
-scoping, and instruction injection. Role eligibility derives from them
-— a role closes only on `unsupported` — which is why Claude and Codex
-are the lead-capable pair while Cursor (`--mode plan`, but no verified
-lead write-scoping), OpenCode (read-only `plan` agent), and Copilot
-(write/shell denied by documented precedence, personal MCP servers
-still load — disclosed at selection) consult as teammates.
+scoping, and instruction injection. Role eligibility *derives* from
+them — natively, a lead role closes only on `unsupported` lead scoping,
+which is why Claude and Codex lead natively while Cursor (`--mode
+plan`), OpenCode (read-only `plan` agent), and Copilot (write/shell
+denied by documented precedence) enforce read-only only as teammates.
+
+**Sandboxed leads.** A teammate-only harness (`sandboxable_lead`) becomes
+lead-eligible when an OS sandbox engine is available to enforce its write
+scope in place of native scoping (`sandbox.rs`; macOS `sandbox-exec`
+Seatbelt today, Linux `bubblewrap` planned). Descriptors stay honest —
+`lead_permission_scoping` is unchanged — and eligibility is derived by
+one function shared across the discovery report, `validate_selection`,
+and the `Runtime::initialize` backstop, so every path agrees. At turn
+time the runner wraps the lead command via `sandbox::wrap` (paths as
+`-D` params, exec'd directly — no shell), granting writes only to
+`.mix2/`, a per-session scratch, and the harness's own state dirs, with
+an exec-surface deny overlay, credential deny-read, and a credential env
+strip. The read-only teammate flag is dropped for a sandboxed lead only
+(keyed on the resolved sandbox, never the role — an unsandboxed argv is
+byte-identical to today). `[sandbox] mode` (`auto`|`off`, or
+`MIX2_SANDBOX_MODE`) gates it. The guarantee is *write* scoping: network
+is unfiltered and reads are open except the credential deny-list — the
+same exposure the native lead has, disclosed in the picker.
 
 **Discovery and selection.** Startup probes every candidate
 `(harness, command)` pair once — version and sign-in, in parallel,

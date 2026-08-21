@@ -44,6 +44,11 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
         lead_permission_scoping: CapabilityLevel::Unverified,
         instruction_injection: CapabilityLevel::Enforced,
     },
+    // Self-sandboxes with its own Seatbelt; must not be wrapped (no nesting).
+    sandboxable_lead: false,
+    state_dirs: &[],
+    credential_files: &["~/.codex/auth.json"],
+    env_keep_sandboxed: &[],
     // Curated: the models codex's `-m` commonly accepts. Replace with a
     // provider listing when the CLI grows one.
     known_models: &["gpt-5.3-codex", "gpt-5-codex", "gpt-5", "gpt-5-codex-mini"],

@@ -66,6 +66,13 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
         // Role instructions ride in-band ahead of the prompt.
         instruction_injection: CapabilityLevel::Unverified,
     },
+    // Teammate-only natively, but leadable under the OS sandbox. Copilot
+    // authenticates headlessly via GitHub tokens, so those env vars survive
+    // the credential strip.
+    sandboxable_lead: true,
+    state_dirs: &["~/.copilot", "~/.config/github-copilot"],
+    credential_files: &["~/.config/github-copilot/apps.json", "~/.config/github-copilot/hosts.json"],
+    env_keep_sandboxed: &["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"],
     // `auto` lets Copilot route; named-model ids are account-dependent, so
     // typed /model entry covers the rest.
     known_models: &["auto"],
@@ -316,6 +323,7 @@ mod tests {
         request.sandbox = Some(crate::sandbox::SandboxSpec {
             engine: crate::sandbox::SandboxEngine::Seatbelt,
             policy: crate::sandbox::SandboxPolicy::with_writable(vec![]),
+            env_remove: Vec::new(),
         });
         request
     }

@@ -325,6 +325,8 @@ mod tests {
                 note: None,
                 lead_eligible: true,
                 teammate_eligible: true,
+                sandboxable_lead: false,
+                sandbox_lead: false,
                 capabilities: Capabilities {
                     teammate_read_only: CapabilityLevel::Enforced,
                     lead_permission_scoping: CapabilityLevel::Unverified,

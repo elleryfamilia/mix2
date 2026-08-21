@@ -104,20 +104,38 @@ fn discovery_timeout() -> Duration {
         .unwrap_or(discovery::DEFAULT_PROBE_TIMEOUT)
 }
 
+/// Effective lead eligibility: native capability scoping, or the OS sandbox
+/// standing in for it when available. The single derived rule shared by the
+/// discovery report, `validate_selection`, and the `Runtime::initialize`
+/// backstop, so every path agrees.
+fn lead_eligible_effective(harness: HarnessKind, sandbox_available: bool) -> bool {
+    let descriptor = registry::descriptor(harness);
+    descriptor.capabilities.lead_eligible() || (sandbox_available && descriptor.sandboxable_lead)
+}
+
 /// Role-eligibility gate for a settled team: the lead harness must be able
-/// to coordinate and the teammate to consult read-only. This is the single
-/// authority — every path that settles a team (the picker's
-/// `validate_selection`, and `Runtime::initialize`, which the auto-confirm
-/// and `dev_run` paths also traverse) runs it, so a config that names an
-/// ineligible lead is refused everywhere, not only in the interactive
-/// picker. Returns an actionable refusal string on failure.
-fn check_team_eligibility(team: Team) -> std::result::Result<(), String> {
-    let lead_caps = registry::descriptor(team.lead_harness()).capabilities;
-    if !lead_caps.lead_eligible() {
-        return Err(format!(
-            "{} cannot lead yet — pick it as the teammate instead",
-            team.lead_harness().display_name()
-        ));
+/// to coordinate (natively or via the sandbox) and the teammate to consult
+/// read-only. Every path that settles a team runs it — the picker's
+/// `validate_selection` and the `Runtime::initialize` backstop that the
+/// auto-confirm and `dev_run` paths also traverse — so a config naming an
+/// ineligible lead is refused everywhere. Returns an actionable refusal.
+fn check_team_eligibility(team: Team, sandbox_available: bool) -> std::result::Result<(), String> {
+    if !lead_eligible_effective(team.lead_harness(), sandbox_available) {
+        // Distinguish "needs the sandbox, which isn't available here" from
+        // "can never lead" so the message is actionable.
+        let harness = team.lead_harness();
+        let msg = if registry::descriptor(harness).sandboxable_lead {
+            format!(
+                "{} can only lead under the OS sandbox (enable `[sandbox] mode` on a supported platform) — pick it as the teammate instead",
+                harness.display_name()
+            )
+        } else {
+            format!(
+                "{} cannot lead yet — pick it as the teammate instead",
+                harness.display_name()
+            )
+        };
+        return Err(msg);
     }
     let teammate_caps = registry::descriptor(team.teammate_harness()).capabilities;
     if !teammate_caps.teammate_eligible() {
@@ -137,6 +155,7 @@ fn validate_selection(
     one: &str,
     two: &str,
     lead_slot: &str,
+    sandbox_available: bool,
 ) -> std::result::Result<Team, String> {
     let resolve = |name: &str| {
         registry::harness_named(name).ok_or_else(|| registry::unknown_harness_message(name))
@@ -175,7 +194,7 @@ fn validate_selection(
             ));
         }
     }
-    check_team_eligibility(team)?;
+    check_team_eligibility(team, sandbox_available)?;
     Ok(team)
 }
 
@@ -253,6 +272,10 @@ pub struct Runtime {
     runtime_dir: PathBuf,
     lead_msgs: mpsc::Sender<LeadMsg>,
     debug: bool,
+    /// The OS sandbox engine to wrap a non-natively-scoped lead in, when one
+    /// is available and `[sandbox] mode` allows it. `None` means every lead
+    /// runs natively (teammate mechanisms untouched).
+    sandbox_engine: Option<crate::sandbox::SandboxEngine>,
 }
 
 impl Runtime {
@@ -260,6 +283,7 @@ impl Runtime {
     /// Both agents are required: if either is missing or signed out, this
     /// fails (with a `fatal` event emitted by the caller) listing the exact
     /// fix for each agent.
+    #[allow(clippy::too_many_arguments)]
     async fn initialize(
         config: Config,
         team: Team,
@@ -268,6 +292,7 @@ impl Runtime {
         consult_updates: mpsc::Sender<ConsultUpdate>,
         lead_msgs: mpsc::Sender<LeadMsg>,
         report: &discovery::Discovery,
+        sandbox_engine: Option<crate::sandbox::SandboxEngine>,
     ) -> Result<Self> {
         // Role-eligibility backstop for every entry point. The interactive
         // picker refuses ineligible teams in `validate_selection`, but the
@@ -275,7 +300,7 @@ impl Runtime {
         // without it — so a config naming an ineligible lead (e.g.
         // `[slot.one] harness = "cursor", lead = "one"`) would otherwise
         // start unrefused. Fail here before any probing or spawning.
-        if let Err(message) = check_team_eligibility(team) {
+        if let Err(message) = check_team_eligibility(team, sandbox_engine.is_some()) {
             anyhow::bail!(message);
         }
 
@@ -411,6 +436,7 @@ impl Runtime {
             runtime_dir,
             lead_msgs,
             debug,
+            sandbox_engine,
         })
     }
 
@@ -456,6 +482,54 @@ impl Runtime {
             turn_id: ui_id.clone(),
         });
 
+        let mut env = self.mix2_env(turn_uuid, AgentRole::Lead, Some(&consult_token));
+
+        // Wrap the lead in the OS sandbox when its harness lacks native
+        // write scoping and an engine is available. A natively-scoped lead
+        // (claude/codex) is never wrapped — its own mechanism stands, and
+        // Seatbelt does not nest. A failed spec assembly (e.g. a symlinked
+        // `.mix2`) degrades to an unsandboxed run rather than blocking the
+        // turn; eligibility already vetted the harness at selection.
+        let lead_harness = self.team().lead_harness();
+        let sandbox = self.sandbox_engine.filter(|_| {
+            !registry::descriptor(lead_harness)
+                .capabilities
+                .lead_eligible()
+        });
+        let sandbox = match sandbox {
+            Some(engine) => {
+                let descriptor = registry::descriptor(lead_harness);
+                let others: Vec<&str> = registry::ALL
+                    .into_iter()
+                    .filter(|h| *h != lead_harness)
+                    .flat_map(|h| registry::descriptor(h).credential_files.iter().copied())
+                    .collect();
+                match crate::sandbox::build_lead_spec(crate::sandbox::LeadSpecInputs {
+                    engine,
+                    cwd: &self.session.cwd,
+                    runtime_dir: &self.runtime_dir,
+                    state_dirs: descriptor.state_dirs,
+                    other_credential_files: &others,
+                    env_keep: descriptor.env_keep_sandboxed,
+                }) {
+                    Ok((spec, lead_tmp)) => {
+                        // Point the child's TMPDIR at the writable scratch so
+                        // scratch writes land inside the sandbox's grant, not
+                        // the denied shared temp.
+                        env.insert("TMPDIR".into(), lead_tmp.display().to_string());
+                        Some(spec)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "sandbox spec assembly failed, running lead unsandboxed: {e}"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
         let request = AgentRequest {
             prompt: text,
             cwd: self.session.cwd.clone(),
@@ -466,12 +540,10 @@ impl Runtime {
                 self.team(),
                 self.project,
             ),
-            env: self.mix2_env(turn_uuid, AgentRole::Lead, Some(&consult_token)),
+            env,
             path_prepend: helper_dir(),
             runtime_dir: Some(self.runtime_dir.clone()),
-            // Activation (config + eligibility + per-harness policy) wires
-            // this in a later task; the runner already honors it when set.
-            sandbox: None,
+            sandbox,
         };
 
         let lead = Arc::clone(&self.lead_agent);
@@ -819,9 +891,23 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         .or(options.cwd)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
+    // Resolve the sandbox engine once: it decides which harnesses are
+    // lead-eligible this run and wraps the lead at turn time. `off` (or no
+    // engine on this platform) leaves everything native — today's behavior.
+    let sandbox_engine = match config.sandbox_mode {
+        crate::config::SandboxMode::Auto => crate::sandbox::SandboxSpec::detect_engine(),
+        crate::config::SandboxMode::Off => None,
+    };
+    let sandbox_available = sandbox_engine.is_some();
+
     // Discovery: probe every candidate once, report, then either
     // auto-confirm the configured proposal or wait for a selection.
-    let report = discovery::discover(discovery_candidates(&config), discovery_timeout()).await;
+    let report = discovery::discover(
+        discovery_candidates(&config),
+        discovery_timeout(),
+        sandbox_available,
+    )
+    .await;
     let auto = !pick_team && (config.explicit_slots || !interactive);
     let proposal = config.team;
     emit(&Event::HarnessesDiscovered {
@@ -852,7 +938,14 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
                     one,
                     two,
                     lead_slot,
-                }) => match validate_selection(&config, &report, &one, &two, &lead_slot) {
+                }) => match validate_selection(
+                    &config,
+                    &report,
+                    &one,
+                    &two,
+                    &lead_slot,
+                    sandbox_available,
+                ) {
                     Ok(team) => break team,
                     Err(message) => emit(&Event::Error { message }),
                 },
@@ -873,16 +966,26 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
     let (consult_tx, mut consult_rx) = mpsc::channel::<ConsultUpdate>(256);
     let (lead_tx, mut lead_rx) = mpsc::channel::<LeadMsg>(256);
 
-    let mut runtime =
-        match Runtime::initialize(config, team, cwd, debug, consult_tx, lead_tx, &report).await {
-            Ok(r) => r,
-            Err(e) => {
-                emit(&Event::Fatal {
-                    message: format!("{e:#}"),
-                });
-                return Ok(());
-            }
-        };
+    let mut runtime = match Runtime::initialize(
+        config,
+        team,
+        cwd,
+        debug,
+        consult_tx,
+        lead_tx,
+        &report,
+        sandbox_engine,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            emit(&Event::Fatal {
+                message: format!("{e:#}"),
+            });
+            return Ok(());
+        }
+    };
 
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,
@@ -1013,9 +1116,19 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
     let (consult_tx, mut consult_rx) = mpsc::channel::<ConsultUpdate>(256);
     let (lead_tx, mut lead_rx) = mpsc::channel::<LeadMsg>(256);
 
+    let sandbox_engine = match config.sandbox_mode {
+        crate::config::SandboxMode::Auto => crate::sandbox::SandboxSpec::detect_engine(),
+        crate::config::SandboxMode::Off => None,
+    };
+
     // Scripted path: discovery still runs (informational) and the
     // configured proposal is always auto-confirmed.
-    let report = discovery::discover(discovery_candidates(&config), discovery_timeout()).await;
+    let report = discovery::discover(
+        discovery_candidates(&config),
+        discovery_timeout(),
+        sandbox_engine.is_some(),
+    )
+    .await;
     let team = config.team;
     emit(&Event::HarnessesDiscovered {
         harnesses: report.harnesses.clone(),
@@ -1034,6 +1147,7 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
         consult_tx,
         lead_tx,
         &report,
+        sandbox_engine,
     )
     .await?;
 

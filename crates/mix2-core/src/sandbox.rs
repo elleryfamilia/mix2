@@ -47,6 +47,24 @@ pub enum SandboxEngine {
 pub struct SandboxSpec {
     pub engine: SandboxEngine,
     pub policy: SandboxPolicy,
+    /// Environment variables to remove from the child before spawning
+    /// (credential vars the lead has no need for). Best-effort: filesystem
+    /// reads of credential *files* are denied by the policy, but inherited
+    /// env is a separate channel, closed here.
+    pub env_remove: Vec<String>,
+}
+
+impl SandboxSpec {
+    /// Detect the platform engine (macOS Seatbelt today), returning `None`
+    /// when no usable engine is present — callers then leave the harness
+    /// lead-ineligible rather than pretending to confine it.
+    pub fn detect_engine() -> Option<SandboxEngine> {
+        if seatbelt_available() {
+            Some(SandboxEngine::Seatbelt)
+        } else {
+            None
+        }
+    }
 }
 
 /// Absolute path to the macOS sandbox binary — the same trusted path the
@@ -244,6 +262,147 @@ pub fn wrap(
 /// `which`-style existence check is insufficient — the binary can be
 /// present but the mechanism unusable — so this actually exercises it.
 /// Cheap, quota-free, no model involved; the discovery layer caches it.
+/// Central credential directories/files denied read+write to any sandboxed
+/// lead. Tilde-relative; expanded against `$HOME` at build time. The lead's
+/// *own* harness credentials are layered back in as readable by the caller.
+pub const CREDENTIAL_DENY: &[&str] = &[
+    "~/.ssh",
+    "~/.aws",
+    "~/.gnupg",
+    "~/.config/gh",
+    "~/.config/gcloud",
+    "~/.azure",
+    "~/.kube",
+    "~/.netrc",
+    "~/.npmrc",
+    "~/.docker/config.json",
+];
+
+/// Basenames that must stay unwritable inside any granted harness state dir:
+/// the execute-and-instruction surfaces whose contents run (or steer a
+/// model) on the user's *next*, unsandboxed run. Joined under each writable
+/// state dir as an explicit deny-write overlay.
+pub const EXEC_SURFACE_NAMES: &[&str] = &[
+    "hooks.json",
+    "mcp.json",
+    "mcp-config.json",
+    "permissions-config.json",
+    "settings.json",
+    "config.json",
+    "skills",
+    "plugins",
+    "extensions",
+    "installed-plugins",
+    "instructions",
+    "agents",
+    "bin",
+];
+
+/// Credential environment variables stripped from a sandboxed lead's child
+/// process. Exact names plus prefixes (`AWS_`, …); a per-harness keep-list
+/// (e.g. Copilot's `GH_TOKEN`) is subtracted by [`credential_env_removals`].
+const CREDENTIAL_ENV_EXACT: &[&str] = &[
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "COPILOT_GITHUB_TOKEN",
+    "SSH_AUTH_SOCK",
+    "NPM_TOKEN",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+];
+const CREDENTIAL_ENV_PREFIXES: &[&str] = &["AWS_", "GOOGLE_", "AZURE_"];
+
+/// Expand a leading `~` against `$HOME`. Non-tilde paths pass through.
+pub fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// The concrete credential env keys to remove from a sandboxed lead's child,
+/// resolved against the current process env (prefix matches expand to actual
+/// keys) minus the harness's keep-list.
+pub fn credential_env_removals(keep: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (key, _) in std::env::vars_os() {
+        let key = key.to_string_lossy().into_owned();
+        if keep.contains(&key.as_str()) {
+            continue;
+        }
+        let hit = CREDENTIAL_ENV_EXACT.contains(&key.as_str())
+            || CREDENTIAL_ENV_PREFIXES.iter().any(|p| key.starts_with(p));
+        if hit {
+            out.push(key);
+        }
+    }
+    out
+}
+
+/// Inputs for assembling a lead's sandbox policy. Paths are tilde-relative
+/// where noted; the builder expands, creates, and canonicalizes them.
+pub struct LeadSpecInputs<'a> {
+    pub engine: SandboxEngine,
+    /// The project directory whose `.mix2/` the lead may write.
+    pub cwd: &'a Path,
+    /// The per-session runtime dir; a `lead-tmp` subdir under it becomes the
+    /// only broadly-writable scratch (also the child's `TMPDIR`).
+    pub runtime_dir: &'a Path,
+    /// The leading harness's own state dirs (tilde-relative), granted write.
+    pub state_dirs: &'a [&'a str],
+    /// Other harnesses' credential files (tilde-relative), denied read+write
+    /// so one harness can't exfiltrate another's token.
+    pub other_credential_files: &'a [&'a str],
+    /// Env vars this harness must keep despite the credential strip.
+    pub env_keep: &'a [&'a str],
+}
+
+/// Assemble the sandbox spec for a lead invocation: writable roots (`.mix2`,
+/// the lead-tmp scratch, the harness state dirs), an exec-surface deny-write
+/// overlay inside those state dirs, credential deny-read, and the env strip.
+/// The returned `lead_tmp` is the dir the caller should point `TMPDIR` at.
+pub fn build_lead_spec(inputs: LeadSpecInputs<'_>) -> std::io::Result<(SandboxSpec, PathBuf)> {
+    let mix2 = prepare_writable_root(&inputs.cwd.join(".mix2"), true)?;
+    let lead_tmp = prepare_writable_root(&inputs.runtime_dir.join("lead-tmp"), true)?;
+
+    let mut writable = vec![mix2, lead_tmp.clone()];
+    let mut deny_write: Vec<PathBuf> = Vec::new();
+    for dir in inputs.state_dirs {
+        let expanded = expand_tilde(dir);
+        // Skip a state dir we can't materialize as a real dir (e.g. a
+        // symlink, or an un-creatable path) rather than failing the whole
+        // lead — a missing optional cache dir shouldn't block coordination.
+        let Ok(root) = prepare_writable_root(&expanded, true) else {
+            continue;
+        };
+        // Overlay the exec-surface denies inside this granted state dir.
+        for name in EXEC_SURFACE_NAMES {
+            deny_write.push(root.join(name));
+        }
+        writable.push(root);
+    }
+
+    let mut deny_read_write: Vec<PathBuf> =
+        CREDENTIAL_DENY.iter().map(|p| expand_tilde(p)).collect();
+    for cred in inputs.other_credential_files {
+        deny_read_write.push(expand_tilde(cred));
+    }
+
+    let spec = SandboxSpec {
+        engine: inputs.engine,
+        policy: SandboxPolicy {
+            writable,
+            deny_write,
+            deny_read_write,
+            allow_network: true,
+        },
+        env_remove: credential_env_removals(inputs.env_keep),
+    };
+    Ok((spec, lead_tmp))
+}
+
 #[cfg(target_os = "macos")]
 pub fn seatbelt_available() -> bool {
     std::process::Command::new(SANDBOX_EXEC)
@@ -364,6 +523,56 @@ mod tests {
         assert!(prepared.exists());
         // Canonical: equals the canonicalized real path.
         assert_eq!(prepared, root.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn build_lead_spec_assembles_writable_denies_and_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("proj");
+        std::fs::create_dir(&cwd).unwrap();
+        let runtime = dir.path().join("rt");
+        std::fs::create_dir(&runtime).unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let state_str = state.to_string_lossy().into_owned();
+
+        let (spec, lead_tmp) = build_lead_spec(LeadSpecInputs {
+            engine: SandboxEngine::Seatbelt,
+            cwd: &cwd,
+            runtime_dir: &runtime,
+            state_dirs: &[state_str.as_str()],
+            other_credential_files: &["~/.local/share/opencode/auth.json"],
+            env_keep: &[],
+        })
+        .unwrap();
+
+        // Writable: .mix2, the lead-tmp scratch, and the state dir.
+        let writable: Vec<_> = spec.policy.writable.iter().collect();
+        assert!(writable.iter().any(|p| p.ends_with(".mix2")));
+        assert!(writable.iter().any(|p| p.ends_with("lead-tmp")));
+        assert!(writable
+            .iter()
+            .any(|p| p.canonicalize().ok() == state.canonicalize().ok()));
+        assert!(lead_tmp.ends_with("lead-tmp"));
+
+        // Exec-surface deny overlay lives inside the granted state dir.
+        assert!(spec
+            .policy
+            .deny_write
+            .iter()
+            .any(|p| p.ends_with("hooks.json")));
+
+        // Credential denies: central set plus the other harness's auth file.
+        assert!(spec
+            .policy
+            .deny_read_write
+            .iter()
+            .any(|p| p.ends_with(".ssh")));
+        assert!(spec
+            .policy
+            .deny_read_write
+            .iter()
+            .any(|p| p.ends_with("opencode/auth.json")));
     }
 
     #[cfg(unix)]

@@ -408,11 +408,15 @@ explicit. Esc opts out at any point and starts the defaults.
 Unavailable, signed-out, or role-ineligible entries stay visible but
 disabled, each with its actionable reason on a faint line beneath
 (`not installed: …`, `not signed in: …`, `teammate-only: can't
-coordinate`) — they can be highlighted to read the reason, but enter
-refuses to equip them. Eligibility is about the *coordinator*, not the
-slot number: a teammate-only harness is blocked wherever the coordinator
-currently sits and selectable on the other slot, and `c` moves the
-restriction with the role.
+coordinate`, or `needs the OS sandbox to coordinate` when the harness
+*could* lead under a sandbox that isn't available here) — they can be
+highlighted to read the reason, but enter refuses to equip them.
+Eligibility is about the *coordinator*, not the slot number: a
+teammate-only harness is blocked wherever the coordinator currently sits
+and selectable on the other slot, and `c` moves the restriction with the
+role. A harness leading under the OS sandbox discloses it on a faint line
+where it's equipped: `leads via OS sandbox — project writes limited to
+.mix2/`.
 A core refusal (`select_team` rejected) renders in place in the error
 color with focus still on continue, so retrying is one enter — the core
 keeps waiting.

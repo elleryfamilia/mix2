@@ -39,6 +39,11 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
         lead_permission_scoping: CapabilityLevel::Enforced,
         instruction_injection: CapabilityLevel::Enforced,
     },
+    // Leads natively (never wrapped — its own Bash sandbox would nest).
+    sandboxable_lead: false,
+    state_dirs: &[],
+    credential_files: &["~/.claude/.credentials.json", "~/.claude.json"],
+    env_keep_sandboxed: &[],
     // The documented `--model` aliases (each resolves to the latest in its
     // family), plus explicit latest names.
     known_models: &["fable", "opus", "sonnet", "haiku"],

@@ -121,6 +121,26 @@ pub struct Descriptor {
     /// of stdin; `build_args` then includes it in the argv.
     pub prompt_in_args: bool,
     pub capabilities: Capabilities,
+    /// Whether this harness can lead under the OS sandbox when its native
+    /// scoping is absent. `true` for teammate-only harnesses that gain lead
+    /// eligibility once a sandbox engine is available (cursor/opencode/
+    /// copilot); `false` for harnesses that lead natively (claude/codex) —
+    /// they must not be double-wrapped, and Seatbelt does not nest.
+    pub sandboxable_lead: bool,
+    /// Home/state directories (tilde-relative) this harness reads and writes
+    /// to persist sessions. Granted writable when it leads under the sandbox
+    /// so `--resume` keeps working; the central exec-surface deny overlay
+    /// keeps the dangerous files inside them unwritable.
+    pub state_dirs: &'static [&'static str],
+    /// This harness's own credential files (tilde-relative). Readable when
+    /// it is the lead (it must authenticate); denied read+write to a
+    /// *different* sandboxed lead so one harness can't exfiltrate another's
+    /// token.
+    pub credential_files: &'static [&'static str],
+    /// Environment variables to keep in a sandboxed lead's child env even
+    /// though they match the central credential-strip set (e.g. Copilot
+    /// authenticates via `GH_TOKEN`).
+    pub env_keep_sandboxed: &'static [&'static str],
     /// Curated models for the /model picker; empty means "provider default
     /// only". When `models_args` is set this is only the fallback.
     pub known_models: &'static [&'static str],

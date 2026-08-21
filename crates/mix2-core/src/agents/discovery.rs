@@ -35,6 +35,13 @@ pub struct DiscoveredHarness {
     pub note: Option<String>,
     pub lead_eligible: bool,
     pub teammate_eligible: bool,
+    /// This harness could lead under the OS sandbox (a static fact). Lets a
+    /// picker explain why an otherwise-ineligible harness can't lead here
+    /// ("needs the sandbox") versus one that never can.
+    pub sandboxable_lead: bool,
+    /// This run, `lead_eligible` is true *because* the sandbox is available
+    /// (not native scoping) — the picker discloses "leads via OS sandbox".
+    pub sandbox_lead: bool,
     pub capabilities: Capabilities,
 }
 
@@ -96,7 +103,11 @@ pub async fn probe_one(harness: HarnessKind, command: &str, timeout: Duration) -
 
 /// Probe every candidate in parallel, deduplicated by `(harness, command)`.
 /// Candidate order is preserved in the report.
-pub async fn discover(candidates: Vec<(HarnessKind, String)>, timeout: Duration) -> Discovery {
+pub async fn discover(
+    candidates: Vec<(HarnessKind, String)>,
+    timeout: Duration,
+    sandbox_available: bool,
+) -> Discovery {
     let mut unique: Vec<(HarnessKind, String)> = Vec::new();
     for candidate in candidates {
         if !unique.contains(&candidate) {
@@ -130,6 +141,12 @@ pub async fn discover(candidates: Vec<(HarnessKind, String)>, timeout: Duration)
             let probe = cache.get(key).unwrap_or(&fallback);
             let descriptor = registry::descriptor(*harness);
             let capabilities = descriptor.capabilities;
+            // Eligibility is derived, not a static capability fact: a
+            // teammate-only harness becomes lead-eligible when the OS
+            // sandbox is available to enforce its write scope. Descriptors
+            // stay honest (`lead_permission_scoping` is unchanged).
+            let native_lead = capabilities.lead_eligible();
+            let sandbox_lead = !native_lead && sandbox_available && descriptor.sandboxable_lead;
             DiscoveredHarness {
                 harness: *harness,
                 command: command.clone(),
@@ -138,8 +155,10 @@ pub async fn discover(candidates: Vec<(HarnessKind, String)>, timeout: Duration)
                 available: probe.version.is_some(),
                 reason: probe.reason.clone(),
                 note: descriptor.selection_note.map(str::to_owned),
-                lead_eligible: capabilities.lead_eligible(),
+                lead_eligible: native_lead || sandbox_lead,
                 teammate_eligible: capabilities.teammate_eligible(),
+                sandboxable_lead: descriptor.sandboxable_lead,
+                sandbox_lead,
                 capabilities,
             }
         })
