@@ -324,19 +324,18 @@ mod tests {
     use crate::agents::AgentRole;
     use std::process::ExitStatus;
 
+    // Synthesizes an ExitStatus carrying a specific code. Unix-only: it
+    // relies on `ExitStatusExt::from_raw`, and there is no portable way to
+    // construct an arbitrary exit code. mix2-core is Unix-only anyway
+    // (`mix2-consult` uses `std::os::unix::net`), so the failure-attribution
+    // tests that need a specific code are `#[cfg(unix)]`.
+    #[cfg(unix)]
     fn status_from_code(code: i32) -> ExitStatus {
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            ExitStatus::from_raw(code << 8)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = code;
-            std::process::Command::new("false").status().unwrap()
-        }
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatus::from_raw(code << 8)
     }
 
+    #[cfg(unix)]
     #[test]
     fn friendly_failure_attributes_nested_sandbox_to_the_engine() {
         // Exit 71 (or the macOS signature) under a sandbox is the harness
@@ -346,6 +345,7 @@ mod tests {
         assert!(msg.contains("cannot nest"), "{msg}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn friendly_failure_does_not_blame_the_sandbox_for_a_harness_error() {
         // A harness that ran fine under the sandbox and failed on its own
@@ -355,6 +355,7 @@ mod tests {
         assert!(msg.contains("model refused"), "{msg}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn friendly_failure_unsandboxed_is_unchanged() {
         let msg = friendly_failure("codex", &status_from_code(2), "boom", false);
