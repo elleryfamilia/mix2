@@ -50,11 +50,12 @@ pub enum SandboxEngine {
     Bwrap,
 }
 
-/// A fully-resolved sandbox to apply to one lead invocation: the engine and
-/// the write policy. Attached to an [`crate::agents::agent::AgentRequest`];
-/// the runner wraps the command with it just before spawning. Absent means
-/// "run natively" (teammates, and leads whose harness enforces its own
-/// scoping) — its absence keeps the command byte-identical to today.
+/// A fully-resolved sandbox to apply to one participant invocation (lead or
+/// teammate): the engine and the write policy. Attached to an
+/// [`crate::agents::agent::AgentRequest`]; the runner wraps the command with
+/// it just before spawning. Absent means "run natively" (participants whose
+/// harness enforces its own role scoping) — its absence keeps the command
+/// byte-identical to today.
 #[derive(Debug, Clone)]
 pub struct SandboxSpec {
     pub engine: SandboxEngine,
@@ -87,7 +88,7 @@ impl SandboxSpec {
 /// availability probe validates, never a `PATH` lookup.
 pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
-/// A resolved, kernel-enforceable write policy for one lead process.
+/// A resolved, kernel-enforceable write policy for one participant process.
 ///
 /// All paths are expected to be **canonical and non-symlink** — build the
 /// writable roots through [`prepare_writable_root`], which enforces that.

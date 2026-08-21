@@ -52,10 +52,12 @@ pub struct AgentRequest {
     pub path_prepend: Option<PathBuf>,
     /// Runtime dir that must stay writable for consult file IPC (codex lead).
     pub runtime_dir: Option<PathBuf>,
-    /// OS sandbox to wrap this invocation in. `Some` only for a lead whose
-    /// harness can't enforce its own write scoping; the runner wraps the
-    /// command with it. `None` runs natively (its absence keeps the argv
-    /// and behavior identical to an unsandboxed run).
+    /// OS sandbox to wrap this invocation in. `Some` for a participant whose
+    /// harness can't enforce its own role scoping — a lead that can't limit
+    /// writes to `.mix2/`, or a Claude/Copilot teammate that can't guarantee
+    /// read-only. The runner wraps the command with it; `None` runs natively
+    /// (its absence keeps the argv and behavior identical to an unsandboxed
+    /// run).
     pub sandbox: Option<crate::sandbox::SandboxSpec>,
 }
 
