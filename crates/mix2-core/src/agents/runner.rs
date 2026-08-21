@@ -156,9 +156,15 @@ pub(crate) fn friendly_failure(
              sandbox off for this harness. ({status})"
         );
     }
-    // The engine itself refusing (bad profile, missing binary) prints its
-    // own diagnostic; surface it as a sandbox failure, not a harness one.
-    if sandboxed && tail.contains("sandbox-exec:") {
+    // The engine itself refusing (bad profile, missing binary, user
+    // namespaces denied) prints its own diagnostic; surface it as a sandbox
+    // failure, not a harness one. Covers both engines' error prefixes.
+    if sandboxed
+        && (tail.contains("sandbox-exec:")
+            || tail.contains("bwrap:")
+            || tail.contains("setting up uid map")
+            || tail.contains("user namespace"))
+    {
         return format!("sandbox: engine error starting {provider}: {tail} ({status})");
     }
     // Otherwise the harness ran under the sandbox and failed on its own
@@ -348,6 +354,20 @@ mod tests {
         let msg = friendly_failure("cursor", &status_from_code(71), "", true);
         assert!(msg.starts_with("sandbox:"), "{msg}");
         assert!(msg.contains("cannot nest"), "{msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn friendly_failure_attributes_bwrap_engine_errors() {
+        // A bwrap startup error (e.g. userns denied) is a sandbox failure,
+        // not a harness one.
+        let msg = friendly_failure(
+            "opencode",
+            &status_from_code(1),
+            "bwrap: setting up uid map: Permission denied",
+            true,
+        );
+        assert!(msg.starts_with("sandbox:"), "{msg}");
     }
 
     #[cfg(unix)]

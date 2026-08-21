@@ -20,13 +20,20 @@
 //! today. The picker discloses this; callers must not imply full
 //! confinement.
 //!
-//! ## macOS (this module)
+//! ## Engines
 //!
-//! `sandbox-exec` with an inline (`-p`) Seatbelt profile. Paths ride in as
-//! `-D KEY=value` parameters so nothing user-controlled is interpolated
-//! into the profile text. `sandbox-exec` execs the target in place (same
-//! PID), so the runner's process-group kill strategy is unaffected. Linux
-//! (`bwrap`) lands in a follow-up.
+//! **macOS** — `sandbox-exec` with an inline (`-p`) Seatbelt profile. Paths
+//! ride in as `-D KEY=value` parameters so nothing user-controlled is
+//! interpolated into the profile text. `sandbox-exec` execs the target in
+//! place (same PID), so the runner's process-group kill strategy is
+//! unaffected.
+//!
+//! **Linux** — `bubblewrap` (`bwrap`): the whole filesystem is bound
+//! read-only, the writable roots re-bound read-write on top, credential
+//! dirs/files masked with `tmpfs`/`/dev/null`, and the network namespace
+//! left shared (network stays open). Requires unprivileged user namespaces,
+//! which some distros restrict — [`bwrap_available`] probes a real
+//! invocation, not just the binary's presence.
 
 use std::path::{Path, PathBuf};
 
@@ -317,14 +324,17 @@ fn bwrap_args(policy: &SandboxPolicy, program: &str, args: &[String]) -> Vec<Str
         push2(&mut out, "--ro-bind-try", &d.to_string_lossy());
     }
     // Credential denies: mask an existing directory with an empty tmpfs,
-    // and shadow anything else (a file, or a not-yet-created path) with
-    // /dev/null. Both hide the content (no read) and block writes.
+    // and shadow an existing file with /dev/null — both hide the content
+    // (no read) and block writes. bwrap requires the mount destination to
+    // exist, so a credential path that isn't present is skipped: the
+    // sandboxed process can't create it anyway (its parent lives under the
+    // read-only root), so there's nothing to deny.
     for d in &policy.deny_read_write {
         let s = d.to_string_lossy().into_owned();
         if d.is_dir() {
             out.push("--tmpfs".into());
             out.push(s);
-        } else {
+        } else if d.exists() {
             out.push("--ro-bind".into());
             out.push("/dev/null".into());
             out.push(s);
@@ -620,10 +630,11 @@ mod tests {
         std::fs::write(&credfile, "x").unwrap();
         let exec_surface = mix2.join("hooks.json");
 
+        let missing = dir.path().join("does-not-exist");
         let policy = SandboxPolicy {
             writable: vec![mix2.clone()],
             deny_write: vec![exec_surface.clone()],
-            deny_read_write: vec![creddir.clone(), credfile.clone()],
+            deny_read_write: vec![creddir.clone(), credfile.clone(), missing.clone()],
             allow_network: true,
         };
         let (program, args) = wrap(
@@ -649,6 +660,10 @@ mod tests {
         assert!(joined.contains(&format!("--tmpfs {cd}")));
         let cf = credfile.to_string_lossy();
         assert!(joined.contains(&format!("--ro-bind /dev/null {cf}")));
+        // A non-existent deny path is skipped — bwrap can't mount onto a
+        // missing destination, and the sandboxed process can't create it
+        // under the read-only root anyway.
+        assert!(!joined.contains(&missing.to_string_lossy().into_owned()));
         // The real command follows the `--` separator verbatim.
         let sep = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(args[sep + 1], "/usr/bin/opencode");
@@ -682,7 +697,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().canonicalize().unwrap();
         let mix2 = prepare_writable_root(&proj.join(".mix2"), true).unwrap();
-        let policy = SandboxPolicy::with_writable(vec![mix2.clone()]);
+        // Include credential denies: an existing dir + file, and a
+        // deliberately non-existent path — the latter must be skipped, or
+        // bwrap fails to mount and the whole lead won't start.
+        let creddir = proj.join("creds");
+        std::fs::create_dir(&creddir).unwrap();
+        std::fs::write(creddir.join("token"), "secret").unwrap();
+        let policy = SandboxPolicy {
+            writable: vec![mix2.clone()],
+            deny_write: vec![],
+            deny_read_write: vec![creddir.clone(), proj.join("nonexistent-cred")],
+            allow_network: true,
+        };
         let run = |script: String| -> bool {
             let (program, args) = wrap(
                 SandboxEngine::Bwrap,
@@ -698,14 +724,21 @@ mod tests {
                 .map(|s| s.success())
                 .unwrap_or(false)
         };
+        // The lead starts despite the non-existent deny path, and the
+        // in-scope write is allowed.
         assert!(
             run(format!("echo ok > {}/in.txt", mix2.display())),
-            "write inside .mix2 must be allowed"
+            "write inside .mix2 must be allowed (and a missing deny path must not break startup)"
         );
         let escape = proj.join("escape.txt");
         assert!(
             !run(format!("echo bad > {}", escape.display())),
             "write outside .mix2 must be denied"
+        );
+        // The masked credential is unreadable.
+        assert!(
+            !run(format!("cat {}/token", creddir.display())),
+            "reading the masked credential dir must be denied"
         );
     }
 
