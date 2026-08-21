@@ -34,9 +34,13 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
         // only by Claude Code's non-interactive default deny, which the
         // user's own permission config can widen.
         teammate_read_only: CapabilityLevel::Unverified,
-        // Leads get exactly the consult helper plus `.mix2/**` writes via
-        // --allowedTools — mechanically scoped.
-        lead_permission_scoping: CapabilityLevel::Enforced,
+        // Leads get the consult helper plus `.mix2/**` writes via
+        // --allowedTools, but that only *adds* allowances — it cannot
+        // subtract permissions a user's own Claude config already grants,
+        // so the `.mix2/`-only scope is asked, not mechanically enforced.
+        // (A future phase could run claude leads under the OS sandbox for a
+        // genuine Enforced guarantee, the way cursor/opencode/copilot do.)
+        lead_permission_scoping: CapabilityLevel::Unverified,
         instruction_injection: CapabilityLevel::Enforced,
     },
     // Leads natively (never wrapped — its own Bash sandbox would nest).
