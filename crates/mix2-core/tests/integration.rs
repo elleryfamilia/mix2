@@ -1252,6 +1252,71 @@ fn cursor_is_discoverable_with_note_and_refused_as_lead() {
 }
 
 #[test]
+fn config_naming_an_ineligible_lead_is_refused_on_the_auto_path() {
+    // A config that names a teammate-only harness as the lead used to
+    // auto-confirm without any eligibility check — `validate_selection`
+    // guards only the interactive picker. The choke point in
+    // `Runtime::initialize` must refuse it before any turn runs. Explicit
+    // slot tables make `explicit_slots` true, so the serve loop takes the
+    // auto branch (no picker) rather than waiting for `select_team`.
+    let core = Core::start(CoreOptions {
+        lead: None,
+        cursor_cmd: Some(
+            fixtures_dir()
+                .join("fake-cursor-agent")
+                .display()
+                .to_string(),
+        ),
+        config_extra:
+            "lead = \"one\"\n[slot.one]\nharness = \"cursor\"\n[slot.two]\nharness = \"claude\"\n"
+                .to_owned(),
+        ..CoreOptions::default()
+    });
+    let events = core.events_until("fatal", LONG);
+    assert!(
+        find(&events, "fatal").unwrap()["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot lead yet"),
+        "auto path must refuse the ineligible lead: {:#?}",
+        types(&events)
+    );
+}
+
+#[test]
+fn dev_run_refuses_an_ineligible_lead() {
+    // `dev_run` is the second auto-confirming entry point: it never calls
+    // `validate_selection`, so the same choke point must catch it. A
+    // failed initialize propagates out of `dev_run` as a process error
+    // (non-zero exit + message on stderr), not a `fatal` event.
+    let config_dir = tempfile::tempdir().expect("tempdir");
+    let config_path = config_dir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "lead = \"one\"\n[slot.one]\nharness = \"cursor\"\n[slot.two]\nharness = \"claude\"\n",
+    )
+    .expect("write config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mix2-core"))
+        .args(["dev", "hello", "--config", config_path.to_str().unwrap()])
+        .env_remove("MIX2_CLAUDE_CMD")
+        .env_remove("MIX2_CURSOR_CMD")
+        .env("MIX2_CLAUDE_CMD", fixtures_dir().join("fake-claude"))
+        .env("MIX2_CURSOR_CMD", fixtures_dir().join("fake-cursor-agent"))
+        .env("MIX2_CODEX_CMD", "/nonexistent/codex-binary")
+        .env("MIX2_OPENCODE_CMD", "/nonexistent/opencode-binary")
+        .env("MIX2_COPILOT_CMD", "/nonexistent/copilot-binary")
+        .output()
+        .expect("run mix2-core dev");
+    assert!(!output.status.success(), "dev_run must exit non-zero");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot lead yet"),
+        "dev_run must refuse the ineligible lead; stderr: {stderr}"
+    );
+}
+
+#[test]
 fn signed_out_cursor_is_reported_in_discovery() {
     let core = Core::start(CoreOptions {
         cursor_cmd: Some(

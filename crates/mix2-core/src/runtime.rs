@@ -104,6 +104,31 @@ fn discovery_timeout() -> Duration {
         .unwrap_or(discovery::DEFAULT_PROBE_TIMEOUT)
 }
 
+/// Role-eligibility gate for a settled team: the lead harness must be able
+/// to coordinate and the teammate to consult read-only. This is the single
+/// authority — every path that settles a team (the picker's
+/// `validate_selection`, and `Runtime::initialize`, which the auto-confirm
+/// and `dev_run` paths also traverse) runs it, so a config that names an
+/// ineligible lead is refused everywhere, not only in the interactive
+/// picker. Returns an actionable refusal string on failure.
+fn check_team_eligibility(team: Team) -> std::result::Result<(), String> {
+    let lead_caps = registry::descriptor(team.lead_harness()).capabilities;
+    if !lead_caps.lead_eligible() {
+        return Err(format!(
+            "{} cannot lead yet — pick it as the teammate instead",
+            team.lead_harness().display_name()
+        ));
+    }
+    let teammate_caps = registry::descriptor(team.teammate_harness()).capabilities;
+    if !teammate_caps.teammate_eligible() {
+        return Err(format!(
+            "{} cannot serve as the teammate",
+            team.teammate_harness().display_name()
+        ));
+    }
+    Ok(())
+}
+
 /// Validate a `select_team` request against discovery results. Returns the
 /// settled team or an actionable refusal for the picker to display.
 fn validate_selection(
@@ -150,20 +175,7 @@ fn validate_selection(
             ));
         }
     }
-    let lead_caps = registry::descriptor(team.lead_harness()).capabilities;
-    if !lead_caps.lead_eligible() {
-        return Err(format!(
-            "{} cannot lead yet — pick it as the teammate instead",
-            team.lead_harness().display_name()
-        ));
-    }
-    let teammate_caps = registry::descriptor(team.teammate_harness()).capabilities;
-    if !teammate_caps.teammate_eligible() {
-        return Err(format!(
-            "{} cannot serve as the teammate",
-            team.teammate_harness().display_name()
-        ));
-    }
+    check_team_eligibility(team)?;
     Ok(team)
 }
 
@@ -257,6 +269,16 @@ impl Runtime {
         lead_msgs: mpsc::Sender<LeadMsg>,
         report: &discovery::Discovery,
     ) -> Result<Self> {
+        // Role-eligibility backstop for every entry point. The interactive
+        // picker refuses ineligible teams in `validate_selection`, but the
+        // auto-confirm branch and `dev_run` settle the configured team
+        // without it — so a config naming an ineligible lead (e.g.
+        // `[slot.one] harness = "cursor", lead = "one"`) would otherwise
+        // start unrefused. Fail here before any probing or spawning.
+        if let Err(message) = check_team_eligibility(team) {
+            anyhow::bail!(message);
+        }
+
         let cwd = cwd
             .canonicalize()
             .with_context(|| format!("project directory {} does not exist", cwd.display()))?;
