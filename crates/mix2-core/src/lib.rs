@@ -8,4 +8,5 @@ pub mod config;
 pub mod ipc;
 pub mod process;
 pub mod runtime;
+pub mod sandbox;
 pub mod session;
