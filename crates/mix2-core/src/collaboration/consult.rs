@@ -71,6 +71,10 @@ pub fn teammate_unavailable_message(teammate: HarnessKind, reason: &str) -> Stri
 /// - `start`: launch the consultation and reply immediately with a ticket,
 ///   so the caller can keep doing its own research in parallel.
 /// - `wait`: block until the ticketed consultation finishes, then reply.
+///   With `timeout_secs`, reply `pending` once that bound elapses instead —
+///   the caller's own shell tool kills long commands, so waits must return
+///   before the harness does it uncleanly.
+/// - `status`: reply immediately with whether the ticket has a result.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConsultRequest {
     pub v: u32,
@@ -84,6 +88,10 @@ pub struct ConsultRequest {
     pub mode: Option<String>,
     #[serde(default)]
     pub ticket: Option<String>,
+    /// Upper bound on how long a `wait` blocks before replying `pending`.
+    /// Absent means wait indefinitely (older helpers).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
     /// Per-turn capability token. Injected only into the coordinator's
     /// environment, so role/depth claims are not the authorization.
     #[serde(default)]
@@ -103,6 +111,11 @@ pub struct ConsultResponse {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ticket: Option<String>,
+    /// True when the ticketed consultation is still running: a bounded
+    /// `wait` elapsed, or `status` found no result yet. Not an error — the
+    /// caller should simply wait again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
 }
 
 /// Progress updates surfaced to the runtime while consultations run.
@@ -417,6 +430,7 @@ async fn handle_line(shared: &Arc<Shared>, line: &str) -> ConsultResponse {
                 text: None,
                 error: Some(format!("invalid consult request: {e}")),
                 ticket: None,
+                pending: false,
             }
         }
     };
@@ -429,6 +443,18 @@ fn refuse(error: String) -> ConsultResponse {
         text: None,
         error: Some(error),
         ticket: None,
+        pending: false,
+    }
+}
+
+/// "Still running" reply for a bounded `wait` or a `status` check.
+fn pending_response(ticket: String) -> ConsultResponse {
+    ConsultResponse {
+        ok: true,
+        text: None,
+        error: None,
+        ticket: Some(ticket),
+        pending: true,
     }
 }
 
@@ -468,7 +494,7 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
 
     let mode = request.mode.as_deref().unwrap_or("sync");
 
-    if mode == "wait" {
+    if mode == "wait" || mode == "status" {
         let authorized = {
             let active = shared.active.read().await;
             active
@@ -481,15 +507,42 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
             );
         }
         let Some(ticket) = request.ticket else {
-            return refuse("wait requires a consultation ticket.".to_owned());
+            return refuse(format!("{mode} requires a consultation ticket."));
         };
         let rx = shared.pending.lock().await.get(&ticket).cloned();
         let Some(rx) = rx else {
             return refuse(format!(
-                "Unknown consultation ticket {ticket} (it may belong to an earlier turn)."
+                "Unknown consultation ticket {ticket} (it may belong to an earlier turn — \
+                 tickets do not survive the turn that started them)."
             ));
         };
-        return await_result(rx).await;
+        if mode == "status" {
+            let ready = rx.borrow().is_some();
+            return if ready {
+                ConsultResponse {
+                    ok: true,
+                    text: None,
+                    error: None,
+                    ticket: Some(ticket),
+                    pending: false,
+                }
+            } else {
+                pending_response(ticket)
+            };
+        }
+        // A bounded wait replies `pending` when the bound elapses; the
+        // helper's caller re-runs the wait. Unbounded (no timeout_secs)
+        // preserves the older helper's behavior.
+        return match request.timeout_secs {
+            Some(secs) => {
+                let bound = Duration::from_secs(secs.clamp(1, 15 * 60));
+                match tokio::time::timeout(bound, await_result(rx)).await {
+                    Ok(response) => response,
+                    Err(_) => pending_response(ticket),
+                }
+            }
+            None => await_result(rx).await,
+        };
     }
     if mode == "disagree" {
         return record_disagreement(shared, &request).await;
@@ -574,6 +627,7 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
                     text: Some(text),
                     error: None,
                     ticket: None,
+                    pending: false,
                 }
             }
             Err(e) => {
@@ -609,6 +663,7 @@ async fn handle_request(shared: &Arc<Shared>, request: ConsultRequest) -> Consul
             text: None,
             error: None,
             ticket: Some(ticket),
+            pending: false,
         };
     }
     await_result(result_rx).await
@@ -673,6 +728,7 @@ async fn record_disagreement(shared: &Arc<Shared>, request: &ConsultRequest) -> 
         text: Some(DISAGREEMENT_RECORDED.to_owned()),
         error: None,
         ticket: None,
+        pending: false,
     }
 }
 
@@ -852,6 +908,44 @@ mod tests {
         }
     }
 
+    /// Teammate that never finishes on its own: `start`ed consultations stay
+    /// in flight until the turn's cancel token fires, so bounded waits and
+    /// status checks can be observed mid-consultation.
+    struct SlowTeammate;
+
+    #[async_trait]
+    impl Agent for SlowTeammate {
+        fn harness(&self) -> HarnessKind {
+            HarnessKind::Codex
+        }
+
+        async fn version(&self) -> Result<AgentVersion> {
+            Ok(AgentVersion {
+                raw: "stub".to_owned(),
+            })
+        }
+
+        async fn start(
+            &self,
+            _request: AgentRequest,
+            _events: mpsc::Sender<AgentEvent>,
+            cancel: CancellationToken,
+        ) -> Result<AgentResult> {
+            cancel.cancelled().await;
+            anyhow::bail!("cancelled")
+        }
+
+        async fn resume(
+            &self,
+            _session: &AgentSession,
+            request: AgentRequest,
+            events: mpsc::Sender<AgentEvent>,
+            cancel: CancellationToken,
+        ) -> Result<AgentResult> {
+            self.start(request, events, cancel).await
+        }
+    }
+
     struct Harness {
         server: ConsultServer,
         shared: Arc<Shared>,
@@ -861,6 +955,10 @@ mod tests {
 
     impl Harness {
         async fn new() -> Self {
+            Self::with_teammate(Arc::new(StubTeammate)).await
+        }
+
+        async fn with_teammate(teammate: Arc<dyn Agent>) -> Self {
             let dir = tempfile::TempDir::new().unwrap();
             let runtime_dir = dir.path().to_path_buf();
             tokio::fs::create_dir_all(runtime_dir.join(FILE_DIR_NAME))
@@ -868,7 +966,7 @@ mod tests {
                 .unwrap();
             let (tx, updates) = mpsc::channel(64);
             let shared = Arc::new(Shared {
-                teammate: Arc::new(StubTeammate),
+                teammate,
                 team: Team {
                     one: HarnessKind::Claude,
                     two: HarnessKind::Codex,
@@ -943,6 +1041,7 @@ mod tests {
             depth: 0,
             mode: Some("disagree".to_owned()),
             ticket: None,
+            timeout_secs: None,
             token: token.map(str::to_owned),
             disagreement_text: Some(text.to_owned()),
         }
@@ -956,9 +1055,81 @@ mod tests {
             depth: 0,
             mode: Some("sync".to_owned()),
             ticket: None,
+            timeout_secs: None,
             token: Some(TOKEN.to_owned()),
             disagreement_text: None,
         }
+    }
+
+    fn ticketed_request(mode: &str, ticket: &str, timeout_secs: Option<u64>) -> ConsultRequest {
+        ConsultRequest {
+            v: 1,
+            prompt: String::new(),
+            role: "lead".to_owned(),
+            depth: 0,
+            mode: Some(mode.to_owned()),
+            ticket: Some(ticket.to_owned()),
+            timeout_secs,
+            token: Some(TOKEN.to_owned()),
+            disagreement_text: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_wait_reports_pending_while_the_consult_runs() {
+        let h = Harness::with_teammate(Arc::new(SlowTeammate)).await;
+        h.begin_turn(0).await;
+
+        let mut start = consult_request();
+        start.mode = Some("start".to_owned());
+        let started = handle_request(&h.shared, start).await;
+        assert!(started.ok);
+        let ticket = started.ticket.expect("start returns a ticket");
+
+        // The consult never finishes on its own: a bounded wait comes back
+        // `pending` instead of blocking past its bound.
+        let waited = handle_request(&h.shared, ticketed_request("wait", &ticket, Some(1))).await;
+        assert!(waited.ok, "pending is not an error: {:?}", waited.error);
+        assert!(waited.pending);
+        assert_eq!(waited.ticket.as_deref(), Some(ticket.as_str()));
+
+        // `status` answers instantly with the same still-running signal.
+        let status = handle_request(&h.shared, ticketed_request("status", &ticket, None)).await;
+        assert!(status.ok);
+        assert!(status.pending);
+
+        // Once the consultation settles (cancelled here), status flips to
+        // ready and an unbounded wait returns the settled result.
+        let cancel = {
+            let active = h.shared.active.read().await;
+            active.as_ref().unwrap().cancel.clone()
+        };
+        cancel.cancel();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = handle_request(&h.shared, ticketed_request("status", &ticket, None)).await;
+            assert!(status.ok);
+            if !status.pending {
+                break;
+            }
+            assert!(Instant::now() < deadline, "consult never settled");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let settled = handle_request(&h.shared, ticketed_request("wait", &ticket, Some(5))).await;
+        assert!(!settled.pending);
+        assert!(!settled.ok, "a cancelled consult settles as a failure");
+    }
+
+    #[tokio::test]
+    async fn status_refuses_unknown_tickets_like_wait() {
+        let h = Harness::new().await;
+        h.begin_turn(0).await;
+        let response = handle_request(&h.shared, ticketed_request("status", "nope", None)).await;
+        assert!(!response.ok);
+        assert!(response
+            .error
+            .unwrap()
+            .contains("Unknown consultation ticket"));
     }
 
     #[tokio::test]
