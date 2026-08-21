@@ -487,47 +487,72 @@ impl Runtime {
         // Wrap the lead in the OS sandbox when its harness lacks native
         // write scoping and an engine is available. A natively-scoped lead
         // (claude/codex) is never wrapped — its own mechanism stands, and
-        // Seatbelt does not nest. A failed spec assembly (e.g. a symlinked
-        // `.mix2`) degrades to an unsandboxed run rather than blocking the
-        // turn; eligibility already vetted the harness at selection.
+        // Seatbelt does not nest.
         let lead_harness = self.team().lead_harness();
-        let sandbox = self.sandbox_engine.filter(|_| {
+        let need_sandbox = self.sandbox_engine.filter(|_| {
             !registry::descriptor(lead_harness)
                 .capabilities
                 .lead_eligible()
         });
-        let sandbox = match sandbox {
-            Some(engine) => {
-                let descriptor = registry::descriptor(lead_harness);
-                let others: Vec<&str> = registry::ALL
-                    .into_iter()
-                    .filter(|h| *h != lead_harness)
-                    .flat_map(|h| registry::descriptor(h).credential_files.iter().copied())
-                    .collect();
-                match crate::sandbox::build_lead_spec(crate::sandbox::LeadSpecInputs {
-                    engine,
-                    cwd: &self.session.cwd,
-                    runtime_dir: &self.runtime_dir,
-                    state_dirs: descriptor.state_dirs,
-                    other_credential_files: &others,
-                    env_keep: descriptor.env_keep_sandboxed,
-                }) {
-                    Ok((spec, lead_tmp)) => {
-                        // Point the child's TMPDIR at the writable scratch so
-                        // scratch writes land inside the sandbox's grant, not
-                        // the denied shared temp.
-                        env.insert("TMPDIR".into(), lead_tmp.display().to_string());
-                        Some(spec)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "sandbox spec assembly failed, running lead unsandboxed: {e}"
-                        );
-                        None
+        // Produce the spec or an actionable failure. A harness that is
+        // lead-eligible *only* because of the sandbox must NEVER fall back
+        // to an unconfined run when assembly fails — that would silently
+        // break the scope the picker disclosed. Fail the turn instead.
+        let sandbox_result: std::result::Result<Option<crate::sandbox::SandboxSpec>, String> =
+            match need_sandbox {
+                Some(engine) => {
+                    let descriptor = registry::descriptor(lead_harness);
+                    let others: Vec<&str> = registry::ALL
+                        .into_iter()
+                        .filter(|h| *h != lead_harness)
+                        .flat_map(|h| registry::descriptor(h).credential_files.iter().copied())
+                        .collect();
+                    match crate::sandbox::build_lead_spec(crate::sandbox::LeadSpecInputs {
+                        engine,
+                        cwd: &self.session.cwd,
+                        runtime_dir: &self.runtime_dir,
+                        state_dirs: descriptor.state_dirs,
+                        other_credential_files: &others,
+                        env_keep: descriptor.env_keep_sandboxed,
+                    }) {
+                        Ok((spec, lead_tmp)) => {
+                            // Point the child's TMPDIR at the writable scratch
+                            // so scratch writes land inside the grant, not the
+                            // denied shared temp.
+                            env.insert("TMPDIR".into(), lead_tmp.display().to_string());
+                            Ok(Some(spec))
+                        }
+                        Err(e) => Err(format!(
+                            "sandbox: could not confine the {} lead ({e}) — refusing to run it \
+                             unsandboxed. Pick it as the teammate, or set `[sandbox] mode = off`.",
+                            lead_harness.display_name()
+                        )),
                     }
                 }
+                None => Ok(None),
+            };
+
+        let sandbox = match sandbox_result {
+            Ok(spec) => spec,
+            Err(message) => {
+                // Fail the turn through the normal completion path: no
+                // `begin_turn`, no lead spawn. `end_turn` (in `finish_turn`)
+                // safely no-ops without an active turn.
+                let msgs = self.lead_msgs.clone();
+                tokio::spawn(async move {
+                    let _ = msgs
+                        .send(LeadMsg::Done(turn_uuid, Err(anyhow::anyhow!(message))))
+                        .await;
+                });
+                return TurnState {
+                    ui_id,
+                    uuid: turn_uuid,
+                    cancel,
+                    successful_consults: 0,
+                    started: Instant::now(),
+                    cancelled: false,
+                };
             }
-            None => None,
         };
 
         let request = AgentRequest {

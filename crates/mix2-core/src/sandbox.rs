@@ -577,6 +577,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn build_lead_spec_fails_when_mix2_is_a_symlink() {
+        // A symlinked `.mix2` can't be safely granted (it would redirect
+        // writes to the target), so assembly fails — the runtime then fails
+        // the turn rather than running a sandbox-only lead unconfined.
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("proj");
+        std::fs::create_dir(&cwd).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, cwd.join(".mix2")).unwrap();
+        let runtime = dir.path().join("rt");
+        std::fs::create_dir(&runtime).unwrap();
+
+        let result = build_lead_spec(LeadSpecInputs {
+            engine: SandboxEngine::Seatbelt,
+            cwd: &cwd,
+            runtime_dir: &runtime,
+            state_dirs: &[],
+            other_credential_files: &[],
+            env_keep: &[],
+        });
+        assert!(result.is_err(), "a symlinked .mix2 must fail assembly");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn prepare_writable_root_rejects_a_symlinked_root() {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("real");
