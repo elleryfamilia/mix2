@@ -29,7 +29,13 @@ def out(obj):
 
 
 def try_write(path):
+    # Ensure the parent exists first so a missing `.mix2/` reports a real
+    # sandbox denial, never a stray ENOENT. `.mix2` is pre-created by the
+    # runtime, so makedirs is a no-op there; the parent of the leak path is
+    # the cwd, which always exists — either way the OSError we care about is
+    # the sandbox denying the open.
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write("probe\n")
         return True
