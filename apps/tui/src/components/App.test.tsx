@@ -155,7 +155,7 @@ describe('team picker', () => {
     h.unmount();
   });
 
-  it("arrows highlight without equipping; one slot's pick is blocked on the other", async () => {
+  it("arrows highlight without equipping; taking slot two's pick swaps the slots", async () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
@@ -166,27 +166,19 @@ describe('team picker', () => {
     await tickReact();
     expect(h.lastFrame()).toContain('slot two coordinates');
 
-    // Each slot's pick is disabled on the opposite slot, labelled with
-    // whose it is — a team is two different CLIs when two are detected.
-    const frame = h.lastFrame()!;
-    expect(frame).toContain('selected for slot one');
-    expect(frame).toContain('selected for slot two');
-
     // ↓ only moves the highlight onto codex — nothing is equipped yet…
     h.stdin.write('\x1b[B');
     await tickReact();
-    // …and enter refuses: codex is slot two's pick, so slot one can't
-    // take it. Focus stays put; nothing starts.
+    expect(h.client.selectTeam).not.toHaveBeenCalled();
+    // …enter equips codex for slot one; slot two held codex, so the
+    // slots swap — claude moves down rather than duplicating. Focus
+    // advances to slot two, seeded on its (new) equipped claude.
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
 
-    // ↑ back to claude, equip both slots as proposed, then continue; ↑ on
-    // continue is a no-op, not a hidden coordinator toggle.
-    h.stdin.write('\x1b[A');
-    await tickReact();
-    h.stdin.write('\r');
-    await tickReact();
+    // Equip claude for slot two → continue; ↑ there is a no-op, not a
+    // hidden coordinator toggle.
     h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\x1b[A');
@@ -195,7 +187,7 @@ describe('team picker', () => {
 
     h.stdin.write('\r');
     await tickReact();
-    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'two');
+    expect(h.client.selectTeam).toHaveBeenCalledWith('codex', 'claude', 'two');
     h.unmount();
   });
 

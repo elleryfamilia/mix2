@@ -5,9 +5,12 @@
  * should read as "continue", not as one more setting. The configured
  * proposal arrives preselected; undetected CLIs are hidden entirely (a
  * footer hint covers installing or configuring one), while detected-but-
- * blocked entries stay visible with their actionable reason. Each slot
- * gets its own CLI: one slot's pick is disabled on the other, except on a
- * single-CLI machine where the duplicate is the only way to start.
+ * blocked entries stay visible with their actionable reason. A team is
+ * two different CLIs, enforced directionally: slot one chooses among
+ * everything detected, and slot two's list simply omits slot one's pick —
+ * taking slot two's CLI onto slot one swaps them rather than blocking.
+ * The exception is a single-CLI machine, where the duplicate is the only
+ * way to start and stays offered.
  */
 import type { DiscoveredHarness } from '../ipc/protocol.js';
 import type { DiscoveryState } from '../state/store.js';
@@ -59,70 +62,91 @@ function eligible(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName):
   return slot === leadSlot ? entry.lead_eligible : entry.teammate_eligible;
 }
 
-/** Whether an entry can be chosen for a slot right now: eligible, and not
- * already equipped on the other slot — each slot gets its own CLI. The one
- * carve-out: when a slot has no other eligible choice (a single-CLI
- * machine), the duplicate stays selectable so a team can still start. */
-export function selectable(
-  entry: DiscoveredHarness,
+/** Whether an entry can be chosen for a slot: signed in and role-eligible.
+ * (The two-different-CLIs rule lives in `slotEntries`, not here — slot
+ * two's list already omits slot one's pick.) */
+export function selectable(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): boolean {
+  return eligible(entry, slot, leadSlot);
+}
+
+/** The list a slot offers. Slot one chooses among every detected CLI;
+ * slot two omits slot one's pick — a team is two different CLIs — unless
+ * nothing eligible would remain (single-CLI machines still start). */
+export function slotEntries(
+  discovery: DiscoveryState,
   slot: SlotName,
   selection: TeamPickerSelection,
-  entries: DiscoveredHarness[],
-): boolean {
-  if (!eligible(entry, slot, selection.leadSlot)) return false;
-  const otherChosen = slot === 'one' ? selection.two : selection.one;
-  if (entry.harness !== otherChosen) return true;
-  return !entries.some(
-    (e) => e.harness !== entry.harness && eligible(e, slot, selection.leadSlot),
+): DiscoveredHarness[] {
+  const entries = pickerEntries(discovery);
+  if (slot === 'one') return entries;
+  const rest = entries.filter((e) => e.harness !== selection.one);
+  return rest.some((e) => eligible(e, 'two', selection.leadSlot)) ? rest : entries;
+}
+
+/** The next selection after equipping `harness` onto `slot`. Equipping
+ * slot one with slot two's current pick swaps rather than duplicates:
+ * slot two takes the outgoing slot-one CLI when it's eligible there,
+ * else the first eligible remaining entry. Only a single-CLI machine
+ * ends up with the same CLI on both slots. */
+export function equipSelection(
+  discovery: DiscoveryState,
+  selection: TeamPickerSelection,
+  slot: SlotName,
+  harness: string,
+): TeamPickerSelection {
+  const next: TeamPickerSelection = { ...selection, [slot]: harness };
+  if (slot !== 'one' || harness !== selection.two) return next;
+  const entries = pickerEntries(discovery);
+  const outgoing = entries.find(
+    (e) => e.harness === selection.one && e.harness !== harness,
   );
+  const fallback =
+    outgoing && eligible(outgoing, 'two', next.leadSlot)
+      ? outgoing
+      : entries.find((e) => e.harness !== harness && eligible(e, 'two', next.leadSlot));
+  if (fallback) next.two = fallback.harness;
+  return next;
 }
 
 /** One-line status label for a disabled entry. */
-function disabledLabel(
-  entry: DiscoveredHarness,
-  slot: SlotName,
-  selection: TeamPickerSelection,
-): string {
+function disabledLabel(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): string {
   if (entry.auth === 'unauthenticated') return entry.reason ?? 'not signed in';
   // The why matters: this slot coordinates, and a teammate-only harness
   // can't — on the other slot the same entry is selectable. When the
   // harness *could* lead under the OS sandbox but it isn't available here,
   // say so — that's an actionable fix, not a permanent limit.
-  if (slot === selection.leadSlot && !entry.lead_eligible) {
+  if (slot === leadSlot && !entry.lead_eligible) {
     return entry.sandboxable_lead
       ? 'needs the OS sandbox to coordinate'
       : "teammate-only: can't coordinate";
-  }
-  const other = slot === 'one' ? 'two' : 'one';
-  if (entry.harness === (slot === 'one' ? selection.two : selection.one)) {
-    return `selected for slot ${other}`;
   }
   return 'not eligible';
 }
 
 /** The picker's initial selection: the core's proposal, remapped onto a
- * detected CLI wherever the proposal names one that isn't on this machine
- * — a preselection hidden from the list would be unexplainable. */
+ * detected CLI wherever the proposal names one that isn't offered by that
+ * slot's list — a preselection hidden from the list would be
+ * unexplainable. (This also moves slot two off a duplicate proposal.) */
 export function initialSelection(discovery: DiscoveryState): TeamPickerSelection {
-  const entries = pickerEntries(discovery);
   const selection: TeamPickerSelection = {
     one: discovery.proposal.one,
     two: discovery.proposal.two,
     leadSlot: discovery.proposal.lead_slot,
   };
   for (const slot of ['one', 'two'] as const) {
+    const entries = slotEntries(discovery, slot, selection);
     if (entries.some((e) => e.harness === selection[slot])) continue;
-    const fallback = entries.find((e) => selectable(e, slot, selection, entries));
+    const fallback = entries.find((e) => selectable(e, slot, selection.leadSlot));
     if (fallback) selection[slot] = fallback.harness;
   }
   return selection;
 }
 
-/** Where a harness sits in the picker's entry list (cursor seeding). */
-export function entryIndexOf(discovery: DiscoveryState, harness: string): number {
+/** Where a harness sits in a slot's entry list (cursor seeding). */
+export function entryIndexOf(entries: DiscoveredHarness[], harness: string): number {
   return Math.max(
     0,
-    pickerEntries(discovery).findIndex((e) => e.harness === harness),
+    entries.findIndex((e) => e.harness === harness),
   );
 }
 
@@ -137,13 +161,13 @@ function slotTile(
   cursorIndex: number,
   width: number,
 ): Line[] {
-  const entries = pickerEntries(discovery);
+  const entries = slotEntries(discovery, slot, selection);
   const chosen = slot === 'one' ? selection.one : selection.two;
   const isLead = selection.leadSlot === slot;
   const bodyWidth = width - 4;
   const body: Line[] = [];
   entries.forEach((entry, i) => {
-    const enabled = selectable(entry, slot, selection, entries);
+    const enabled = selectable(entry, slot, selection.leadSlot);
     const isChosen = entry.harness === chosen;
     const isCursor = active && i === cursorIndex;
     const marker = isCursor ? '›' : ' ';
@@ -166,7 +190,7 @@ function slotTile(
       span(chosenMark, { color: agentColor(slot) }),
     ]);
     if (!enabled) {
-      const reason = truncate(disabledLabel(entry, slot, selection), Math.max(8, bodyWidth - 2));
+      const reason = truncate(disabledLabel(entry, slot, selection.leadSlot), Math.max(8, bodyWidth - 2));
       body.push([span('  '), span(reason, { color: theme.text.faint })]);
     } else if (isChosen) {
       // Selection disclosures surface right where the choice is made —

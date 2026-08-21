@@ -16,10 +16,11 @@ import {
 import { renderTeamPanel } from '../render/teamPanel.js';
 import {
   entryIndexOf,
+  equipSelection,
   initialSelection,
-  pickerEntries,
   renderTeamPicker,
   selectable,
+  slotEntries,
   type TeamPickerCursor,
   type TeamPickerSelection,
 } from '../render/teamPicker.js';
@@ -113,7 +114,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     if (state.phase === 'selecting-team' && state.discovery && !picker) {
       const selection = initialSelection(state.discovery);
       setPicker({
-        cursor: { column: 0, index: entryIndexOf(state.discovery, selection.one) },
+        cursor: {
+          column: 0,
+          index: entryIndexOf(slotEntries(state.discovery, 'one', selection), selection.one),
+        },
         selection,
       });
     }
@@ -398,9 +402,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
 
     if (state.phase === 'selecting-team' && state.discovery && picker) {
       const discovery = state.discovery;
-      const entries = pickerEntries(discovery);
+      const entriesFor = (column: 0 | 1, selection: TeamPickerSelection) =>
+        slotEntries(discovery, column === 0 ? 'one' : 'two', selection);
       const equippedIndex = (column: 0 | 1, selection: TeamPickerSelection) =>
-        entryIndexOf(discovery, column === 0 ? selection.one : selection.two);
+        entryIndexOf(entriesFor(column, selection), column === 0 ? selection.one : selection.two);
       if (key.return) {
         // Enter is pick-equip-advance on the slot columns; the continue
         // button is where the team actually starts. The IPC send stays
@@ -411,10 +416,12 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           return;
         }
         const slot = cursor.column === 0 ? 'one' : 'two';
-        const entry = entries[cursor.index];
+        const entry = entriesFor(cursor.column, selection)[cursor.index];
         // A disabled entry cannot be equipped; its reason is on screen.
-        if (!entry || !selectable(entry, slot, selection, entries)) return;
-        const nextSelection = { ...selection, [slot]: entry.harness };
+        if (!entry || !selectable(entry, slot, selection.leadSlot)) return;
+        // Equipping slot one with slot two's pick swaps them (the helper
+        // moves slot two onto the outgoing CLI) rather than duplicating.
+        const nextSelection = equipSelection(discovery, selection, slot, entry.harness);
         const column = (cursor.column + 1) as TeamPickerCursor['column'];
         const index = column === 2 ? 0 : equippedIndex(column, nextSelection);
         setPicker({ selection: nextSelection, cursor: { column, index } });
@@ -442,7 +449,8 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           // Arrows only move the highlight; equipping is the explicit
           // enter. Disabled entries stay reachable so their reason reads.
           const delta = key.upArrow ? -1 : 1;
-          const index = Math.max(0, Math.min(entries.length - 1, prev.cursor.index + delta));
+          const count = entriesFor(prev.cursor.column, prev.selection).length;
+          const index = Math.max(0, Math.min(count - 1, prev.cursor.index + delta));
           return { ...prev, cursor: { ...prev.cursor, index } };
         });
         return;
