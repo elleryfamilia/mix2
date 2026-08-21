@@ -187,9 +187,31 @@ fn existing_non_symlink(path: &Path) -> Option<PathBuf> {
 fn platform_temp_root() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        std::env::temp_dir()
-            .parent()
-            .and_then(|p| p.canonicalize().ok())
+        // Query the true per-user Darwin temp dir via confstr, NOT
+        // `std::env::temp_dir()` — the latter honors `$TMPDIR`, which a
+        // parent process may have redirected, whereas the child CLI reads
+        // the confstr value directly. Take its parent so the grant covers
+        // both the temp (T) and cache (C) siblings.
+        // SAFETY: standard two-call confstr pattern (size, then fill).
+        unsafe {
+            let name = libc::_CS_DARWIN_USER_TEMP_DIR;
+            let len = libc::confstr(name, std::ptr::null_mut(), 0);
+            if len == 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; len];
+            let got = libc::confstr(name, buf.as_mut_ptr() as *mut libc::c_char, len);
+            if got == 0 || got > len {
+                return None;
+            }
+            let path = std::ffi::CStr::from_bytes_with_nul(&buf[..got])
+                .ok()?
+                .to_str()
+                .ok()?;
+            std::path::Path::new(path)
+                .parent()
+                .and_then(|p| p.canonicalize().ok())
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
