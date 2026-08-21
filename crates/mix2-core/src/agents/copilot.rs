@@ -106,14 +106,22 @@ fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
         // built-in GitHub MCP server stay out of mix2 consultations.
         "--no-custom-instructions".into(),
         "--disable-builtin-mcps".into(),
-        // Non-interactive mode requires blanket tool approval; the deny
-        // rules below outrank it by documented precedence.
+        // Non-interactive mode requires blanket tool approval.
         "--allow-all-tools".into(),
-        "--deny-tool".into(),
-        "write".into(),
-        "--deny-tool".into(),
-        "shell".into(),
     ];
+    // The write/shell denials are what keep a Copilot *teammate* read-only
+    // (they outrank `--allow-all-tools` by documented precedence). A
+    // sandboxed lead needs to write `.mix2/` and run `mix2-consult`, so it
+    // drops the denials and relies on the OS sandbox for scoping. Keyed on
+    // the resolved sandbox, never the role: with no sandbox the denials
+    // stay, so the argv is byte-identical to today and `mode = off` is a
+    // true rollback.
+    if request.sandbox.is_none() {
+        args.push("--deny-tool".into());
+        args.push("write".into());
+        args.push("--deny-tool".into());
+        args.push("shell".into());
+    }
     if let Some(model) = &request.model {
         args.push("--model".into());
         args.push(model.clone());
@@ -276,6 +284,7 @@ mod tests {
             env: HashMap::new(),
             path_prepend: None,
             runtime_dir: None,
+            sandbox: None,
         }
     }
 
@@ -300,6 +309,28 @@ mod tests {
                 "auto",
             ]
         );
+    }
+
+    fn sandboxed(mut request: AgentRequest) -> AgentRequest {
+        request.role = AgentRole::Lead;
+        request.sandbox = Some(crate::sandbox::SandboxSpec {
+            engine: crate::sandbox::SandboxEngine::Seatbelt,
+            policy: crate::sandbox::SandboxPolicy::with_writable(vec![]),
+        });
+        request
+    }
+
+    #[test]
+    fn build_args_drops_deny_tools_for_a_sandboxed_lead() {
+        // The write/shell denials are what keep a teammate read-only; a
+        // sandboxed lead drops them (it must write `.mix2/` and run
+        // `mix2-consult`) and relies on the OS sandbox. `--allow-all-tools`
+        // stays — non-interactive mode needs it.
+        let args = build_args(&sandboxed(request(Some("auto"), "ROLE")), None);
+        assert!(!args.contains(&"--deny-tool".to_owned()));
+        assert!(!args.contains(&"write".to_owned()));
+        assert!(!args.contains(&"shell".to_owned()));
+        assert!(args.contains(&"--allow-all-tools".to_owned()));
     }
 
     #[test]

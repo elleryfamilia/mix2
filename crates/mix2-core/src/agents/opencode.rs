@@ -92,15 +92,16 @@ fn parse_version(raw: &str) -> String {
 }
 
 fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
-    let mut args: Vec<String> = vec![
-        "run".into(),
-        "--format".into(),
-        "json".into(),
-        // Read-only planning agent for every role: OpenCode never edits
-        // the project from inside mix2 (leads are refused at selection).
-        "--agent".into(),
-        "plan".into(),
-    ];
+    let mut args: Vec<String> = vec!["run".into(), "--format".into(), "json".into()];
+    // The read-only planning agent keeps an OpenCode *teammate* from
+    // editing. A sandboxed lead needs to write `.mix2/`, so it drops the
+    // plan agent and relies on the OS sandbox instead. Keyed on the
+    // resolved sandbox (not the role): unsandboxed argv is byte-identical
+    // to today, and an unsandboxed OpenCode lead is refused upstream.
+    if request.sandbox.is_none() {
+        args.push("--agent".into());
+        args.push("plan".into());
+    }
     if let Some(model) = &request.model {
         args.push("-m".into());
         args.push(model.clone());
@@ -280,7 +281,17 @@ mod tests {
             env: HashMap::new(),
             path_prepend: None,
             runtime_dir: None,
+            sandbox: None,
         }
+    }
+
+    fn sandboxed(mut request: AgentRequest) -> AgentRequest {
+        request.role = AgentRole::Lead;
+        request.sandbox = Some(crate::sandbox::SandboxSpec {
+            engine: crate::sandbox::SandboxEngine::Seatbelt,
+            policy: crate::sandbox::SandboxPolicy::with_writable(vec![]),
+        });
+        request
     }
 
     #[test]
@@ -298,6 +309,16 @@ mod tests {
                 "ROLE\n\nevaluate the cache",
             ]
         );
+    }
+
+    #[test]
+    fn build_args_drops_plan_agent_for_a_sandboxed_lead() {
+        // The sandbox scopes writes, so an OpenCode lead runs the default
+        // (writing) agent rather than the read-only plan agent.
+        let args = build_args(&sandboxed(request(None, "ROLE")), None);
+        assert!(!args.contains(&"--agent".to_owned()));
+        assert!(!args.contains(&"plan".to_owned()));
+        assert!(args.contains(&"run".to_owned()));
     }
 
     #[test]

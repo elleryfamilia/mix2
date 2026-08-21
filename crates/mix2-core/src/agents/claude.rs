@@ -331,6 +331,7 @@ mod tests {
             env: HashMap::new(),
             path_prepend: None,
             runtime_dir: None,
+            sandbox: None,
         }
     }
 

@@ -93,11 +93,17 @@ fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
         "stream-json".into(),
         "--stream-partial-output".into(),
         "--trust".into(),
-        // Read-only planning mode for every role: Cursor never edits from
-        // inside mix2 (leads are refused at selection anyway).
-        "--mode".into(),
-        "plan".into(),
     ];
+    // Read-only planning mode is how a Cursor *teammate* is kept from
+    // editing. A sandboxed lead must be able to write `.mix2/`, so it drops
+    // plan mode and relies on the OS sandbox for scoping instead. Keyed on
+    // the resolved sandbox, never the role: with no sandbox the argv is
+    // byte-identical to today (and an unsandboxed Cursor lead is refused
+    // upstream), so `mode = off` is a true rollback.
+    if request.sandbox.is_none() {
+        args.push("--mode".into());
+        args.push("plan".into());
+    }
     if let Some(model) = &request.model {
         args.push("--model".into());
         args.push(model.clone());
@@ -281,7 +287,28 @@ mod tests {
             env: HashMap::new(),
             path_prepend: None,
             runtime_dir: None,
+            sandbox: None,
         }
+    }
+
+    fn sandboxed(mut request: AgentRequest) -> AgentRequest {
+        request.role = AgentRole::Lead;
+        request.sandbox = Some(crate::sandbox::SandboxSpec {
+            engine: crate::sandbox::SandboxEngine::Seatbelt,
+            policy: crate::sandbox::SandboxPolicy::with_writable(vec![]),
+        });
+        request
+    }
+
+    #[test]
+    fn build_args_drops_plan_mode_for_a_sandboxed_lead() {
+        // The sandbox enforces write scoping, so a Cursor lead runs without
+        // `--mode plan` and can write. Everything else is unchanged.
+        let args = build_args(&sandboxed(request(Some("auto"), "ROLE")), None);
+        assert!(!args.contains(&"--mode".to_owned()));
+        assert!(!args.contains(&"plan".to_owned()));
+        assert!(args.contains(&"--trust".to_owned()));
+        assert!(args.contains(&"--model".to_owned()));
     }
 
     #[test]

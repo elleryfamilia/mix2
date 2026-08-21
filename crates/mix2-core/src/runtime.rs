@@ -469,6 +469,9 @@ impl Runtime {
             env: self.mix2_env(turn_uuid, AgentRole::Lead, Some(&consult_token)),
             path_prepend: helper_dir(),
             runtime_dir: Some(self.runtime_dir.clone()),
+            // Activation (config + eligibility + per-harness policy) wires
+            // this in a later task; the runner already honors it when set.
+            sandbox: None,
         };
 
         let lead = Arc::clone(&self.lead_agent);
