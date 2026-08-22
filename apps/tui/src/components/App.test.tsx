@@ -44,7 +44,7 @@ const ready: Extract<CoreEvent, { type: 'ready' }> = {
   cwd: '/home/dev/src/acme',
 };
 
-function mount(): Harness {
+function mount(history?: { load: () => string[]; append: (text: string) => void }): Harness {
   const client = {
     submit: vi.fn(),
     cancel: vi.fn(),
@@ -61,6 +61,7 @@ function mount(): Harness {
       bind={(h) => {
         handlers = h;
       }}
+      history={history}
     />,
   );
   return {
@@ -583,18 +584,21 @@ describe('App', () => {
     h.unmount();
   });
 
-  it('/exit quits and /help lists commands', async () => {
+  it('/exit quits; retired commands are unknown and list the real ones', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
     await tickReact();
+    // Slash hint appears while typing a command, and lists only the
+    // surviving vocabulary.
     h.stdin.write('/help');
     await tickReact();
-    // Slash hint appears while typing a command.
-    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /model · /team · /activity · /help');
+    expect(h.lastFrame()).toContain('/model · /team · /clear · /exit');
+    expect(h.lastFrame()).not.toContain('/help ·');
+    // /help itself is retired: unknown, with the commands in the notice.
     h.stdin.write('\r');
     await tickReact();
-    expect(h.lastFrame()).toContain('commands  /exit');
+    expect(h.lastFrame()).toContain('unknown command /help — commands: /model · /team · /clear · /exit');
     expect(h.client.submit).not.toHaveBeenCalled();
 
     h.stdin.write('/exit');
@@ -668,7 +672,7 @@ describe('App', () => {
     h.unmount();
   });
 
-  it('ctrl+y and /copy copy the last answer', async () => {
+  it('ctrl+y copies the last answer', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -901,6 +905,89 @@ describe('App', () => {
     await tickReact();
     expect(h.client.submit).not.toHaveBeenCalled();
     expect(h.lastFrame()).toContain('two');
+    h.unmount();
+  });
+});
+
+describe('prompt history', () => {
+  it('up recalls submitted prompts, down walks forward to the draft', async () => {
+    const append = vi.fn();
+    const h = mount({ load: () => [], append });
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+
+    h.stdin.write('first idea');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    h.stdin.write('second idea');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.submit).toHaveBeenCalledTimes(2);
+    expect(append).toHaveBeenNthCalledWith(1, 'first idea');
+    expect(append).toHaveBeenNthCalledWith(2, 'second idea');
+
+    // ↑ walks back: newest first, older next, and the oldest is a wall.
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ second idea');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ first idea');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ first idea');
+
+    // ↓ walks forward again; past the newest, the (empty) draft returns.
+    h.stdin.write('\x1b[B');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ second idea');
+    h.stdin.write('\x1b[B');
+    await tickReact();
+    expect(h.lastFrame()).not.toContain('second idea');
+    h.unmount();
+  });
+
+  it('recalls prompts preloaded from the store; editing exits recall', async () => {
+    const h = mount({ load: () => ['from disk one', 'from disk two'], append: vi.fn() });
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ from disk two');
+
+    // Typing edits the recalled text and leaves recall mode: ↑ now moves
+    // the cursor inside the text instead of loading an older entry.
+    h.stdin.write('!');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ from disk two!');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ from disk two!');
+    expect(h.lastFrame()).not.toContain('from disk one');
+    h.unmount();
+  });
+
+  it('consecutive duplicate submissions are stored once', async () => {
+    const append = vi.fn();
+    const h = mount({ load: () => [], append });
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    h.stdin.write('same');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    h.stdin.write('same');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.submit).toHaveBeenCalledTimes(2);
+    expect(append).toHaveBeenCalledTimes(1);
     h.unmount();
   });
 });

@@ -32,6 +32,7 @@ import {
   isEmptySelection,
   type Selection,
 } from '../render/selection.js';
+import type { HistoryStore } from '../history.js';
 import { initialState, leadInfo, reduce, slotInfo, teammateInfo, type AppState } from '../state/store.js';
 import { glyphs, spinnerFrames, teamSpinnerFrames, theme, type SlotName } from '../theme/theme.js';
 import { copyToClipboard } from '../util/clipboard.js';
@@ -60,13 +61,16 @@ export interface AppProps {
   bind: (handlers: { onEvent: (e: CoreEvent) => void; onExit: (code: number | null, stderr: string) => void }) => void;
   /** Mouse events from the stdin filter (absent in tests / non-TTY). */
   mouse?: EventEmitter;
+  /** Prompt history backing the composer's ↑ recall. Absent (tests),
+   * recall still works within the session; nothing touches disk. */
+  history?: HistoryStore;
 }
 
 /** Screen row (1-based) where the conversation viewport starts:
  * row 1 = header bar, row 2 = spacing. */
 const VIEWPORT_TOP_ROW = 3;
 
-export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
+export function App({ client, bind, mouse, history }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(reduce, initialState);
@@ -88,6 +92,12 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const turnCounter = useRef(0);
   const ctrlCArmed = useRef(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Prompt history for ↑ recall: loaded once, appended on every submit.
+  // While navigating, `index` points into `past` and `draft` holds whatever
+  // was being typed when recall began (restored by ↓ past the newest).
+  const past = useRef<string[] | undefined>(undefined);
+  if (past.current === undefined) past.current = history?.load() ?? [];
+  const [histNav, setHistNav] = useState<{ index: number; draft: string } | null>(null);
 
   useEffect(() => {
     bind({
@@ -266,14 +276,25 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mouse]);
 
+  /** Record a submitted input for ↑ recall (consecutive repeats collapse). */
+  const remember = (text: string) => {
+    setHistNav(null);
+    const entries = past.current!;
+    if (entries[entries.length - 1] === text) return;
+    entries.push(text);
+    history?.append(text);
+  };
+
   const submit = () => {
     const text = editor.text.trim();
     if (!text) return;
     if (text.startsWith('/')) {
+      remember(text);
       runSlashCommand(text);
       return;
     }
     if (busy || state.phase !== 'ready') return;
+    remember(text);
     turnCounter.current += 1;
     client.submit(`t${turnCounter.current}`, text);
     setEditor(emptyEditor);
@@ -314,9 +335,6 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       case 'q':
         quit();
         return;
-      case 'copy':
-        copyLastAnswer();
-        return;
       case 'model': {
         const [, agent, ...modelParts] = text.slice(1).split(/\s+/);
         const model = modelParts.join(' ').trim();
@@ -347,14 +365,6 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         });
         return;
       }
-      case 'help':
-        dispatch({
-          type: 'local-notice',
-          text:
-            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /model show or set models · /team pick a new team (new session) · /activity toggle the activity panel · /help this list\n' +
-            'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t activity · ctrl+y copy answer · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
-        });
-        return;
       case 'clear':
         if (busy) {
           dispatch({ type: 'local-notice', text: '/clear is unavailable while a turn is running' });
@@ -372,13 +382,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           client.restart();
         }
         return;
-      case 'activity':
-        dispatch({ type: 'toggle-team-panel' });
-        return;
       default:
         dispatch({
           type: 'local-notice',
-          text: `unknown command /${command} — try /help`,
+          text: `unknown command /${command} — commands: /model · /team · /clear · /exit`,
         });
     }
   };
@@ -584,18 +591,39 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     }
 
     // Composer editing (always available; submit blocked while busy).
+    // Any edit leaves history-recall mode; plain cursor movement keeps it.
+    const edit = (fn: (e: EditorState) => EditorState) => {
+      setHistNav(null);
+      setEditor(fn);
+    };
+    /** Put a history entry in the composer, cursor at the end. */
+    const recallAt = (index: number, draft: string) => {
+      const text = past.current![index]!;
+      setHistNav({ index, draft });
+      setEditor({ text, cursor: text.length });
+    };
     if (key.return && !key.shift) return submit();
-    if (input === '\n' && !key.return) return void setEditor((e) => insertText(e, '\n'));
-    if (key.return && key.shift) return void setEditor((e) => insertText(e, '\n'));
-    if (key.backspace || (key.delete && !key.meta)) return void setEditor(backspace);
-    if (key.delete && key.meta) return void setEditor(deleteForward);
+    if (input === '\n' && !key.return) return void edit((e) => insertText(e, '\n'));
+    if (key.return && key.shift) return void edit((e) => insertText(e, '\n'));
+    if (key.backspace || (key.delete && !key.meta)) return void edit(backspace);
+    if (key.delete && key.meta) return void edit(deleteForward);
     if (key.leftArrow) return void setEditor(moveLeft);
     if (key.rightArrow) return void setEditor(moveRight);
-    // With an empty composer, ↑/↓ scroll the conversation — which also
-    // makes the mouse wheel work (the terminal's alternate-scroll mode
-    // translates wheel ticks into arrow keys in the alt screen).
+    // ↑ recalls submitted prompts (on an empty composer, or stepping
+    // further back while already recalling); inside typed text it moves
+    // the cursor. With no history to offer, an empty-composer ↑/↓ still
+    // scrolls the conversation — which also keeps the mouse wheel working
+    // where the terminal's alternate-scroll mode translates wheel ticks
+    // into arrow keys in the alt screen.
     if (key.upArrow) {
-      if (editor.text.length === 0) {
+      const entries = past.current!;
+      if (histNav) {
+        if (histNav.index > 0) recallAt(histNav.index - 1, histNav.draft);
+        return;
+      }
+      if (editor.text.length === 0 && entries.length > 0) {
+        recallAt(entries.length - 1, editor.text);
+      } else if (editor.text.length === 0) {
         setScroll({ top: Math.max(0, top - 1), stick: false });
       } else {
         setEditor(moveUp);
@@ -603,6 +631,17 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       return;
     }
     if (key.downArrow) {
+      const entries = past.current!;
+      if (histNav) {
+        // Forward through history; past the newest, the draft comes back.
+        if (histNav.index < entries.length - 1) {
+          recallAt(histNav.index + 1, histNav.draft);
+        } else {
+          setHistNav(null);
+          setEditor({ text: histNav.draft, cursor: histNav.draft.length });
+        }
+        return;
+      }
       if (editor.text.length === 0) {
         const next = Math.min(top + 1, maxTop);
         setScroll({ top: next, stick: next >= maxTop });
@@ -615,7 +654,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     if (key.ctrl && input === 'e') return void setEditor(moveEnd);
     if (key.ctrl || key.meta) return;
     if (input) {
-      setEditor((e) => insertText(e, input));
+      edit((e) => insertText(e, input));
       setScroll((s) => ({ ...s, stick: true }));
     }
   });
