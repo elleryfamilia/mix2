@@ -238,6 +238,8 @@ pub struct SeatbeltProfile {
 /// Shape (SBPL is last-match-wins, so order is load-bearing):
 /// 1. `(allow default)` — read/exec/network open,
 /// 2. `(deny file-write*)` — then take all writes away,
+///    (with harmless character devices — `/dev/null`, `/dev/zero`,
+///    `/dev/tty*` — immediately re-allowed: shells and libuv need them),
 /// 3. re-allow writes under each `writable` subpath,
 /// 4. deny writes to each `deny_write` subpath (wins over step 3 — exec
 ///    surfaces stay read-only even inside a writable parent),
@@ -269,6 +271,16 @@ pub fn seatbelt_profile(policy: &SandboxPolicy) -> SeatbeltProfile {
 
     // 2 + 3: take writes away, then re-grant the writable roots.
     profile.push_str("(deny file-write*)\n");
+    // Harmless character devices stay writable: `(deny file-write*)` also
+    // catches `> /dev/null`, shell state dumps to `/dev/tty*`, and node's
+    // libuv opening `/dev/null` — observed live as every redirect in a
+    // sandboxed lead's shell failing with "operation not permitted".
+    // Constant literals only (never interpolated), so the paths-in-params
+    // invariant is preserved.
+    profile.push_str(
+        "(allow file-write* (literal \"/dev/null\") (literal \"/dev/zero\") \
+         (literal \"/dev/dtracehelper\") (regex #\"^/dev/tty\"))\n",
+    );
     push_subpaths(
         &mut profile,
         &mut params,
@@ -745,6 +757,22 @@ mod tests {
     }
 
     #[test]
+    fn harmless_device_writes_survive_the_global_withdraw() {
+        // `> /dev/null` must work inside the sandbox — every shell (and
+        // node's libuv) writes these devices constantly. The allowance
+        // sits after the global withdraw (last match wins) and is present
+        // even with no writable roots at all.
+        for policy in [policy(), SandboxPolicy::with_writable(vec![])] {
+            let profile = seatbelt_profile(&policy).profile;
+            let deny_all = profile.find("(deny file-write*)\n").unwrap();
+            let devices = profile.find("(literal \"/dev/null\")").unwrap();
+            assert!(deny_all < devices);
+            assert!(profile.contains("(literal \"/dev/zero\")"));
+            assert!(profile.contains("(regex #\"^/dev/tty\")"));
+        }
+    }
+
+    #[test]
     fn network_denied_only_when_withdrawn() {
         let mut p = policy();
         assert!(!seatbelt_profile(&p).profile.contains("(deny network*)"));
@@ -1180,6 +1208,12 @@ mod tests {
         assert!(
             run(format!("cat {}", readme.display())),
             "reading a non-credential file must be allowed"
+        );
+        // Allowed: the null device — `> /dev/null` is everywhere in real
+        // shell use, and its denial broke sandboxed leads in the field.
+        assert!(
+            run("echo discard > /dev/null".to_owned()),
+            "writing /dev/null must be allowed"
         );
         // Denied: write outside .mix2, write the exec surface, read creds.
         assert!(
