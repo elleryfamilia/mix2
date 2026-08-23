@@ -39,7 +39,7 @@ describe('parseHistory', () => {
 });
 
 describe('fileHistoryStore', () => {
-  it('round-trips appends through the file, per project', () => {
+  it('round-trips appends through the file, per project, owner-only perms', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mix2-history-'));
     const file = path.join(dir, 'nested', 'history.jsonl');
     const a = fileHistoryStore('/proj/a', file);
@@ -49,6 +49,19 @@ describe('fileHistoryStore', () => {
     a.append('multi\nline prompt');
     expect(a.load()).toEqual(['hello', 'multi\nline prompt']);
     expect(b.load()).toEqual(['unrelated']);
+    // Prompt history is private to the user: 0600 file in a 0700 dir.
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('clamps permissions on a pre-existing world-readable file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mix2-history-'));
+    const file = path.join(dir, 'history.jsonl');
+    fs.writeFileSync(file, entryLine('/proj', 'old'), { mode: 0o644 });
+    fs.chmodSync(file, 0o644);
+    fileHistoryStore('/proj', file).append('new');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

@@ -58,8 +58,14 @@ export function fileHistoryStore(cwd: string, file = historyFilePath()): History
     },
     append(text: string) {
       try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.appendFileSync(file, entryLine(cwd, text));
+        const dir = path.dirname(file);
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.appendFileSync(file, entryLine(cwd, text), { mode: 0o600 });
+        // Prompts are private. The explicit chmods clamp entries created
+        // before this guard existed and are immune to a permissive umask
+        // (which can widen the modes passed above at creation time).
+        fs.chmodSync(dir, 0o700);
+        fs.chmodSync(file, 0o600);
       } catch {
         // Best-effort only.
       }
