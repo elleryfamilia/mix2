@@ -67,9 +67,14 @@ CONSULT
 # prints `ticket: <id>` immediately; {teammate_name} works while you do
 # ... do your own research now ...
 mix2-consult wait <id>
-# blocks until {teammate_name}'s assessment is ready
+# waits up to ~90s: prints the assessment, or says {teammate_name} is still
+# working — then just run the same wait again (repeat until it returns).
+mix2-consult status <id>
+# instant readiness check, never blocks
 
-Fire the consultation FIRST, before your own investigation, so the two of you research in parallel instead of in sequence. Use the heredoc directly on the command (no cat/echo pipelines).
+Fire the consultation FIRST, before your own investigation, so the two of you research in parallel instead of in sequence. Use the heredoc directly on the command (no cat/echo pipelines). Prompts are read from stdin only — never passed as arguments.
+
+THE TICKET DIES WITH YOUR TURN. The moment you write your final answer, an uncollected consultation is cancelled and {teammate_name}'s work is thrown away — nothing can reach the user after your final message. So: never end your turn with a ticket outstanding, and never tell the user a result will "come through shortly" or "report back" later — it cannot. Waits are bounded so they always return before your shell tool's own timeout; run `mix2-consult wait <id>` again in the foreground as many times as needed (never background it). If you truly cannot wait any longer, say plainly that {teammate_name}'s assessment did not arrive — do not promise it.
 
 The user chose mix2 to get the team, not a single agent — if they wanted only you, they would have opened you directly. DEFAULT TO CONSULTING your teammate on every substantive request: explanations, judgments, tradeoffs, architecture, reviews, debugging, and even factual questions where independent verification adds confidence. When in doubt, consult.
 
@@ -222,6 +227,11 @@ mod tests {
         ));
         assert!(p.contains("mix2-consult start"));
         assert!(p.contains("mix2-consult wait"));
+        assert!(p.contains("mix2-consult status"));
+        // The lesson from the field: a lead once ended its turn promising a
+        // "background" consult would report back — impossible by design.
+        assert!(p.contains("THE TICKET DIES WITH YOUR TURN"));
+        assert!(p.contains("never background it"));
         assert!(p.contains("EFFORT"));
     }
 

@@ -3,17 +3,21 @@ import { slashCommandLength, splitForHighlight } from './slash.js';
 
 describe('slashCommandLength', () => {
   it('matches complete known commands including the slash', () => {
-    expect(slashCommandLength('/help')).toBe(5);
+    expect(slashCommandLength('/model')).toBe(6);
     expect(slashCommandLength('/q')).toBe(2);
     expect(slashCommandLength('/team panel please')).toBe(5);
   });
 
-  it('returns 0 for partial, unknown, or non-command input', () => {
-    expect(slashCommandLength('/he')).toBe(0);
-    expect(slashCommandLength('/helpx')).toBe(0);
-    expect(slashCommandLength('help')).toBe(0);
+  it('returns 0 for partial, unknown, retired, or non-command input', () => {
+    expect(slashCommandLength('/mo')).toBe(0);
+    expect(slashCommandLength('/modelx')).toBe(0);
+    // Retired commands (/help, /copy, /activity) no longer highlight.
+    expect(slashCommandLength('/help')).toBe(0);
+    expect(slashCommandLength('/copy')).toBe(0);
+    expect(slashCommandLength('/activity')).toBe(0);
+    expect(slashCommandLength('model')).toBe(0);
     expect(slashCommandLength('')).toBe(0);
-    expect(slashCommandLength('say /help')).toBe(0);
+    expect(slashCommandLength('say /model')).toBe(0);
   });
 });
 

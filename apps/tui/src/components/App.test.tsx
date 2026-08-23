@@ -44,7 +44,7 @@ const ready: Extract<CoreEvent, { type: 'ready' }> = {
   cwd: '/home/dev/src/acme',
 };
 
-function mount(): Harness {
+function mount(history?: { load: () => string[]; append: (text: string) => void }): Harness {
   const client = {
     submit: vi.fn(),
     cancel: vi.fn(),
@@ -61,6 +61,7 @@ function mount(): Harness {
       bind={(h) => {
         handlers = h;
       }}
+      history={history}
     />,
   );
   return {
@@ -155,7 +156,7 @@ describe('team picker', () => {
     h.unmount();
   });
 
-  it('arrows highlight without equipping; a same-harness team builds explicitly', async () => {
+  it("arrows highlight without equipping; taking slot two's pick swaps the slots", async () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
@@ -169,11 +170,15 @@ describe('team picker', () => {
     // ↓ only moves the highlight onto codex — nothing is equipped yet…
     h.stdin.write('\x1b[B');
     await tickReact();
-    // …enter equips codex for slot one and advances to slot two, cursor
-    // seeded on slot two's equipped harness (codex).
+    expect(h.client.selectTeam).not.toHaveBeenCalled();
+    // …enter equips codex for slot one; slot two held codex, so the
+    // slots swap — claude moves down rather than duplicating. Focus
+    // advances to slot two, seeded on its (new) equipped claude.
     h.stdin.write('\r');
     await tickReact();
-    // Equip codex for slot two → continue; ↑ there is a no-op, not a
+    expect(h.client.selectTeam).not.toHaveBeenCalled();
+
+    // Equip claude for slot two → continue; ↑ there is a no-op, not a
     // hidden coordinator toggle.
     h.stdin.write('\r');
     await tickReact();
@@ -183,7 +188,7 @@ describe('team picker', () => {
 
     h.stdin.write('\r');
     await tickReact();
-    expect(h.client.selectTeam).toHaveBeenCalledWith('codex', 'codex', 'two');
+    expect(h.client.selectTeam).toHaveBeenCalledWith('codex', 'claude', 'two');
     h.unmount();
   });
 
@@ -239,13 +244,13 @@ describe('team picker', () => {
         discovered.harnesses[0]!,
         {
           ...discovered.harnesses[1]!,
-          available: false,
-          reason: 'not installed: npm i -g @openai/codex',
+          auth: 'unauthenticated',
+          reason: 'not signed in: run `codex login`',
         },
       ],
     });
     await waitForFrame(h, 'slot one');
-    expect(h.lastFrame()).toContain('not installed: npm i -g @openai/codex');
+    expect(h.lastFrame()).toContain('not signed in: run `codex login`');
 
     // Enter on the disabled codex row is a no-op — focus stays put.
     h.stdin.write('\x1b[B');
@@ -254,7 +259,8 @@ describe('team picker', () => {
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
 
-    // Recover: equip claude on both slots, then start.
+    // Recover: with codex signed out, claude is each slot's only eligible
+    // CLI, so the duplicate stays allowed — equip it on both, then start.
     h.stdin.write('\x1b[A');
     await tickReact();
     h.stdin.write('\r'); // equip slot one → advance (cursor lands on codex, slot two's pick)
@@ -264,6 +270,35 @@ describe('team picker', () => {
     h.stdin.write('\r'); // equip slot two → continue
     await tickReact();
     h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'claude', 'one');
+    h.unmount();
+  });
+
+  it('an undetected CLI is hidden and the defaults remap onto what exists', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit({
+      ...discovered,
+      harnesses: [
+        discovered.harnesses[0]!,
+        {
+          ...discovered.harnesses[1]!,
+          available: false,
+          reason: 'not installed: npm i -g @openai/codex',
+        },
+      ],
+    });
+    await waitForFrame(h, 'slot one');
+    const frame = h.lastFrame()!;
+    // No dead row for codex — the picker lists detected CLIs, and points
+    // at how to add one instead.
+    expect(frame).not.toContain('codex');
+    expect(frame).toContain('detected CLIs');
+    expect(frame).toContain('~/.config/mix2/config.toml');
+
+    // Esc starts the defaults, remapped off the undetected codex.
+    h.stdin.write('\x1b');
     await tickReact();
     expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'claude', 'one');
     h.unmount();
@@ -549,18 +584,21 @@ describe('App', () => {
     h.unmount();
   });
 
-  it('/exit quits and /help lists commands', async () => {
+  it('/exit quits; retired commands are unknown and list the real ones', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
     await tickReact();
+    // Slash hint appears while typing a command, and lists only the
+    // surviving vocabulary.
     h.stdin.write('/help');
     await tickReact();
-    // Slash hint appears while typing a command.
-    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /model · /team · /activity · /help');
+    expect(h.lastFrame()).toContain('/model · /team · /clear · /exit');
+    expect(h.lastFrame()).not.toContain('/help ·');
+    // /help itself is retired: unknown, with the commands in the notice.
     h.stdin.write('\r');
     await tickReact();
-    expect(h.lastFrame()).toContain('commands  /exit');
+    expect(h.lastFrame()).toContain('unknown command /help — commands: /model · /team · /clear · /exit');
     expect(h.client.submit).not.toHaveBeenCalled();
 
     h.stdin.write('/exit');
@@ -634,7 +672,7 @@ describe('App', () => {
     h.unmount();
   });
 
-  it('ctrl+y and /copy copy the last answer', async () => {
+  it('ctrl+y copies the last answer', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -730,7 +768,7 @@ describe('App', () => {
     instance.unmount();
   });
 
-  it('/model opens the picker; enter applies the highlight and leaves', async () => {
+  it('/model opens the picker; enter equips per agent, continue applies', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -744,13 +782,26 @@ describe('App', () => {
     expect(frame).toContain('provider default');
     expect(frame).toContain('sonnet');
     expect(frame).toContain('gpt-5.3-codex');
+    expect(frame).toContain('continue');
+    expect(frame).toContain('enter equip');
 
-    // ↓↓↓ to "sonnet" (default, fable, opus, sonnet); enter applies and
-    // closes — select-and-leave, matching the team picker.
+    // ↓↓↓ to "sonnet" (default, fable, opus, sonnet); enter equips it and
+    // advances to the codex column — nothing is sent yet, exactly like
+    // the team picker's pick-equip-advance.
     h.stdin.write('\x1b[B\x1b[B\x1b[B');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
+    expect(h.client.send).not.toHaveBeenCalled();
+    // Equip codex's provider default (unchanged) → focus lands on continue.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).not.toHaveBeenCalled();
+    expect(h.lastFrame()).toContain('enter apply');
+    // Continue applies only what changed and closes the panel.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).toHaveBeenCalledTimes(1);
     expect(h.client.send).toHaveBeenCalledWith({
       type: 'set_model',
       slot: 'one',
@@ -759,7 +810,7 @@ describe('App', () => {
     expect(h.lastFrame()).not.toContain('◐ models');
 
     // The other slot is a fresh /model: → to the codex column, ↓↓ to
-    // gpt-5-codex, enter applies and leaves again.
+    // gpt-5-codex, equip, then continue applies it.
     h.stdin.write('/model');
     await tickReact();
     h.stdin.write('\r');
@@ -768,6 +819,8 @@ describe('App', () => {
     h.stdin.write('\x1b[C');
     await tickReact();
     h.stdin.write('\x1b[B\x1b[B');
+    await tickReact();
+    h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
@@ -800,7 +853,7 @@ describe('App', () => {
     h.unmount();
   });
 
-  it('/model filter narrows the list and enter applies the match', async () => {
+  it('/model filter narrows the list; equip + continue applies the match', async () => {
     const h = mount();
     await tickReact();
     h.emit(ready);
@@ -818,6 +871,17 @@ describe('App', () => {
     expect(frame).toContain('filter: son');
     expect(frame).toContain('sonnet');
     expect(frame).not.toContain('provider default');
+    // Enter equips the match and advances to codex — where nothing
+    // matches "son", so enter there is a no-op, not an accidental pick.
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).toContain('no models match');
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).not.toHaveBeenCalled();
+    // → moves on to continue; enter applies the equipped sonnet.
+    h.stdin.write('\x1b[C');
+    await tickReact();
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.send).toHaveBeenCalledWith({
@@ -841,6 +905,89 @@ describe('App', () => {
     await tickReact();
     expect(h.client.submit).not.toHaveBeenCalled();
     expect(h.lastFrame()).toContain('two');
+    h.unmount();
+  });
+});
+
+describe('prompt history', () => {
+  it('up recalls submitted prompts, down walks forward to the draft', async () => {
+    const append = vi.fn();
+    const h = mount({ load: () => [], append });
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+
+    h.stdin.write('first idea');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    h.stdin.write('second idea');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.submit).toHaveBeenCalledTimes(2);
+    expect(append).toHaveBeenNthCalledWith(1, 'first idea');
+    expect(append).toHaveBeenNthCalledWith(2, 'second idea');
+
+    // ↑ walks back: newest first, older next, and the oldest is a wall.
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ second idea');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ first idea');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ first idea');
+
+    // ↓ walks forward again; past the newest, the (empty) draft returns.
+    h.stdin.write('\x1b[B');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ second idea');
+    h.stdin.write('\x1b[B');
+    await tickReact();
+    expect(h.lastFrame()).not.toContain('second idea');
+    h.unmount();
+  });
+
+  it('recalls prompts preloaded from the store; editing exits recall', async () => {
+    const h = mount({ load: () => ['from disk one', 'from disk two'], append: vi.fn() });
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ from disk two');
+
+    // Typing edits the recalled text and leaves recall mode: ↑ now moves
+    // the cursor inside the text instead of loading an older entry.
+    h.stdin.write('!');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ from disk two!');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('❯ from disk two!');
+    expect(h.lastFrame()).not.toContain('from disk one');
+    h.unmount();
+  });
+
+  it('consecutive duplicate submissions are stored once', async () => {
+    const append = vi.fn();
+    const h = mount({ load: () => [], append });
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    h.stdin.write('same');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    h.stdin.write('same');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.submit).toHaveBeenCalledTimes(2);
+    expect(append).toHaveBeenCalledTimes(1);
     h.unmount();
   });
 });

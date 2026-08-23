@@ -20,6 +20,16 @@
 //! choosing Cursor (or configuring it in a slot) is the opt-in; the flag is
 //! never passed on behalf of a team the user didn't pick.
 //!
+//! A *sandboxed lead* additionally runs with `--force`. Cursor's approval
+//! prompts cannot fire in `-p` mode, so any command outside the user's own
+//! allowlist is silently auto-rejected — observed live as `mix2-consult`
+//! (and everything else) dying with `Rejected`, which breaks the consult
+//! contract. `--force` flips that default to allow-unless-explicitly-denied:
+//! the user's `deny` rules still win, and the OS sandbox — the mechanism
+//! that makes a Cursor lead permissible at all — remains the write
+//! confinement. Teammates never get `--force`; `--mode plan` is their
+//! enforcement.
+//!
 //! Free-plan caveat (observed live): naming a model can be refused with a
 //! BARE TEXT line mid-stream (`ActionRequiredError: Named models
 //! unavailable...`). The decoder tolerates non-JSON lines and maps them to
@@ -38,10 +48,12 @@ pub static DESCRIPTOR: Descriptor = Descriptor {
     default_command: "cursor-agent",
     aliases: &["cursor-agent"],
     command_env_override: "MIX2_CURSOR_CMD",
-    install_hint: "install the Cursor CLI from https://cursor.com/cli, then run `cursor-agent login`",
+    install_hint:
+        "install the Cursor CLI from https://cursor.com/cli, then run `cursor-agent login`",
     login_hint: "run `cursor-agent login`",
     selection_note: Some(
-        "runs with --trust: picking Cursor marks this workspace trusted for its read-only consultations",
+        "runs with --trust: picking Cursor marks this workspace trusted; as coordinator it also \
+         auto-approves its commands (--force) inside the OS sandbox",
     ),
     prompt_in_args: true,
     capabilities: Capabilities {
@@ -109,6 +121,15 @@ fn build_args(request: &AgentRequest, resume: Option<&str>) -> Vec<String> {
     if !sandboxed_lead {
         args.push("--mode".into());
         args.push("plan".into());
+    } else {
+        // Approvals cannot prompt in `-p` mode: without --force, every
+        // command outside the user's own allowlist is silently
+        // auto-rejected — including `mix2-consult`, which breaks the
+        // consult contract outright (observed live). The OS sandbox is the
+        // real confinement here (writes scoped to `.mix2/` plus the
+        // runtime dir), and --force still honors explicit `deny` rules in
+        // the user's Cursor config. Disclosed in the selection note.
+        args.push("--force".into());
     }
     if let Some(model) = &request.model {
         args.push("--model".into());
@@ -308,14 +329,29 @@ mod tests {
     }
 
     #[test]
-    fn build_args_drops_plan_mode_for_a_sandboxed_lead() {
+    fn build_args_drops_plan_mode_and_forces_approvals_for_a_sandboxed_lead() {
         // The sandbox enforces write scoping, so a Cursor lead runs without
-        // `--mode plan` and can write. Everything else is unchanged.
+        // `--mode plan` and can write — and with `--force`, because `-p`
+        // mode auto-rejects anything outside the user's allowlist (which
+        // silently killed `mix2-consult` in the field).
         let args = build_args(&sandboxed(request(Some("auto"), "ROLE")), None);
         assert!(!args.contains(&"--mode".to_owned()));
         assert!(!args.contains(&"plan".to_owned()));
+        assert!(args.contains(&"--force".to_owned()));
         assert!(args.contains(&"--trust".to_owned()));
         assert!(args.contains(&"--model".to_owned()));
+    }
+
+    #[test]
+    fn a_sandboxed_teammate_keeps_plan_mode_and_never_gets_force() {
+        // Defense in depth: teammates stay read-only via `--mode plan` even
+        // under the sandbox, and their approvals are never forced.
+        let mut req = sandboxed(request(None, "ROLE"));
+        req.role = AgentRole::Teammate;
+        let args = build_args(&req, None);
+        assert!(args.contains(&"--mode".to_owned()));
+        assert!(args.contains(&"plan".to_owned()));
+        assert!(!args.contains(&"--force".to_owned()));
     }
 
     #[test]

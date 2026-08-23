@@ -3,10 +3,12 @@ import type { DiscoveredHarness } from '../ipc/protocol.js';
 import type { DiscoveryState } from '../state/store.js';
 import { displayWidth, lineText } from './lines.js';
 import {
+  equipSelection,
   initialSelection,
   pickerEntries,
   renderTeamPicker,
   selectable,
+  slotEntries,
 } from './teamPicker.js';
 
 const caps = {
@@ -50,6 +52,10 @@ describe('team picker', () => {
     const lines = frame(discovery());
     const joined = lines.join('\n');
     expect(joined).toContain('pick your team');
+    // The list is framed as what's on this machine, with a pointer to
+    // growing it — install, or configure a custom command.
+    expect(joined).toContain('detected CLIs');
+    expect(joined).toContain('~/.config/mix2/config.toml');
     expect(joined).toContain('● slot one');
     expect(joined).toContain('○ slot two');
     // The slot lists render as bordered tiles.
@@ -78,7 +84,7 @@ describe('team picker', () => {
     expect(entries[0]!.available).toBe(true);
   });
 
-  it('disables unavailable and signed-out entries with their reasons', () => {
+  it('hides undetected CLIs entirely, remapping a proposal that named one', () => {
     const d = discovery({
       harnesses: [
         harness({ harness: 'claude' }),
@@ -89,10 +95,17 @@ describe('team picker', () => {
         }),
       ],
     });
-    expect(selectable(d.harnesses[1]!, 'two', 'one')).toBe(false);
+    // The undetected codex is neither an entry nor a rendered row.
+    expect(pickerEntries(d).map((e) => e.harness)).toEqual(['claude']);
     const joined = frame(d).join('\n');
-    expect(joined).toContain('not installed: npm i -g @openai/codex');
+    expect(joined).not.toContain('codex');
+    expect(joined).not.toContain('not installed');
+    // The proposal named codex for slot two; the preselection lands on a
+    // CLI that's actually listed instead of an invisible one.
+    expect(initialSelection(d)).toEqual({ one: 'claude', two: 'claude', leadSlot: 'one' });
+  });
 
+  it('disables signed-out entries with their reasons', () => {
     const signedOut = discovery({
       harnesses: [
         harness({ harness: 'claude' }),
@@ -101,6 +114,47 @@ describe('team picker', () => {
     });
     expect(selectable(signedOut.harnesses[1]!, 'two', 'one')).toBe(false);
     expect(frame(signedOut).join('\n')).toContain('not signed in: run `codex login`');
+  });
+
+  it("slot one offers everything; slot two's list omits slot one's pick", () => {
+    const d = discovery();
+    const selection = initialSelection(d); // claude / codex
+    // Slot one lists both CLIs, both selectable — including slot two's pick.
+    expect(slotEntries(d, 'one', selection).map((e) => e.harness)).toEqual(['claude', 'codex']);
+    expect(selectable(slotEntries(d, 'one', selection)[1]!, 'one', 'one')).toBe(true);
+    // Slot two adapts: whatever slot one holds simply isn't offered.
+    expect(slotEntries(d, 'two', selection).map((e) => e.harness)).toEqual(['codex']);
+    const joined = renderTeamPicker(d, selection, { column: 1, index: 0 }, 100)
+      .map(lineText)
+      .join('\n');
+    // claude renders once — in slot one's tile only.
+    expect(joined.match(/claude/g)).toHaveLength(1);
+  });
+
+  it("equipping slot two's pick onto slot one swaps the slots", () => {
+    const d = discovery();
+    const selection = initialSelection(d); // claude / codex
+    expect(equipSelection(d, selection, 'one', 'codex')).toEqual({
+      one: 'codex',
+      two: 'claude',
+      leadSlot: 'one',
+    });
+    // Equipping an unclaimed CLI touches nothing else.
+    expect(equipSelection(d, selection, 'one', 'claude')).toEqual(selection);
+    expect(equipSelection(d, selection, 'two', 'codex')).toEqual(selection);
+  });
+
+  it('a single detected CLI stays offered to both slots', () => {
+    const d = discovery({
+      harnesses: [harness({ harness: 'claude' })],
+      proposal: { one: 'claude', two: 'codex', lead_slot: 'one' },
+    });
+    const selection = initialSelection(d); // remaps slot two onto claude
+    expect(selection.two).toBe('claude');
+    // Filtering slot one's pick out would leave slot two empty — the
+    // duplicate is the only way to start a team here, so it stays.
+    expect(slotEntries(d, 'two', selection).map((e) => e.harness)).toEqual(['claude']);
+    expect(selectable(slotEntries(d, 'two', selection)[0]!, 'two', 'one')).toBe(true);
   });
 
   it('teammate-only harnesses are ineligible for the lead slot only', () => {

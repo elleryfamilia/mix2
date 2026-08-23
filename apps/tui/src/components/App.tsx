@@ -6,17 +6,21 @@ import { renderConversationWithAnchors, type PromptAnchor } from '../render/conv
 import type { Line } from '../render/lines.js';
 import {
   filteredModelEntries,
+  initialModelSelection,
+  modelEntryIndexOf,
   renderModelPanel,
   PROVIDER_DEFAULT,
   type ModelCursor,
+  type ModelSelection,
 } from '../render/modelPanel.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import {
   entryIndexOf,
+  equipSelection,
   initialSelection,
-  pickerEntries,
   renderTeamPicker,
   selectable,
+  slotEntries,
   type TeamPickerCursor,
   type TeamPickerSelection,
 } from '../render/teamPicker.js';
@@ -28,6 +32,7 @@ import {
   isEmptySelection,
   type Selection,
 } from '../render/selection.js';
+import type { HistoryStore } from '../history.js';
 import { initialState, leadInfo, reduce, slotInfo, teammateInfo, type AppState } from '../state/store.js';
 import { glyphs, spinnerFrames, teamSpinnerFrames, theme, type SlotName } from '../theme/theme.js';
 import { copyToClipboard } from '../util/clipboard.js';
@@ -56,13 +61,16 @@ export interface AppProps {
   bind: (handlers: { onEvent: (e: CoreEvent) => void; onExit: (code: number | null, stderr: string) => void }) => void;
   /** Mouse events from the stdin filter (absent in tests / non-TTY). */
   mouse?: EventEmitter;
+  /** Prompt history backing the composer's ↑ recall. Absent (tests),
+   * recall still works within the session; nothing touches disk. */
+  history?: HistoryStore;
 }
 
 /** Screen row (1-based) where the conversation viewport starts:
  * row 1 = header bar, row 2 = spacing. */
 const VIEWPORT_TOP_ROW = 3;
 
-export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
+export function App({ client, bind, mouse, history }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, dispatch] = useReducer(reduce, initialState);
@@ -72,7 +80,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const [scroll, setScroll] = useState<{ top: number; stick: boolean }>({ top: 0, stick: true });
   const [selection, setSelection] = useState<Selection | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [modelPanel, setModelPanel] = useState<ModelCursor | null>(null);
+  const [modelPanel, setModelPanel] = useState<{
+    cursor: ModelCursor;
+    selection: ModelSelection;
+  } | null>(null);
   const [modelFilter, setModelFilter] = useState('');
   const [picker, setPicker] = useState<{
     cursor: TeamPickerCursor;
@@ -81,6 +92,12 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   const turnCounter = useRef(0);
   const ctrlCArmed = useRef(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Prompt history for ↑ recall: loaded once, appended on every submit.
+  // While navigating, `index` points into `past` and `draft` holds whatever
+  // was being typed when recall began (restored by ↓ past the newest).
+  const past = useRef<string[] | undefined>(undefined);
+  if (past.current === undefined) past.current = history?.load() ?? [];
+  const [histNav, setHistNav] = useState<{ index: number; draft: string } | null>(null);
 
   useEffect(() => {
     bind({
@@ -105,9 +122,13 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   // (ready/fatal) clears it.
   useEffect(() => {
     if (state.phase === 'selecting-team' && state.discovery && !picker) {
+      const selection = initialSelection(state.discovery);
       setPicker({
-        cursor: { column: 0, index: entryIndexOf(state.discovery, state.discovery.proposal.one) },
-        selection: initialSelection(state.discovery),
+        cursor: {
+          column: 0,
+          index: entryIndexOf(slotEntries(state.discovery, 'one', selection), selection.one),
+        },
+        selection,
       });
     }
     if (state.phase !== 'selecting-team' && picker) {
@@ -153,7 +174,13 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     }
     if (modelPanel && state.session) {
       return {
-        lines: renderModelPanel(state.session, modelPanel, width, modelFilter),
+        lines: renderModelPanel(
+          state.session,
+          modelPanel.selection,
+          modelPanel.cursor,
+          width,
+          modelFilter,
+        ),
         anchors: [],
       };
     }
@@ -249,14 +276,25 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mouse]);
 
+  /** Record a submitted input for ↑ recall (consecutive repeats collapse). */
+  const remember = (text: string) => {
+    setHistNav(null);
+    const entries = past.current!;
+    if (entries[entries.length - 1] === text) return;
+    entries.push(text);
+    history?.append(text);
+  };
+
   const submit = () => {
     const text = editor.text.trim();
     if (!text) return;
     if (text.startsWith('/')) {
+      remember(text);
       runSlashCommand(text);
       return;
     }
     if (busy || state.phase !== 'ready') return;
+    remember(text);
     turnCounter.current += 1;
     client.submit(`t${turnCounter.current}`, text);
     setEditor(emptyEditor);
@@ -297,14 +335,18 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       case 'q':
         quit();
         return;
-      case 'copy':
-        copyLastAnswer();
-        return;
       case 'model': {
         const [, agent, ...modelParts] = text.slice(1).split(/\s+/);
         const model = modelParts.join(' ').trim();
         if (!agent) {
-          setModelPanel({ column: 0, index: 0 });
+          if (!state.session) return;
+          // Seed the pending selection with what's active now; the cursor
+          // starts on the lead's equipped entry, like the team picker.
+          const selection = initialModelSelection(state.session);
+          setModelPanel({
+            selection,
+            cursor: { column: 0, index: modelEntryIndexOf(leadInfo(state.session), selection, '') },
+          });
           setModelFilter('');
           return;
         }
@@ -323,14 +365,6 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         });
         return;
       }
-      case 'help':
-        dispatch({
-          type: 'local-notice',
-          text:
-            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /model show or set models · /team pick a new team (new session) · /activity toggle the activity panel · /help this list\n' +
-            'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t activity · ctrl+y copy answer · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
-        });
-        return;
       case 'clear':
         if (busy) {
           dispatch({ type: 'local-notice', text: '/clear is unavailable while a turn is running' });
@@ -348,13 +382,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           client.restart();
         }
         return;
-      case 'activity':
-        dispatch({ type: 'toggle-team-panel' });
-        return;
       default:
         dispatch({
           type: 'local-notice',
-          text: `unknown command /${command} — try /help`,
+          text: `unknown command /${command} — commands: /model · /team · /clear · /exit`,
         });
     }
   };
@@ -378,9 +409,10 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
 
     if (state.phase === 'selecting-team' && state.discovery && picker) {
       const discovery = state.discovery;
-      const entries = pickerEntries(discovery);
+      const entriesFor = (column: 0 | 1, selection: TeamPickerSelection) =>
+        slotEntries(discovery, column === 0 ? 'one' : 'two', selection);
       const equippedIndex = (column: 0 | 1, selection: TeamPickerSelection) =>
-        entryIndexOf(discovery, column === 0 ? selection.one : selection.two);
+        entryIndexOf(entriesFor(column, selection), column === 0 ? selection.one : selection.two);
       if (key.return) {
         // Enter is pick-equip-advance on the slot columns; the continue
         // button is where the team actually starts. The IPC send stays
@@ -391,10 +423,12 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           return;
         }
         const slot = cursor.column === 0 ? 'one' : 'two';
-        const entry = entries[cursor.index];
+        const entry = entriesFor(cursor.column, selection)[cursor.index];
         // A disabled entry cannot be equipped; its reason is on screen.
         if (!entry || !selectable(entry, slot, selection.leadSlot)) return;
-        const nextSelection = { ...selection, [slot]: entry.harness };
+        // Equipping slot one with slot two's pick swaps them (the helper
+        // moves slot two onto the outgoing CLI) rather than duplicating.
+        const nextSelection = equipSelection(discovery, selection, slot, entry.harness);
         const column = (cursor.column + 1) as TeamPickerCursor['column'];
         const index = column === 2 ? 0 : equippedIndex(column, nextSelection);
         setPicker({ selection: nextSelection, cursor: { column, index } });
@@ -422,7 +456,8 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           // Arrows only move the highlight; equipping is the explicit
           // enter. Disabled entries stay reachable so their reason reads.
           const delta = key.upArrow ? -1 : 1;
-          const index = Math.max(0, Math.min(entries.length - 1, prev.cursor.index + delta));
+          const count = entriesFor(prev.cursor.column, prev.selection).length;
+          const index = Math.max(0, Math.min(count - 1, prev.cursor.index + delta));
           return { ...prev, cursor: { ...prev.cursor, index } };
         });
         return;
@@ -485,47 +520,66 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         column === 0 ? leadInfo(session) : teammateInfo(session);
       const entryCount = (column: 0 | 1) =>
         filteredModelEntries(infoFor(column).models ?? [], modelFilter).length;
+      const equippedIndex = (column: 0 | 1 | 2, selection: ModelSelection) =>
+        column === 2 ? 0 : modelEntryIndexOf(infoFor(column), selection, modelFilter);
+      if (key.return) {
+        // Enter is pick-equip-advance on the agent columns; the continue
+        // button is where the choices apply, matching the team picker.
+        // The IPC sends stay outside any state updater — updaters may run
+        // more than once.
+        const { cursor, selection } = modelPanel;
+        if (cursor.column === 2) {
+          for (const info of [session.one, session.two]) {
+            const pending = selection[info.slot];
+            if (pending !== (info.model ?? null)) {
+              client.send({ type: 'set_model', slot: info.slot, model: pending });
+            }
+          }
+          setModelPanel(null);
+          setModelFilter('');
+          return;
+        }
+        const info = infoFor(cursor.column);
+        const entry = filteredModelEntries(info.models ?? [], modelFilter)[cursor.index];
+        if (!entry) return;
+        const nextSelection: ModelSelection = {
+          ...selection,
+          [info.slot]: entry === PROVIDER_DEFAULT ? null : entry,
+        };
+        const column = (cursor.column + 1) as ModelCursor['column'];
+        setModelPanel({
+          selection: nextSelection,
+          cursor: { column, index: equippedIndex(column, nextSelection) },
+        });
+        return;
+      }
       // Functional updates: batched key events must each see the latest
       // cursor, not the snapshot from this render.
-      if (key.upArrow) {
-        setModelPanel((prev) => prev && { ...prev, index: Math.max(0, prev.index - 1) });
-      } else if (key.downArrow) {
-        setModelPanel(
-          (prev) =>
-            prev && {
-              ...prev,
-              index: Math.min(Math.max(0, entryCount(prev.column) - 1), prev.index + 1),
-            },
-        );
+      if (key.upArrow || key.downArrow) {
+        setModelPanel((prev) => {
+          if (!prev || prev.cursor.column === 2) return prev;
+          const delta = key.upArrow ? -1 : 1;
+          const index = Math.max(
+            0,
+            Math.min(entryCount(prev.cursor.column) - 1, prev.cursor.index + delta),
+          );
+          return { ...prev, cursor: { ...prev.cursor, index } };
+        });
       } else if (key.leftArrow || key.rightArrow || key.tab) {
         setModelPanel((prev) => {
           if (!prev) return prev;
-          const column: 0 | 1 = prev.column === 0 ? 1 : 0;
-          return { column, index: Math.min(prev.index, Math.max(0, entryCount(column) - 1)) };
+          const delta = key.leftArrow ? 2 : 1; // left cycles backwards
+          const column = ((prev.cursor.column + delta) % 3) as ModelCursor['column'];
+          return { ...prev, cursor: { column, index: equippedIndex(column, prev.selection) } };
         });
-      } else if (key.return) {
-        // Select-and-leave, matching the team picker: enter applies the
-        // highlighted model and closes the panel. The IPC send stays
-        // outside any state updater — updaters may run more than once.
-        const info = infoFor(modelPanel.column);
-        const entry = filteredModelEntries(info.models ?? [], modelFilter)[modelPanel.index];
-        if (entry) {
-          client.send({
-            type: 'set_model',
-            slot: info.slot,
-            model: entry === PROVIDER_DEFAULT ? null : entry,
-          });
-          setModelPanel(null);
-          setModelFilter('');
-        }
       } else if (key.backspace || key.delete) {
         // Narrow the filter; the cursor re-clamps against the wider list.
         setModelFilter((f) => f.slice(0, -1));
-        setModelPanel((prev) => prev && { ...prev, index: 0 });
+        setModelPanel((prev) => prev && { ...prev, cursor: { ...prev.cursor, index: 0 } });
       } else if (input && !key.ctrl && !key.meta) {
         // Type-to-filter: harnesses with long model lists stay navigable.
         setModelFilter((f) => f + input);
-        setModelPanel((prev) => prev && { ...prev, index: 0 });
+        setModelPanel((prev) => prev && { ...prev, cursor: { ...prev.cursor, index: 0 } });
       }
       return;
     }
@@ -537,18 +591,39 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     }
 
     // Composer editing (always available; submit blocked while busy).
+    // Any edit leaves history-recall mode; plain cursor movement keeps it.
+    const edit = (fn: (e: EditorState) => EditorState) => {
+      setHistNav(null);
+      setEditor(fn);
+    };
+    /** Put a history entry in the composer, cursor at the end. */
+    const recallAt = (index: number, draft: string) => {
+      const text = past.current![index]!;
+      setHistNav({ index, draft });
+      setEditor({ text, cursor: text.length });
+    };
     if (key.return && !key.shift) return submit();
-    if (input === '\n' && !key.return) return void setEditor((e) => insertText(e, '\n'));
-    if (key.return && key.shift) return void setEditor((e) => insertText(e, '\n'));
-    if (key.backspace || (key.delete && !key.meta)) return void setEditor(backspace);
-    if (key.delete && key.meta) return void setEditor(deleteForward);
+    if (input === '\n' && !key.return) return void edit((e) => insertText(e, '\n'));
+    if (key.return && key.shift) return void edit((e) => insertText(e, '\n'));
+    if (key.backspace || (key.delete && !key.meta)) return void edit(backspace);
+    if (key.delete && key.meta) return void edit(deleteForward);
     if (key.leftArrow) return void setEditor(moveLeft);
     if (key.rightArrow) return void setEditor(moveRight);
-    // With an empty composer, ↑/↓ scroll the conversation — which also
-    // makes the mouse wheel work (the terminal's alternate-scroll mode
-    // translates wheel ticks into arrow keys in the alt screen).
+    // ↑ recalls submitted prompts (on an empty composer, or stepping
+    // further back while already recalling); inside typed text it moves
+    // the cursor. With no history to offer, an empty-composer ↑/↓ still
+    // scrolls the conversation — which also keeps the mouse wheel working
+    // where the terminal's alternate-scroll mode translates wheel ticks
+    // into arrow keys in the alt screen.
     if (key.upArrow) {
-      if (editor.text.length === 0) {
+      const entries = past.current!;
+      if (histNav) {
+        if (histNav.index > 0) recallAt(histNav.index - 1, histNav.draft);
+        return;
+      }
+      if (editor.text.length === 0 && entries.length > 0) {
+        recallAt(entries.length - 1, editor.text);
+      } else if (editor.text.length === 0) {
         setScroll({ top: Math.max(0, top - 1), stick: false });
       } else {
         setEditor(moveUp);
@@ -556,6 +631,17 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       return;
     }
     if (key.downArrow) {
+      const entries = past.current!;
+      if (histNav) {
+        // Forward through history; past the newest, the draft comes back.
+        if (histNav.index < entries.length - 1) {
+          recallAt(histNav.index + 1, histNav.draft);
+        } else {
+          setHistNav(null);
+          setEditor({ text: histNav.draft, cursor: histNav.draft.length });
+        }
+        return;
+      }
       if (editor.text.length === 0) {
         const next = Math.min(top + 1, maxTop);
         setScroll({ top: next, stick: next >= maxTop });
@@ -568,7 +654,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
     if (key.ctrl && input === 'e') return void setEditor(moveEnd);
     if (key.ctrl || key.meta) return;
     if (input) {
-      setEditor((e) => insertText(e, input));
+      edit((e) => insertText(e, input));
       setScroll((s) => ({ ...s, stick: true }));
     }
   });

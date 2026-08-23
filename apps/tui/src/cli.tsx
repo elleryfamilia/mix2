@@ -10,6 +10,7 @@ import path from 'node:path';
 import React from 'react';
 import { parseArgs } from './args.js';
 import { App } from './components/App.js';
+import { fileHistoryStore } from './history.js';
 import { CoreClient } from './ipc/client.js';
 import type { CoreEvent } from './ipc/protocol.js';
 import { FilteredStdin } from './mouse/filteredStdin.js';
@@ -105,6 +106,7 @@ const app = render(
       handlers = h;
     }}
     mouse={filteredStdin?.mouse}
+    history={fileHistoryStore(process.cwd())}
   />,
   {
     exitOnCtrlC: false,
