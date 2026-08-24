@@ -233,11 +233,12 @@ if [ -z "${MIX2_NO_LINK:-}" ]; then
   ln -sf "$INSTALL_DIR/mix2" "$BIN_DIR/mix2"
 fi
 
-# mix2 refuses to start unless Node >= 22 and two agent CLIs are present
-# and signed in. The default team is Claude Code + Codex, so check those
-# two now — the install then ends with honest next steps instead of a
-# success line on a machine that can't run it. (Other supported harnesses
-# can replace either default via config or the startup picker.)
+# mix2 refuses to start without Node >= 22 and the agent CLIs backing its
+# two team slots. A team is any two of the supported CLIs (the same CLI
+# twice counts, as two independent sessions), picked in config or the
+# startup picker, so require at least one here and recommend two. Check
+# now so the install ends with honest next steps instead of a success
+# line on a machine that can't run it.
 missing=""
 need() {
   if [ -z "$missing" ]; then missing="  • $*"; else missing="${missing}
@@ -249,10 +250,17 @@ if command -v node >/dev/null 2>&1; then
 else
   need "Node.js >= 22 — https://nodejs.org"
 fi
-command -v claude >/dev/null 2>&1 \
-  || need "Claude Code CLI (default team) — https://claude.com/claude-code"
-command -v codex >/dev/null 2>&1 \
-  || need "Codex CLI (default team) — https://developers.openai.com/codex/cli (npm i -g @openai/codex)"
+# Keep this list in sync with the core's harness registry
+# (crates/mix2-core/src/agents/registry.rs).
+agents_found=""
+agent_count=0
+for cli in claude codex cursor-agent opencode copilot; do
+  command -v "$cli" >/dev/null 2>&1 || continue
+  agent_count=$((agent_count + 1))
+  agents_found="${agents_found:+$agents_found, }$cli"
+done
+[ "$agent_count" -ge 1 ] \
+  || need "an agent CLI — mix2 teams any two of claude, codex, cursor-agent, opencode, copilot (links: https://github.com/elleryfamilia/mix2#requirements)"
 
 if [ -z "${MIX2_NO_LINK:-}" ]; then
   case ":$PATH:" in
@@ -266,10 +274,15 @@ if [ -n "$missing" ]; then
   say "⚠ mix2 ${version} is installed, but this machine is missing:"
   say "$missing"
   say ""
-  say "Both CLIs must also be signed in (run \`claude\` once; run \`codex login\`)."
-  say "(Claude Code + Codex is the default team; any two supported agent CLIs"
-  say "work — pick them in ~/.config/mix2/config.toml or the startup picker.)"
+  say "The agent CLIs you use must also be signed in — mix2 checks at startup"
+  say "and names the exact fix per agent."
   say "Fix the above, then run: mix2"
+elif [ "$agent_count" -eq 1 ]; then
+  say "✓ installed mix2 ${version} — found ${agents_found}, which can fill both"
+  say "  team slots as two independent sessions. A second supported CLI (claude,"
+  say "  codex, cursor-agent, opencode, copilot) gives the team a second model."
+  say "  Sign in, then run: mix2"
 else
-  say "✓ installed mix2 ${version} — make sure both CLIs are signed in, then run: mix2"
+  say "✓ installed mix2 ${version} — found ${agents_found}. Make sure the two"
+  say "  you use are signed in, then run: mix2"
 fi

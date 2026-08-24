@@ -384,4 +384,47 @@ describe('install.sh', () => {
     expect(existsSync(installDir)).toBe(false);
     rmSync(`${installDir}.lock`, { recursive: true });
   });
+
+  describe('agent CLI detection', () => {
+    /** A PATH that pins detection: only the fake CLIs in `fakeBin` are
+     * visible as agents, while node (the one running vitest), the system
+     * tools, and the link target stay reachable. */
+    const pinnedPath = (fakeBin?: string) =>
+      [...(fakeBin ? [fakeBin] : []), binDir, path.dirname(process.execPath), '/usr/bin', '/bin'].join(':');
+
+    const stubAgents = (...names: string[]) => {
+      const fakeBin = path.join(work, 'fake-bin');
+      mkdirSync(fakeBin, { recursive: true });
+      for (const name of names)
+        writeFileSync(path.join(fakeBin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      return fakeBin;
+    };
+
+    it('no supported agent CLI on PATH still installs, but warns with the full roster', async () => {
+      serve('0.4.0');
+      const r = await run({ PATH: pinnedPath() });
+      expect(r.status, r.err).toBe(0);
+      expect(r.out).toContain('is installed, but this machine is missing');
+      expect(r.out).toContain('any two of claude, codex, cursor-agent, opencode, copilot');
+      expect(installedVersion()).toBe('mix2 0.4.0');
+    });
+
+    it('one detected CLI is a success (same CLI can fill both slots) with a second-CLI nudge', async () => {
+      serve('0.4.0');
+      const r = await run({ PATH: pinnedPath(stubAgents('opencode')) });
+      expect(r.status, r.err).toBe(0);
+      expect(r.out).not.toContain('this machine is missing');
+      expect(r.out).toContain('found opencode');
+      expect(r.out).toContain('second');
+    });
+
+    it('two detected CLIs succeed and name what was found', async () => {
+      serve('0.4.0');
+      const r = await run({ PATH: pinnedPath(stubAgents('cursor-agent', 'opencode')) });
+      expect(r.status, r.err).toBe(0);
+      expect(r.out).not.toContain('this machine is missing');
+      expect(r.out).toContain('found cursor-agent, opencode');
+      expect(r.out).toContain('Make sure the two');
+    });
+  });
 });
