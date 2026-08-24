@@ -30,11 +30,12 @@ Two registers, and the UI labels them so they never blur:
   alone; individual names appear in the answer only to attribute a real
   split or who found what ("Codex picked A, Claude leaned B; our call is A").
 
-Two rival labs' agents on one team is the product's standing joke — let
-microcopy and the agents' own voice carry it dryly ("sworn competitors,
-model colleagues"), at most one wink per screen or response, and never in
-serious moments: errors, security findings, cancellations. Clarity beats
-the joke everywhere they compete.
+Two agents that don't share a brain, made to sign one answer, is the
+product's standing dry joke — let microcopy and the agents' own voice
+carry it lightly ("same stock, separate minds"; "different minds, one
+answer"), at most one wink per screen or response, and never in serious
+moments: errors, security findings, cancellations. Clarity beats the
+joke everywhere they compete.
 
 ## Principles
 
@@ -55,6 +56,10 @@ the joke everywhere they compete.
 
 Terminal-safe hex values, taken directly from the design file. The UI reads
 them through semantic roles (`theme.ts`), never as raw values in components.
+Identity is keyed by **team slot** (`one`/`two`), never by harness: slot one
+is always the warm mark and slot two the cool one, whichever CLIs back them
+(display names come from the session's AgentInfo). The mocks in this file
+show the default team, Claude on slot one and Codex on slot two.
 
 | Role                  | Hex       | Usage |
 | --------------------- | --------- | ----- |
@@ -64,20 +69,20 @@ them through semantic roles (`theme.ts`), never as raw values in components.
 | `text.secondary`      | `#a9a5b2` | dialogue lines, stances |
 | `text.muted`          | `#8d8896` | status phrases, narration body |
 | `text.faint`          | `#514d59` | tool tree, timings, keyboard hints |
-| `agent.claude`        | `#e0a06a` | Claude glyph `●`, chip background, tile border |
-| `agent.codex`         | `#8ab8d6` | Codex glyph `○`, chip background, tile border |
+| `agent.one`           | `#e0a06a` | slot one (warm): glyph `●`, chip background, tile border |
+| `agent.two`           | `#8ab8d6` | slot two (cool): glyph `○`, chip background, tile border |
 | `agent.team`          | `#b795e6` | mauve: confer glyph `⇄`, Team chip, disagreement `△` |
 | `chip.appBg/appFg`    | `#d6d3dc` / `#17161b` | inverted ` mix2 ` chip: header, composer, narration label |
-| `chip.claudeFg`       | `#1c1208` | text on Claude chip |
-| `chip.codexFg`        | `#0c141c` | text on Codex chip |
+| `chip.oneFg`          | `#1c1208` | text on slot one's chip |
+| `chip.twoFg`          | `#0c141c` | text on slot two's chip |
 | `chip.teamFg`         | `#160e20` | text on Team chip |
 | `border.subtle`       | `#2a2830` | outer frame in the mock; unused as a full frame in the real TUI |
 | `border.hairline`     | `#232128` | header underline |
 | `border.bridge`       | `#39353f` | `╌╌` bridge dashes |
-| `status.error`        | `#e06a6a` | errors (derived: Claude hue rotated to red, same saturation family) |
+| `status.error`        | `#e06a6a` | errors (derived: slot one's hue rotated to red, same saturation family) |
 
-Tile borders use the agent color at ~50% strength; terminals cannot blend, so
-the implementation uses the agent color directly on border glyphs and keeps
+Tile borders use the slot color at ~50% strength; terminals cannot blend, so
+the implementation uses the slot color directly on border glyphs and keeps
 the border to a thin rounded box (`╭─╮ │ ╰─╯`).
 
 ## Typography and glyph vocabulary
@@ -88,7 +93,7 @@ Everything is the user's monospace font. Weight and color carry hierarchy:
 - *italic* — an agent's interim "thinking out loud" line inside a tile
   (never hidden chain-of-thought; only surfaced interim text)
 - glyphs:
-  - `●` Claude · `○` Codex · `◐` Team (panel header, resolution stance)
+  - `●` slot one · `○` slot two · `◐` Team (panel header, resolution stance)
   - `❯` user prompt · `▊` input cursor
   - `├` `└` tool tree connectors
   - `↔` consultation announced ("bringing in codex")
@@ -104,7 +109,7 @@ Full-screen alternate-buffer app, three fixed regions:
 
 ```text
 header      1 row   full-width bar in bgStatus: ` mix2 ` chip ·
-                    ● Claude · ○ Codex roster (glyphs in agent colors,
+                    ● Claude · ○ Codex roster (slot glyphs in slot colors,
                     no role labels) · right-aligned cwd
 spacing     1 row   becomes the sticky prompt bar when the governing
                     prompt scrolls out of view: `❯ <prompt…>  ↑ jump`
