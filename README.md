@@ -1,9 +1,8 @@
 # mix2
 
-**Claude Code, Codex, Cursor, OpenCode, Copilot — pick two. They work as
-one team. Yes, really.**
+**Two coding agents. Independent takes. One answer.**
 
-mix2 is a terminal app that turns two rival frontier coding agents into
+mix2 is a terminal app that turns two frontier coding agents into
 one small engineering team. You ask one question; both investigate in
 parallel, independently; they compare notes, argue when they should, and
 hand you a single answer — signed by the team, not by either of them.
@@ -11,10 +10,10 @@ hand you a single answer — signed by the team, not by either of them.
 Sworn competitors. Model colleagues.
 
 Claude Code + Codex is the classic lineup, but the slots are pluggable:
-any two of the five harnesses above — cross-lab rivals for maximum
-disagreement, or the same harness twice for a genuinely independent
-second session. Swap the roster and the interface, the etiquette, and
-the disagreement ledger stay identical.
+any two of Claude Code, Codex, Cursor, OpenCode, and Copilot — cross-lab
+pairs for maximum disagreement, or the same harness twice for a
+genuinely independent second session. Swap the roster and the interface,
+the etiquette, and the disagreement ledger stay identical.
 
 <p align="center">
   <img src="docs/assets/hero.svg" width="780" alt="A mix2 session: one question; the team investigates; Claude and Codex work in parallel tiles; they confer; one Team answer with the disagreement disclosed.">
