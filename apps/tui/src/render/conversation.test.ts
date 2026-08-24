@@ -603,7 +603,7 @@ describe('same-harness team', () => {
     const joined = text(s, twinCtx).join('\n');
     expect(joined).toContain('two independent Codex agents');
     expect(joined).toContain('same stock, separate minds');
-    expect(joined).not.toContain('sworn competitors');
+    expect(joined).not.toContain('different minds, one answer');
     expect(joined).toContain('hand to codex to execute');
   });
 

@@ -7,8 +7,6 @@ one small engineering team. You ask one question; both investigate in
 parallel, independently; they compare notes, argue when they should, and
 hand you a single answer — signed by the team, not by either of them.
 
-Sworn competitors. Model colleagues.
-
 Claude Code + Codex is the classic lineup, but the slots are pluggable:
 any two of Claude Code, Codex, Cursor, OpenCode, and Copilot — cross-lab
 pairs for maximum disagreement, or the same harness twice for a
@@ -66,8 +64,8 @@ good." Ask it to *implement* something and it does everything except
 touch your code: both agents investigate, agree on an approach, and
 write a complete plan to `.mix2/<topic>-plan.md` — then hand you the
 exact command to execute it interactively in your agent's own CLI,
-where you can steer and approve. You leave with a plan two rivals
-signed off on, which is more than most human meetings produce.
+where you can steer and approve. You leave with a plan two independent
+agents signed off on, which is more than most human meetings produce.
 
 Run it outside a code project and the team notices, drops the code lens,
 and brainstorms whatever you bring: a product idea, business viability,
@@ -352,4 +350,4 @@ refusal, both consult transports, and process-tree kills included.
 
 ---
 
-*mix2 is a working name. The rivalry, however, is real.*
+*mix2 is a working name. The disagreements, however, are real.*

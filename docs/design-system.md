@@ -30,11 +30,12 @@ Two registers, and the UI labels them so they never blur:
   alone; individual names appear in the answer only to attribute a real
   split or who found what ("Codex picked A, Claude leaned B; our call is A").
 
-Two rival labs' agents on one team is the product's standing joke — let
-microcopy and the agents' own voice carry it dryly ("sworn competitors,
-model colleagues"), at most one wink per screen or response, and never in
-serious moments: errors, security findings, cancellations. Clarity beats
-the joke everywhere they compete.
+Two agents that don't share a brain, made to sign one answer, is the
+product's standing dry joke — let microcopy and the agents' own voice
+carry it lightly ("same stock, separate minds"; "different minds, one
+answer"), at most one wink per screen or response, and never in serious
+moments: errors, security findings, cancellations. Clarity beats the
+joke everywhere they compete.
 
 ## Principles
 

@@ -612,9 +612,10 @@ function welcomeLines(state: AppState, ctx: RenderContext): Line[] {
   const lines: Line[] = [];
   lines.push(pad(span('How can we help?', { color: theme.text.primary })));
   lines.push(BLANK);
-  // Participant names come from the session; the rivalry wink only fits a
-  // team whose slots actually run different harnesses. Before the session
-  // settles (the beat between discovery and ready) the copy stays generic.
+  // Participant names come from the session; the flavor line matches the
+  // lineup — twins get "same stock", mixed teams "different minds". Before
+  // the session settles (the beat between discovery and ready) the copy
+  // stays generic.
   const session = state.session;
   const sameHarness = session ? session.one.harness === session.two.harness : false;
   const pair = !session
@@ -626,7 +627,7 @@ function welcomeLines(state: AppState, ctx: RenderContext): Line[] {
     ? 'independent takes, one voice'
     : sameHarness
       ? 'same stock, separate minds'
-      : 'sworn competitors, model colleagues';
+      : 'different minds, one answer';
   const handoff = !session
     ? 'either one'
     : sameHarness
