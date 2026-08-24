@@ -21,11 +21,12 @@ never crosses it.
 ## Why the lead is the orchestrator
 
 There is no classifier in front of the lead. The user's message goes
-straight to the selected lead agent (Claude Code or Codex) with role
-instructions appended to the provider's own system prompt. Those
-instructions bias hard toward collaboration: users open mix2 to get the
-team, so the lead consults on every substantive request and answers alone
-only for no-ops (greetings, acknowledgements) and clarifying questions.
+straight to the selected lead agent (whichever harness backs the lead
+slot) with role instructions appended to the provider's own system
+prompt. Those instructions bias hard toward collaboration: users open
+mix2 to get the team, so the lead consults on every substantive request
+and answers alone only for no-ops (greetings, acknowledgements) and
+clarifying questions.
 The lead still makes that call in context — as part of doing the actual
 work — by running the `mix2-consult` command. The runtime's job is to
 keep the collaboration *bounded* (budget, depth, cancellation), not to
@@ -45,8 +46,8 @@ permissive user allowlist, the boundary is instruction-level. Codex leads
 run in the workspace-write sandbox (the consult channel requires it), so
 for them the rule is always instruction-enforced. Teammates never write; their assessment is their reply. Asked to
 implement, the team reframes instead of refusing: it produces the plan in
-`.mix2/` and hands the user the exact `claude`/`codex` command to execute
-it interactively, where steering and approval exist.
+`.mix2/` and hands the user the exact agent-CLI command to execute it
+interactively, where steering and approval exist.
 
 Before both agents commit to a broad request, the lead is instructed to
 qualify it once — scope, focus, deliverable, at most three questions —
@@ -77,15 +78,15 @@ lead agent (claude -p / codex exec, MIX2_ROLE=lead)
             2. file mailbox <runtime>/consult/req-*.json (fallback; Codex's sandbox
                blocks sockets, so its lead runs workspace-write with the runtime
                dir added to writable roots)
-            └─ runtime checks role/depth/budget, then spawns the *other*
-               provider fresh, with teammate instructions, same cwd
+            └─ runtime checks role/depth/budget, then spawns the *other
+               slot's* harness fresh, with teammate instructions, same cwd
                  └─ teammate's final response returns through the same
                     channel and is printed on mix2-consult's stdout
 ```
 
 The lead only ever knows the name `mix2-consult`; the runtime resolves
-who the teammate is. When the lead is Claude, consultations go to Codex,
-and vice versa.
+who the teammate is: always the other slot, whichever harness backs it.
+In the default team, a Claude lead consults Codex and vice versa.
 
 ## Why teammate sessions are independent
 
@@ -182,7 +183,7 @@ also avoids nesting (Codex self-sandboxes).
 **Sandboxed leads.** A teammate-only harness (`sandboxable_lead`) becomes
 lead-eligible when an OS sandbox engine is available to enforce its write
 scope in place of native scoping (`sandbox.rs`; macOS `sandbox-exec`
-Seatbelt today, Linux `bubblewrap` planned). Descriptors stay honest —
+Seatbelt, Linux `bubblewrap`). Descriptors stay honest —
 `lead_permission_scoping` is unchanged — and eligibility is derived by
 one function shared across the discovery report, `validate_selection`,
 and the `Runtime::initialize` backstop, so every path agrees. At turn
@@ -240,7 +241,7 @@ turn cancels a token that:
 4. emits `turn.cancelled` so the composer returns to ready.
 
 If the UI dies (stdin EOF), the core cancels everything and exits, so no
-`claude`/`codex` processes are orphaned. Runtime state lives in
+agent processes are orphaned. Runtime state lives in
 `/tmp/mix2/<session-id>/` (socket + consult mailbox, never credentials)
 and is deleted on shutdown. The process-group logic is isolated in
 `process/child.rs` so a Windows Job Objects implementation can slot in

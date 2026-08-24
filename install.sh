@@ -233,9 +233,11 @@ if [ -z "${MIX2_NO_LINK:-}" ]; then
   ln -sf "$INSTALL_DIR/mix2" "$BIN_DIR/mix2"
 fi
 
-# mix2 refuses to start unless Node >= 22 and BOTH agent CLIs are present
-# and signed in — check now so the install ends with honest next steps
-# instead of a success line on a machine that can't run it.
+# mix2 refuses to start unless Node >= 22 and two agent CLIs are present
+# and signed in. The default team is Claude Code + Codex, so check those
+# two now — the install then ends with honest next steps instead of a
+# success line on a machine that can't run it. (Other supported harnesses
+# can replace either default via config or the startup picker.)
 missing=""
 need() {
   if [ -z "$missing" ]; then missing="  • $*"; else missing="${missing}
@@ -248,9 +250,9 @@ else
   need "Node.js >= 22 — https://nodejs.org"
 fi
 command -v claude >/dev/null 2>&1 \
-  || need "Claude Code CLI — https://claude.com/claude-code"
+  || need "Claude Code CLI (default team) — https://claude.com/claude-code"
 command -v codex >/dev/null 2>&1 \
-  || need "Codex CLI — https://developers.openai.com/codex/cli (npm i -g @openai/codex)"
+  || need "Codex CLI (default team) — https://developers.openai.com/codex/cli (npm i -g @openai/codex)"
 
 if [ -z "${MIX2_NO_LINK:-}" ]; then
   case ":$PATH:" in
@@ -265,6 +267,8 @@ if [ -n "$missing" ]; then
   say "$missing"
   say ""
   say "Both CLIs must also be signed in (run \`claude\` once; run \`codex login\`)."
+  say "(Claude Code + Codex is the default team; any two supported agent CLIs"
+  say "work — pick them in ~/.config/mix2/config.toml or the startup picker.)"
   say "Fix the above, then run: mix2"
 else
   say "✓ installed mix2 ${version} — make sure both CLIs are signed in, then run: mix2"

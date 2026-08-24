@@ -1,7 +1,7 @@
 {
   "name": "mix2",
   "version": "0.7.0",
-  "description": "A terminal interface that turns Claude Code and Codex into a small AI engineering team.",
+  "description": "A terminal interface that turns any two AI coding agents — Claude Code, Codex, Cursor, OpenCode, or Copilot — into a small engineering team.",
   "license": "MIT",
   "type": "module",
   "bin": {

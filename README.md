@@ -1,6 +1,7 @@
 # mix2
 
-**Claude Code and Codex, on the same team. Yes, really.**
+**Claude Code, Codex, Cursor, OpenCode, Copilot — pick two. They work as
+one team. Yes, really.**
 
 mix2 is a terminal app that turns two rival frontier coding agents into
 one small engineering team. You ask one question; both investigate in
@@ -9,10 +10,11 @@ hand you a single answer — signed by the team, not by either of them.
 
 Sworn competitors. Model colleagues.
 
-The pair is the default, not the limit: the team is pluggable. Keep
-Claude Code and Codex, run the same harness on both slots, or pick
-Cursor, OpenCode, or Copilot as the second opinion — the interface,
-the etiquette, and the disagreement ledger stay identical.
+Claude Code + Codex is the classic lineup, but the slots are pluggable:
+any two of the five harnesses above — cross-lab rivals for maximum
+disagreement, or the same harness twice for a genuinely independent
+second session. Swap the roster and the interface, the etiquette, and
+the disagreement ledger stay identical.
 
 <p align="center">
   <img src="docs/assets/hero.svg" width="780" alt="A mix2 session: one question; the team investigates; Claude and Codex work in parallel tiles; they confer; one Team answer with the disagreement disclosed.">
@@ -28,10 +30,11 @@ exactly as the app renders it.
 curl -fsSL https://raw.githubusercontent.com/elleryfamilia/mix2/main/install.sh | sh
 ```
 
-macOS and Linux. Needs Node.js ≥ 22 at runtime, plus both agents
-installed and signed in:
+macOS and Linux. Needs Node.js ≥ 22 at runtime, plus two agent CLIs
+installed and signed in — out of the box that's
 [Claude Code](https://claude.com/claude-code) (`claude`) and
-[Codex](https://developers.openai.com/codex/cli) (`codex`). Then run
+[Codex](https://developers.openai.com/codex/cli) (`codex`); any other
+supported pair works via config or the startup picker. Then run
 `mix2`. (Verifies checksums; installs to `~/.local/share/mix2`, links
 `~/.local/bin/mix2`.)
 
@@ -45,13 +48,12 @@ are never offered updates: `git pull && pnpm build` instead.)
 
 ## Why two agents?
 
-Because one model agreeing with itself is not a review. Claude and Codex
-are trained by different labs, disagree in genuinely useful ways, and —
-crucially — mix2 keeps their opinions independent: the consulted agent
-gets a clean, unanchored brief and forms its own view before the two are
-reconciled. When they agree, you know something. When they don't, you
-*really* know something, and the answer says so instead of papering over
-it.
+Because one model agreeing with itself is not a review. Agents trained
+by different labs disagree in genuinely useful ways, and — crucially —
+mix2 keeps their opinions independent: the consulted agent gets a clean,
+unanchored brief and forms its own view before the two are reconciled.
+When they agree, you know something. When they don't, you *really* know
+something, and the answer says so instead of papering over it.
 
 This is not "run two chatbots side by side." One conversation, one
 answer, one team — with the argument happening where you can inspect it
@@ -64,9 +66,9 @@ design, code review, debugging discussions, tradeoffs, "is this idea any
 good." Ask it to *implement* something and it does everything except
 touch your code: both agents investigate, agree on an approach, and
 write a complete plan to `.mix2/<topic>-plan.md` — then hand you the
-exact `claude`/`codex` command to execute it interactively, where you
-can steer and approve. You leave with a plan two rivals signed off on,
-which is more than most human meetings produce.
+exact command to execute it interactively in your agent's own CLI,
+where you can steer and approve. You leave with a plan two rivals
+signed off on, which is more than most human meetings produce.
 
 Run it outside a code project and the team notices, drops the code lens,
 and brainstorms whatever you bring: a product idea, business viability,
@@ -129,12 +131,13 @@ the visual system is specified in
 
 - macOS or Linux
 - Node.js ≥ 22 and pnpm; Rust (stable) to build the core
-- [Claude Code](https://claude.com/claude-code) CLI (`claude`), logged in
-- [Codex](https://developers.openai.com/codex/cli) CLI (`codex`), logged in
-- Optional teammates: [Cursor CLI](https://cursor.com/cli),
-  [OpenCode](https://opencode.ai), and the
-  [GitHub Copilot CLI](https://github.com/features/copilot/cli) — picked
-  in config or the startup team picker
+- Any two of the supported agent CLIs, installed and logged in — picked
+  in config or the startup team picker:
+  - [Claude Code](https://claude.com/claude-code) (`claude`) — default, slot one
+  - [Codex](https://developers.openai.com/codex/cli) (`codex`) — default, slot two
+  - [Cursor CLI](https://cursor.com/cli) (`cursor-agent`)
+  - [OpenCode](https://opencode.ai) (`opencode`)
+  - [GitHub Copilot CLI](https://github.com/features/copilot/cli) (`copilot`)
 
 Two agents are required — the whole point is the team, and one model
 agreeing with itself is not a review (same-harness teams are supported,
@@ -187,8 +190,9 @@ harness = "codex"
 ```
 
 The same harness on both slots is allowed (the UI shows them as e.g.
-"Codex (one)" / "Codex (two)"). Besides `claude` and `codex`, two more
-harnesses are supported as teammates:
+"Codex (one)" / "Codex (two)"). Besides `claude` and `codex`, three more
+harnesses are supported — as teammates natively, and as leads wherever
+an OS sandbox engine is available (see the security model below):
 
 - [Cursor CLI](https://cursor.com/cli) — `harness = "cursor"`; read-only
   `--mode plan` consultations; runs with `--trust`, disclosed in the
