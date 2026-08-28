@@ -373,10 +373,13 @@ coordinator *description* and a **continue button**. The focused tile's
 border takes the slot's identity color (`border.bridge` quiet otherwise),
 so which slot you're equipping is unmissable. The coordinator is not a
 control you land on — the default is right almost always, so it reads as
-a described fact (`⇄ slot one coordinates`) with a single swap key, and
-the consultation budget below it follows the same idiom (`↔ 2 turns per
-question`, adjusted with `+`/`-`, sent only if changed); leaving the
-picker is a plain continue. The configured proposal arrives
+a described fact (`⇄ slot one coordinates`) with a single swap key. The
+consultation budget below it *is* a focus stop — enter from slot two
+lands on `↔ 2 turns per question`, `↑↓` (or `+`/`-` from anywhere)
+change it, enter moves on, and it is sent only if changed — so a first
+run sees and sets it; then a plain continue. An agent equipped on one
+slot is disabled on the other (`picked for slot one`) unless it is the
+only agent that slot could run. The configured proposal arrives
 preselected: each slot's equipped entry renders **bold in the slot
 color** with the `●` mark — color carries the state, the mark survives
 NO_COLOR.

@@ -191,9 +191,11 @@ model = "sonnet"               # optional: pin a model
 harness = "codex"
 ```
 
-The same harness on both slots is allowed (the UI shows them as e.g.
-"Codex (one)" / "Codex (two)"). When the picker changes which harness a
-slot runs, that slot's `command`/`model` pins follow their harness (to its
+The picker keeps the two slots distinct: an agent equipped on one slot
+leaves the other slot's menu (unless it is the only agent installed —
+then a same-harness team like "Codex (one)" / "Codex (two)" is still
+possible, and the config file can always express one). When the picker
+changes which harness a slot runs, that slot's `command`/`model` pins follow their harness (to its
 new slot, or to its `[claude]`/`[codex]` section) rather than being applied
 to a different CLI; the confirmation in the conversation says what moved.
 Besides `claude` and `codex`, two more harnesses are supported as

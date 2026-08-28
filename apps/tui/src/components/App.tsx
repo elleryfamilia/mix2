@@ -12,11 +12,13 @@ import {
 } from '../render/modelPanel.js';
 import { renderTeamPanel } from '../render/teamPanel.js';
 import {
+  PICKER_COLUMNS,
   entryIndexOf,
   initialSelection,
   pickerEntries,
   renderTeamPicker,
   selectable,
+  takenFor,
   type TeamPickerCursor,
   type TeamPickerSelection,
 } from '../render/teamPicker.js';
@@ -396,6 +398,9 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
   };
 
   useInput((input, key) => {
+    // Terminals reporting key releases (kitty protocol) must not fire a
+    // handler twice per press.
+    if (key.eventType === 'release') return;
     if (state.phase === 'fatal') {
       if (input === 'q' || key.escape || (key.ctrl && input === 'c')) quit();
       return;
@@ -413,7 +418,7 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         // button is where the team actually starts. The IPC send stays
         // outside any state updater — updaters may run more than once.
         const { cursor, selection } = picker;
-        if (cursor.column === 2) {
+        if (cursor.column === 3) {
           // The budget travels only when the user changed it: the seeded
           // value comes straight from the file, which may hold a number
           // the core would refuse from a picker (0, or above the limit).
@@ -429,13 +434,28 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           }
           return;
         }
+        if (cursor.column === 2) {
+          // Turns confirmed as shown (↑↓ changed it, or it's fine as is).
+          setPicker({ selection, cursor: { column: 3, index: 0 } });
+          return;
+        }
         const slot = cursor.column === 0 ? 'one' : 'two';
         const entry = entries[cursor.index];
         // A disabled entry cannot be equipped; its reason is on screen.
-        if (!entry || !selectable(entry, slot, selection.leadSlot)) return;
-        const nextSelection = { ...selection, [slot]: entry.harness };
+        if (!entry || !selectable(entry, slot, selection.leadSlot, takenFor(discovery, slot, selection))) {
+          return;
+        }
+        let nextSelection: TeamPickerSelection = { ...selection, [slot]: entry.harness };
+        if (slot === 'one' && selection.two === entry.harness) {
+          // Slot two held the harness just claimed: move it to the first
+          // other choice, if there is one (else the same-harness team stands).
+          const alt = entries.find(
+            (e) => e.harness !== entry.harness && selectable(e, 'two', selection.leadSlot),
+          );
+          if (alt) nextSelection = { ...nextSelection, two: alt.harness };
+        }
         const column = (cursor.column + 1) as TeamPickerCursor['column'];
-        const index = column === 2 ? 0 : equippedIndex(column, nextSelection);
+        const index = column === 1 ? equippedIndex(column, nextSelection) : 0;
         setPicker({ selection: nextSelection, cursor: { column, index } });
         return;
       }
@@ -448,16 +468,27 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
       if (key.leftArrow || key.rightArrow || key.tab) {
         setPicker((prev) => {
           if (!prev) return prev;
-          const delta = key.leftArrow ? 2 : 1; // left cycles backwards
-          const column = ((prev.cursor.column + delta) % 3) as TeamPickerCursor['column'];
-          const index = column === 2 ? 0 : equippedIndex(column, prev.selection);
+          const delta = key.leftArrow ? PICKER_COLUMNS - 1 : 1; // left cycles backwards
+          const column = ((prev.cursor.column + delta) % PICKER_COLUMNS) as TeamPickerCursor['column'];
+          const index = column === 0 || column === 1 ? equippedIndex(column, prev.selection) : 0;
           return { ...prev, cursor: { column, index } };
         });
         return;
       }
-      if (key.upArrow || key.downArrow) {
+      const adjustTurns = (delta: number) =>
         setPicker((prev) => {
-          if (!prev || prev.cursor.column === 2) return prev;
+          if (!prev) return prev;
+          const maxTurns = Math.max(1, Math.min(MAX_TURNS_LIMIT, prev.selection.maxTurns + delta));
+          return { ...prev, selection: { ...prev.selection, maxTurns } };
+        });
+      if (key.upArrow || key.downArrow) {
+        if (picker.cursor.column === 2) {
+          // On the turns row the arrows change the number (up = more).
+          adjustTurns(key.upArrow ? 1 : -1);
+          return;
+        }
+        setPicker((prev) => {
+          if (!prev || prev.cursor.column === 3) return prev;
           // Arrows only move the highlight; equipping is the explicit
           // enter. Disabled entries stay reachable so their reason reads.
           const delta = key.upArrow ? -1 : 1;
@@ -467,14 +498,9 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         return;
       }
       if ((input === '+' || input === '-') && !key.ctrl && !key.meta) {
-        // The budget is described, not focused: `+`/`-` adjust it from
-        // anywhere, clamped to the range the core accepts.
-        setPicker((prev) => {
-          if (!prev) return prev;
-          const delta = input === '-' ? -1 : 1;
-          const maxTurns = Math.max(1, Math.min(MAX_TURNS_LIMIT, prev.selection.maxTurns + delta));
-          return { ...prev, selection: { ...prev.selection, maxTurns } };
-        });
+        // Shortcuts from anywhere in the picker, clamped to the range the
+        // core accepts.
+        adjustTurns(input === '-' ? -1 : 1);
         return;
       }
       if (input.toLowerCase() === 'c' && !key.ctrl && !key.meta) {

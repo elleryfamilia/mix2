@@ -139,10 +139,14 @@ describe('team picker', () => {
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
-    // Equip slot two (codex highlighted) → focus advances to continue.
+    // Equip slot two (codex highlighted) → focus advances to the turns row.
     h.stdin.write('\r');
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
+    expect(h.lastFrame()).toContain('enter continue');
+    // Turns confirmed as shown → continue.
+    h.stdin.write('\r');
+    await tickReact();
     expect(h.lastFrame()).toContain('enter start');
     // Enter on continue starts the team.
     h.stdin.write('\r');
@@ -155,7 +159,7 @@ describe('team picker', () => {
     h.unmount();
   });
 
-  it('arrows highlight without equipping; a same-harness team builds explicitly', async () => {
+  it('arrows highlight without equipping; a harness equipped on slot one leaves slot two\'s menu', async () => {
     const h = mount();
     await tickReact();
     h.emit(discovered);
@@ -169,21 +173,30 @@ describe('team picker', () => {
     // ↓ only moves the highlight onto codex — nothing is equipped yet…
     h.stdin.write('\x1b[B');
     await tickReact();
-    // …enter equips codex for slot one and advances to slot two, cursor
-    // seeded on slot two's equipped harness (codex).
+    // …enter equips codex for slot one and advances to slot two. Slot two
+    // held codex, so it moves to the other choice and codex is off its
+    // menu, with the reason on screen.
     h.stdin.write('\r');
     await tickReact();
-    // Equip codex for slot two → continue; ↑ there is a no-op, not a
-    // hidden coordinator toggle.
-    h.stdin.write('\r');
+    expect(h.lastFrame()).toContain('picked for slot one');
+    h.stdin.write('\x1b[B'); // highlight codex on slot two
     await tickReact();
+    h.stdin.write('\r'); // refused: focus stays on slot two
+    await tickReact();
+    expect(h.lastFrame()).not.toContain('enter continue');
+    h.stdin.write('\x1b[A'); // back to claude
+    await tickReact();
+    h.stdin.write('\r'); // equip claude → turns
+    await tickReact();
+    h.stdin.write('\r'); // turns → continue; ↑ there is a no-op, not a
+    await tickReact(); // hidden coordinator toggle.
     h.stdin.write('\x1b[A');
     await tickReact();
     expect(h.lastFrame()).toContain('slot two coordinates');
 
     h.stdin.write('\r');
     await tickReact();
-    expect(h.client.selectTeam).toHaveBeenCalledWith('codex', 'codex', 'two');
+    expect(h.client.selectTeam).toHaveBeenCalledWith('codex', 'claude', 'two');
     h.unmount();
   });
 
@@ -205,7 +218,9 @@ describe('team picker', () => {
     await tickReact();
     h.emit(discovered);
     await waitForFrame(h, 'slot one');
-    // Equip both slots and start.
+    // Equip both slots, confirm turns, and start.
+    h.stdin.write('\r');
+    await tickReact();
     h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\r');
@@ -254,14 +269,18 @@ describe('team picker', () => {
     await tickReact();
     expect(h.client.selectTeam).not.toHaveBeenCalled();
 
-    // Recover: equip claude on both slots, then start.
+    // Recover: claude is the only harness slot two could run, so it stays
+    // on the menu despite being slot one's pick — equip it on both, start.
     h.stdin.write('\x1b[A');
     await tickReact();
     h.stdin.write('\r'); // equip slot one → advance (cursor lands on codex, slot two's pick)
     await tickReact();
+    expect(h.lastFrame()).not.toContain('picked for slot one');
     h.stdin.write('\x1b[A'); // highlight claude
     await tickReact();
-    h.stdin.write('\r'); // equip slot two → continue
+    h.stdin.write('\r'); // equip slot two → turns
+    await tickReact();
+    h.stdin.write('\r'); // turns → continue
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
@@ -321,13 +340,28 @@ describe('team picker', () => {
     await tickReact();
     expect(h.lastFrame()).toContain('1 turn per question');
 
+    // Equip both slots → the turns row has focus; ↑/↓ change it there.
     h.stdin.write('\r');
     await tickReact();
     h.stdin.write('\r');
     await tickReact();
+    expect(h.lastFrame()).toContain('↑↓ or + / - to change');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    expect(h.lastFrame()).toContain('3 turns per question');
+    h.stdin.write('\x1b[B');
+    await tickReact();
+    expect(h.lastFrame()).toContain('2 turns per question');
+    h.stdin.write('\x1b[A');
+    await tickReact();
+    // Enter confirms turns, enter on continue starts with the new value.
     h.stdin.write('\r');
     await tickReact();
-    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one', 1);
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one', 3);
     h.unmount();
   });
 

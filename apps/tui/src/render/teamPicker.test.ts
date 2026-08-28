@@ -7,6 +7,7 @@ import {
   pickerEntries,
   renderTeamPicker,
   selectable,
+  takenFor,
 } from './teamPicker.js';
 
 const caps = {
@@ -192,5 +193,39 @@ describe('turns label', () => {
       .map(lineText)
       .join('\n');
     expect(many).toContain('5 turns per question');
+  });
+});
+
+describe('one harness per slot', () => {
+  it('the other slot\'s pick is disabled with its reason', () => {
+    const d = discovery();
+    const selection = { ...initialSelection(d), one: 'codex', two: 'claude' };
+    expect(takenFor(d, 'two', selection)).toBe('codex');
+    // Slot one is picked first and picks freely.
+    expect(takenFor(d, 'one', selection)).toBeUndefined();
+    const lines = renderTeamPicker(d, selection, { column: 1, index: 0 }, 100).map(lineText);
+    expect(lines.join('\n')).toContain('picked for slot one');
+    expect(lines.join('\n')).not.toContain('picked for slot two');
+  });
+
+  it('stays on the menu when it is the only harness the slot could run', () => {
+    const d = discovery({
+      harnesses: [
+        harness({ harness: 'claude' }),
+        harness({ harness: 'codex', available: false, reason: 'not installed: x' }),
+      ],
+    });
+    const selection = { ...initialSelection(d), one: 'claude', two: 'claude' };
+    expect(takenFor(d, 'two', selection)).toBeUndefined();
+    const joined = renderTeamPicker(d, selection, { column: 1, index: 0 }, 100).map(lineText).join('\n');
+    expect(joined).not.toContain('picked for slot');
+  });
+
+  it('the turns row is a focus stop with its own hint', () => {
+    const d = discovery();
+    const joined = renderTeamPicker(d, initialSelection(d), { column: 2, index: 0 }, 100).map(lineText).join('\n');
+    expect(joined).toContain('› ↔ 2 turns per question');
+    expect(joined).toContain('↑↓ or + / - to change (1–20)');
+    expect(joined).toContain('↑↓ change · enter continue');
   });
 });

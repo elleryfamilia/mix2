@@ -1,11 +1,13 @@
 /**
  * The startup team picker (`selecting-team` phase): one column per slot
- * listing every discovered harness, then a continue button. The
- * coordinator is a described default (`c` swaps it), not a focus stop —
- * leaving the picker should read as "continue", not as one more setting.
- * The configured proposal arrives preselected; unavailable or ineligible
- * entries stay visible but disabled, each carrying its actionable reason.
- * The same harness on both slots is a supported choice, not an error.
+ * listing every discovered harness, then the turns budget, then a
+ * continue button — enter walks that order. The coordinator is a
+ * described default (`c` swaps it), not a focus stop. The configured
+ * proposal arrives preselected; unavailable or ineligible entries stay
+ * visible but disabled, each carrying its actionable reason. A harness
+ * equipped on one slot is off the other slot's menu — unless it is the
+ * only harness that slot could run, so a one-CLI machine still builds a
+ * (same-harness) team; the core accepts either.
  */
 import type { DiscoveredHarness } from '../ipc/protocol.js';
 import type { DiscoveryState } from '../state/store.js';
@@ -24,10 +26,12 @@ const INDENT = 2;
 
 /** Picker cursor: which control has focus and which row is under it. */
 export interface TeamPickerCursor {
-  /** 0 = slot one column, 1 = slot two column, 2 = continue button. */
-  column: 0 | 1 | 2;
+  /** 0 = slot one column, 1 = slot two column, 2 = turns, 3 = continue. */
+  column: 0 | 1 | 2 | 3;
   index: number;
 }
+
+export const PICKER_COLUMNS = 4;
 
 export interface TeamPickerSelection {
   one: string;
@@ -55,16 +59,44 @@ export function pickerEntries(discovery: DiscoveryState): DiscoveredHarness[] {
   return [...byHarness.values()];
 }
 
-/** Whether an entry can be chosen for a slot at all. */
-export function selectable(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): boolean {
+/** Whether an entry can be chosen for a slot at all. `taken` is the
+ * harness the other slot already runs (see `takenFor`). */
+export function selectable(
+  entry: DiscoveredHarness,
+  slot: SlotName,
+  leadSlot: SlotName,
+  taken?: string,
+): boolean {
   if (!entry.available || entry.auth === 'unauthenticated') return false;
-  return slot === leadSlot ? entry.lead_eligible : entry.teammate_eligible;
+  if (!(slot === leadSlot ? entry.lead_eligible : entry.teammate_eligible)) return false;
+  return entry.harness !== taken;
+}
+
+/** The harness slot one runs is off slot two's menu — the picker is
+ * walked one → two, so slot one picks freely (claiming slot two's harness
+ * moves slot two off it) and slot two offers what's left. The exception:
+ * when it is the only harness slot two could run at all, it stays (a
+ * machine with one CLI installed still builds a team from it). */
+export function takenFor(
+  discovery: DiscoveryState,
+  slot: SlotName,
+  selection: TeamPickerSelection,
+): string | undefined {
+  if (slot === 'one') return undefined;
+  const options = pickerEntries(discovery).filter((e) => selectable(e, slot, selection.leadSlot));
+  return options.length === 1 && options[0]!.harness === selection.one ? undefined : selection.one;
 }
 
 /** One-line status label for a disabled entry. */
-function disabledLabel(entry: DiscoveredHarness, slot: SlotName, leadSlot: SlotName): string {
+function disabledLabel(
+  entry: DiscoveredHarness,
+  slot: SlotName,
+  leadSlot: SlotName,
+  taken?: string,
+): string {
   if (!entry.available) return entry.reason ?? 'unavailable';
   if (entry.auth === 'unauthenticated') return entry.reason ?? 'not signed in';
+  if (entry.harness === taken) return 'picked for slot one';
   // The why matters: this slot coordinates, and a teammate-only harness
   // can't — on the other slot the same entry is selectable. When the
   // harness *could* lead under the OS sandbox but it isn't available here,
@@ -109,10 +141,11 @@ function slotTile(
   const entries = pickerEntries(discovery);
   const chosen = slot === 'one' ? selection.one : selection.two;
   const isLead = selection.leadSlot === slot;
+  const taken = takenFor(discovery, slot, selection);
   const bodyWidth = width - 4;
   const body: Line[] = [];
   entries.forEach((entry, i) => {
-    const enabled = selectable(entry, slot, selection.leadSlot);
+    const enabled = selectable(entry, slot, selection.leadSlot, taken);
     const isChosen = entry.harness === chosen;
     const isCursor = active && i === cursorIndex;
     const marker = isCursor ? '›' : ' ';
@@ -135,7 +168,10 @@ function slotTile(
       span(chosenMark, { color: agentColor(slot) }),
     ]);
     if (!enabled) {
-      const reason = truncate(disabledLabel(entry, slot, selection.leadSlot), Math.max(8, bodyWidth - 2));
+      const reason = truncate(
+        disabledLabel(entry, slot, selection.leadSlot, taken),
+        Math.max(8, bodyWidth - 2),
+      );
       body.push([span('  '), span(reason, { color: theme.text.faint })]);
     } else if (isChosen) {
       // Selection disclosures surface right where the choice is made —
@@ -206,21 +242,31 @@ export function renderTeamPicker(
   // almost always, so it never costs a focus stop — `c` swaps it.
   lines.push([
     span(' '.repeat(INDENT)),
+    span('  '),
     span(`${glyphs.confer} `, { color: theme.text.muted }),
     span(`slot ${selection.leadSlot}`, { color: agentColor(selection.leadSlot), bold: true }),
     span(' coordinates', { color: theme.text.muted }),
     span('  (press c to swap)', { color: theme.text.faint }),
   ]);
-  // Same idiom for the budget: a described default with adjust keys, not
-  // a focus stop. It persists with the team, and `/turns` edits it later.
+  // The budget is a focus stop after the slots (enter lands here), so it
+  // gets seen and set on the first run; `+`/`-` also work from anywhere.
+  // It persists with the team, and `/turns` edits it later.
+  const turnsActive = cursor.column === 2;
   lines.push([
     span(' '.repeat(INDENT)),
+    span(turnsActive ? '› ' : '  ', { color: theme.agent.team, bold: true }),
     span(`${glyphs.consult} `, { color: theme.text.muted }),
-    span(turnsLabel(selection.maxTurns), { color: theme.agent.team, bold: true }),
-    span('  (press + / - to change)', { color: theme.text.faint }),
+    span(turnsLabel(selection.maxTurns), {
+      color: turnsActive ? theme.text.primary : theme.agent.team,
+      bold: true,
+      inverse: turnsActive,
+    }),
+    span(turnsActive ? '  ↑↓ or + / - to change (1–20)' : '  (press + / - to change)', {
+      color: theme.text.faint,
+    }),
   ]);
   lines.push(BLANK);
-  const continueActive = cursor.column === 2;
+  const continueActive = cursor.column === 3;
   lines.push([
     span(' '.repeat(INDENT)),
     span(continueActive ? '› ' : '  ', { color: theme.agent.team, bold: true }),
@@ -242,9 +288,11 @@ export function renderTeamPicker(
   // The hint follows the focused control: slot columns equip, the
   // continue button is where the team actually starts.
   const hint =
-    cursor.column === 2
+    cursor.column === 3
       ? 'enter start · ←→ back · esc defaults'
-      : '↑↓ choose · enter equip · ←→ switch · esc defaults';
+      : cursor.column === 2
+        ? '↑↓ change · enter continue · ←→ switch · esc defaults'
+        : '↑↓ choose · enter equip · ←→ switch · esc defaults';
   lines.push([span(' '.repeat(INDENT)), span(hint, { color: theme.text.faint })]);
   return lines;
 }
