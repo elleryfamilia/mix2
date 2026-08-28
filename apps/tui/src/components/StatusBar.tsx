@@ -141,7 +141,7 @@ export function StatusBar({
   if (slashOpen) {
     left = [
       {
-        text: '/exit · /clear · /copy · /model · /team · /activity · /help',
+        text: '/exit · /clear · /copy · /model · /team · /turns · /activity · /help',
         color: theme.text.muted,
       },
     ];

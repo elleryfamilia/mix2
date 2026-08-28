@@ -6,6 +6,7 @@ describe('slashCommandLength', () => {
     expect(slashCommandLength('/help')).toBe(5);
     expect(slashCommandLength('/q')).toBe(2);
     expect(slashCommandLength('/team panel please')).toBe(5);
+    expect(slashCommandLength('/turns 3')).toBe(6);
   });
 
   it('returns 0 for partial, unknown, or non-command input', () => {

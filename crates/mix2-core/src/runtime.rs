@@ -210,6 +210,60 @@ fn slot_display_name(team: Team, slot: SlotId) -> String {
     }
 }
 
+/// What the picker chose, carried from the selection handshake to the
+/// point the session has actually started — only then is it persisted.
+struct Picked {
+    team: Team,
+    previous: Team,
+    max_turns: Option<u32>,
+}
+
+/// Persist a picked team (plus the budget chosen with it, if any) in one
+/// write and describe the outcome as a `config.saved` event. A missing
+/// config directory or a write failure is reported, never fatal: the
+/// session still runs with the choice.
+fn persist_selection(path: Option<&std::path::Path>, picked: &Picked) -> Event {
+    config_saved("team", path, |path| {
+        let notes =
+            crate::persist::save_selection(path, picked.team, picked.previous, picked.max_turns)?;
+        Ok((!notes.is_empty()).then(|| notes.join("; ")))
+    })
+}
+
+fn persist_max_consults(path: Option<&std::path::Path>, max: u32) -> Event {
+    config_saved("turns", path, |path| {
+        crate::persist::save_max_consults(path, max).map(|()| None)
+    })
+}
+
+fn config_saved(
+    key: &str,
+    path: Option<&std::path::Path>,
+    write: impl FnOnce(&std::path::Path) -> Result<Option<String>>,
+) -> Event {
+    let Some(path) = path else {
+        return Event::ConfigSaved {
+            key: key.to_owned(),
+            path: String::new(),
+            error: Some("no config directory (set $HOME or $XDG_CONFIG_HOME)".to_owned()),
+            detail: None,
+        };
+    };
+    let (detail, error) = match write(path) {
+        Ok(detail) => (detail, None),
+        Err(e) => (None, Some(format!("{e:#}"))),
+    };
+    if let Some(e) = &error {
+        tracing::warn!("could not save {key} to {}: {e}", path.display());
+    }
+    Event::ConfigSaved {
+        key: key.to_owned(),
+        path: path.display().to_string(),
+        error,
+        detail,
+    }
+}
+
 fn emit(event: &Event) {
     let mut stdout = std::io::stdout().lock();
     if let Ok(json) = serde_json::to_string(event) {
@@ -272,6 +326,10 @@ pub struct Runtime {
     runtime_dir: PathBuf,
     lead_msgs: mpsc::Sender<LeadMsg>,
     debug: bool,
+    /// Where interactive choices (`/turns`) are persisted; `None` when no
+    /// config directory can be resolved (the choice then applies to this
+    /// session only, and `config.saved` says so).
+    config_path: Option<PathBuf>,
     /// The OS sandbox engine to wrap a non-natively-scoped lead in, when one
     /// is available and `[sandbox] mode` allows it. `None` means every lead
     /// runs natively (teammate mechanisms untouched).
@@ -293,6 +351,7 @@ impl Runtime {
         lead_msgs: mpsc::Sender<LeadMsg>,
         report: &discovery::Discovery,
         sandbox_engine: Option<crate::sandbox::SandboxEngine>,
+        config_path: Option<PathBuf>,
     ) -> Result<Self> {
         // Role-eligibility backstop for every entry point. The interactive
         // picker refuses ineligible teams in `validate_selection`, but the
@@ -436,6 +495,7 @@ impl Runtime {
             runtime_dir,
             lead_msgs,
             debug,
+            config_path,
             sandbox_engine,
         })
     }
@@ -833,6 +893,22 @@ impl Runtime {
         });
     }
 
+    /// Apply `/turns <n>`: the budget for every subsequent turn (the
+    /// running turn, if any, keeps the budget it started with), persisted
+    /// so the next launch starts with it.
+    fn set_turns(&mut self, max: u32) {
+        let max = match crate::config::validate_max_consults(max) {
+            Ok(max) => max,
+            Err(message) => {
+                emit(&Event::Error { message });
+                return;
+            }
+        };
+        self.config.max_consults_per_turn = max;
+        emit(&Event::TurnsChanged { max });
+        emit(&persist_max_consults(self.config_path.as_deref(), max));
+    }
+
     async fn cleanup(&self) {
         let _ = tokio::fs::remove_dir_all(&self.runtime_dir).await;
     }
@@ -902,7 +978,11 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         }
     };
     let lead_arg = cmd_lead.or(options.lead);
-    let config = match Config::resolve(lead_arg.as_deref(), &file) {
+    let config_path = options
+        .config_path
+        .clone()
+        .or_else(crate::config::config_path);
+    let mut config = match Config::resolve(lead_arg.as_deref(), &file) {
         Ok(c) => c,
         Err(e) => {
             emit(&Event::Fatal {
@@ -943,10 +1023,11 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
             lead_slot: proposal.lead,
         },
         auto,
+        max_turns: config.max_consults_per_turn,
     });
 
-    let team = if auto {
-        proposal
+    let (team, picked) = if auto {
+        (proposal, None)
     } else {
         // Awaiting selection: only select_team (or shutdown) makes
         // progress; an invalid selection is refused with an actionable
@@ -963,17 +1044,42 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
                     one,
                     two,
                     lead_slot,
-                }) => match validate_selection(
-                    &config,
-                    &report,
-                    &one,
-                    &two,
-                    &lead_slot,
-                    sandbox_available,
-                ) {
-                    Ok(team) => break team,
-                    Err(message) => emit(&Event::Error { message }),
-                },
+                    max_turns,
+                }) => {
+                    // Validate everything before applying anything, so a
+                    // refused pick leaves the config untouched.
+                    let max_turns = match max_turns.map(crate::config::validate_max_consults) {
+                        Some(Err(message)) => {
+                            emit(&Event::Error { message });
+                            continue;
+                        }
+                        Some(Ok(max)) => Some(max),
+                        None => None,
+                    };
+                    match validate_selection(
+                        &config,
+                        &report,
+                        &one,
+                        &two,
+                        &lead_slot,
+                        sandbox_available,
+                    ) {
+                        Ok(team) => {
+                            if let Some(max) = max_turns {
+                                config.max_consults_per_turn = max;
+                            }
+                            break (
+                                team,
+                                Some(Picked {
+                                    team,
+                                    previous: proposal,
+                                    max_turns,
+                                }),
+                            );
+                        }
+                        Err(message) => emit(&Event::Error { message }),
+                    }
+                }
                 Ok(Command::Shutdown) => return Ok(()),
                 Ok(Command::Initialize { .. }) => emit(&Event::Error {
                     message: "already initialized".to_owned(),
@@ -1000,6 +1106,7 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         lead_tx,
         &report,
         sandbox_engine,
+        config_path,
     )
     .await
     {
@@ -1012,6 +1119,13 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         }
     };
 
+    // The pick is what makes the next launch skip the picker, so it is
+    // written only once the session has actually started — a team that
+    // fails to initialize must not be remembered.
+    if let Some(picked) = &picked {
+        emit(&persist_selection(runtime.config_path.as_deref(), picked));
+    }
+
     emit(&Event::Ready {
         protocol: PROTOCOL_VERSION,
         session_id: runtime.session.id.to_string(),
@@ -1020,6 +1134,7 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
         lead_slot: runtime.team().lead,
         cwd: runtime.session.cwd.display().to_string(),
         project: runtime.project,
+        max_turns: runtime.config.max_consults_per_turn,
     });
     for message in &runtime.config.warnings {
         emit(&Event::Warning {
@@ -1065,6 +1180,9 @@ pub async fn serve(options: RuntimeOptions) -> Result<()> {
                     }
                     Ok(Command::SetModel { slot, model }) => {
                         runtime.set_model(&slot, model).await;
+                    }
+                    Ok(Command::SetTurns { max }) => {
+                        runtime.set_turns(max);
                     }
                     Ok(Command::Shutdown) => {
                         if let Some(turn) = active.take() {
@@ -1163,6 +1281,7 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
             lead_slot: team.lead,
         },
         auto: true,
+        max_turns: config.max_consults_per_turn,
     });
     let mut runtime = Runtime::initialize(
         config,
@@ -1173,6 +1292,7 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
         lead_tx,
         &report,
         sandbox_engine,
+        None,
     )
     .await?;
 
@@ -1184,6 +1304,7 @@ pub async fn dev_run(options: RuntimeOptions, prompt: String) -> Result<()> {
         lead_slot: runtime.team().lead,
         cwd: runtime.session.cwd.display().to_string(),
         project: runtime.project,
+        max_turns: runtime.config.max_consults_per_turn,
     });
 
     let mut turn = Some(runtime.start_turn("dev-1".to_owned(), prompt).await);

@@ -1,7 +1,7 @@
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CoreClient } from '../ipc/client.js';
-import type { CoreEvent } from '../ipc/protocol.js';
+import { DEFAULT_MAX_TURNS, MAX_TURNS_LIMIT, type CoreEvent } from '../ipc/protocol.js';
 import { renderConversationWithAnchors, type PromptAnchor } from '../render/conversation.js';
 import type { Line } from '../render/lines.js';
 import {
@@ -323,11 +323,38 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         });
         return;
       }
+      case 'turns': {
+        // The per-question consultation budget: show it, or set it for the
+        // rest of the session (from the next turn) and future runs.
+        const [, raw] = text.slice(1).split(/\s+/);
+        const current = state.session?.maxTurns ?? DEFAULT_MAX_TURNS;
+        if (!raw) {
+          dispatch({
+            type: 'local-notice',
+            text: `turns per question: ${current} — how many times the team may confer on one question · /turns <1-${MAX_TURNS_LIMIT}> to change`,
+          });
+          return;
+        }
+        const max = Number(raw);
+        if (!Number.isInteger(max) || max < 1 || max > MAX_TURNS_LIMIT) {
+          dispatch({
+            type: 'local-notice',
+            text: `turns must be a whole number from 1 to ${MAX_TURNS_LIMIT} — got '${raw}'`,
+          });
+          return;
+        }
+        if (state.phase !== 'ready') {
+          dispatch({ type: 'local-notice', text: '/turns is available once the team is ready' });
+          return;
+        }
+        client.send({ type: 'set_turns', max });
+        return;
+      }
       case 'help':
         dispatch({
           type: 'local-notice',
           text:
-            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /model show or set models · /team pick a new team (new session) · /activity toggle the activity panel · /help this list\n' +
+            'commands  /exit quit mix2 · /clear clear the conversation · /copy copy the last answer · /model show or set models · /team pick a new team (new session) · /turns show or set how many times the team may confer per question · /activity toggle the activity panel · /help this list\n' +
             'keys      enter submit · ctrl+j newline · esc cancel · ctrl+t activity · ctrl+y copy answer · pgup/pgdn + mouse wheel scroll · ctrl+q quit',
         });
         return;
@@ -387,7 +414,19 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
         // outside any state updater — updaters may run more than once.
         const { cursor, selection } = picker;
         if (cursor.column === 2) {
-          client.selectTeam(selection.one, selection.two, selection.leadSlot);
+          // The budget travels only when the user changed it: the seeded
+          // value comes straight from the file, which may hold a number
+          // the core would refuse from a picker (0, or above the limit).
+          if (selection.maxTurns !== discovery.maxTurns) {
+            client.selectTeam(
+              selection.one,
+              selection.two,
+              selection.leadSlot,
+              selection.maxTurns,
+            );
+          } else {
+            client.selectTeam(selection.one, selection.two, selection.leadSlot);
+          }
           return;
         }
         const slot = cursor.column === 0 ? 'one' : 'two';
@@ -424,6 +463,17 @@ export function App({ client, bind, mouse }: AppProps): React.JSX.Element {
           const delta = key.upArrow ? -1 : 1;
           const index = Math.max(0, Math.min(entries.length - 1, prev.cursor.index + delta));
           return { ...prev, cursor: { ...prev.cursor, index } };
+        });
+        return;
+      }
+      if ((input === '+' || input === '-') && !key.ctrl && !key.meta) {
+        // The budget is described, not focused: `+`/`-` adjust it from
+        // anywhere, clamped to the range the core accepts.
+        setPicker((prev) => {
+          if (!prev) return prev;
+          const delta = input === '-' ? -1 : 1;
+          const maxTurns = Math.max(1, Math.min(MAX_TURNS_LIMIT, prev.selection.maxTurns + delta));
+          return { ...prev, selection: { ...prev.selection, maxTurns } };
         });
         return;
       }

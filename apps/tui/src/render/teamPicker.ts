@@ -33,6 +33,13 @@ export interface TeamPickerSelection {
   one: string;
   two: string;
   leadSlot: SlotName;
+  /** Consultations allowed per question ("turns"), 1..MAX_TURNS_LIMIT. */
+  maxTurns: number;
+}
+
+/** "2 turns per question" / "1 turn per question". */
+export function turnsLabel(maxTurns: number): string {
+  return `${maxTurns} turn${maxTurns === 1 ? '' : 's'} per question`;
 }
 
 /** Harness choices for a slot: unique by harness name, preferring an
@@ -76,6 +83,7 @@ export function initialSelection(discovery: DiscoveryState): TeamPickerSelection
     one: discovery.proposal.one,
     two: discovery.proposal.two,
     leadSlot: discovery.proposal.lead_slot,
+    maxTurns: discovery.maxTurns,
   };
 }
 
@@ -202,6 +210,14 @@ export function renderTeamPicker(
     span(`slot ${selection.leadSlot}`, { color: agentColor(selection.leadSlot), bold: true }),
     span(' coordinates', { color: theme.text.muted }),
     span('  (press c to swap)', { color: theme.text.faint }),
+  ]);
+  // Same idiom for the budget: a described default with adjust keys, not
+  // a focus stop. It persists with the team, and `/turns` edits it later.
+  lines.push([
+    span(' '.repeat(INDENT)),
+    span(`${glyphs.consult} `, { color: theme.text.muted }),
+    span(turnsLabel(selection.maxTurns), { color: theme.agent.team, bold: true }),
+    span('  (press + / - to change)', { color: theme.text.faint }),
   ]);
   lines.push(BLANK);
   const continueActive = cursor.column === 2;

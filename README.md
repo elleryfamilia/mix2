@@ -153,7 +153,7 @@ pnpm dev            # development: run mix2 in the current directory
 ```
 
 ```bash
-mix2                    # coordinator from config, else slot one (claude)
+mix2                    # first run: pick your team, then it's remembered
 mix2 --lead two         # let slot two coordinate (the UI won't tell)
 mix2 --lead codex       # agent names work too, while unambiguous
 mix2 --pick-team        # choose the team at startup even when configured
@@ -167,15 +167,20 @@ automatically (`MIX2_CORE_BIN` overrides).
 
 ## Configuration
 
-`~/.config/mix2/config.toml` (respects `$XDG_CONFIG_HOME`). The canonical
-schema is slot-keyed — a team is two slots, and each slot chooses which
-agent CLI backs it:
+`~/.config/mix2/config.toml` (respects `$XDG_CONFIG_HOME`). You rarely
+need to write it by hand: the first run shows a team picker, and what you
+pick there (the two agents, who coordinates, and how many turns the team
+may confer per question) is written to this file, so later runs start
+straight into the team. `/team` reopens the picker and saves the new
+choice; `/turns <n>` changes and saves the budget. Edits keep your
+comments and any other keys. The canonical schema is slot-keyed — a team
+is two slots, and each slot chooses which agent CLI backs it:
 
 ```toml
 lead = "one"                   # who coordinates; the UI keeps it secret
 
 [collaboration]
-max_consults_per_turn = 2
+max_consults_per_turn = 2      # "turns": consultations per question (/turns)
 
 [slot.one]
 harness = "claude"
@@ -187,8 +192,12 @@ harness = "codex"
 ```
 
 The same harness on both slots is allowed (the UI shows them as e.g.
-"Codex (one)" / "Codex (two)"). Besides `claude` and `codex`, two more
-harnesses are supported as teammates:
+"Codex (one)" / "Codex (two)"). When the picker changes which harness a
+slot runs, that slot's `command`/`model` pins follow their harness (to its
+new slot, or to its `[claude]`/`[codex]` section) rather than being applied
+to a different CLI; the confirmation in the conversation says what moved.
+Besides `claude` and `codex`, two more harnesses are supported as
+teammates:
 
 - [Cursor CLI](https://cursor.com/cli) — `harness = "cursor"`; read-only
   `--mode plan` consultations; runs with `--trust`, disclosed in the
@@ -232,8 +241,15 @@ Precedence: CLI flags > slot tables > legacy sections > defaults.
 | `Ctrl+Q` | quit |
 
 Slash commands: `/exit` (also `/quit`), `/clear`, `/copy`, `/model`,
-`/team` (pick a new team — starts a fresh session), `/activity`, `/help` — recognized commands light up as you type, and `/`
-surfaces the list in the status bar.
+`/team` (pick a new team — starts a fresh session), `/turns` (show or set
+how many times the team may confer on one question), `/activity`, `/help`
+— recognized commands light up as you type, and `/` surfaces the list in
+the status bar.
+
+Turns: the header always shows the budget (`↔ 2 turns`) next to the
+agent names. `/turns 3` raises it for the rest of the session — from your
+next question if one is running — and saves it for future runs; `/turns`
+alone shows the current value. The range is 1–20.
 
 Models: by default each agent uses its own CLI's configured default —
 mix2 doesn't second-guess your setup. `/model` opens a picker showing

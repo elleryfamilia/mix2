@@ -105,8 +105,10 @@ can never accidentally resume an old provider conversation.
 
 Two agents consulting each other freely is a token-burning loop with no
 convergence guarantee. The runtime owns a per-turn budget (default 2,
-`[collaboration] max_consults_per_turn`), acquired atomically so parallel
-consult attempts cannot exceed it. Exhausted budget returns an explicit
+`[collaboration] max_consults_per_turn`; the UI calls it "turns"),
+acquired atomically so parallel consult attempts cannot exceed it. The
+budget is fixed when a turn starts; `set_turns` (the `/turns` command, or
+the picker's `+`/`-`) changes it for subsequent turns and persists it. Exhausted budget returns an explicit
 message telling the lead to resolve the question itself — the turn
 continues normally.
 
@@ -189,7 +191,12 @@ quota-free, under a strict timeout, cached — and reports
 `harnesses.discovered` with the configured proposal. An explicit
 `[slot.*]` config (or a non-interactive session) auto-confirms;
 otherwise the TUI's team picker settles the team via `select_team`,
-with invalid selections refused actionably and retryable. Auth is
+with invalid selections refused actionably and retryable. A picked team
+is written back to the config file (`lead` plus `[slot.*] harness`, in
+one atomic `toml_edit` rewrite that keeps comments and other keys) once
+the session has started — so the next launch auto-confirms it — and
+`config.saved` reports the write, or its failure, to the UI. Only picker
+choices are persisted; auto-confirmed and `dev` runs never write. Auth is
 five-state (`authenticated`, `unauthenticated`, `configured` — a
 credential inventory, `unsupported` — no probe exists, `probe_failed`);
 only an explicit `unauthenticated` ever blocks.
@@ -197,7 +204,7 @@ only an explicit `unauthenticated` ever blocks.
 ## IPC
 
 Newline-delimited JSON on the core's stdin/stdout, versioned
-(`protocol: 3` in `initialize`/`ready`; mismatches are fatal at startup).
+(`protocol: 4` in `initialize`/`ready`; mismatches are fatal at startup).
 Commands: `initialize`, `select_team`, `submit`, `cancel`, `set_model`,
 `shutdown`. Events are
 normalized and semantic (`agent.text_delta`, `agent.tool.started`,

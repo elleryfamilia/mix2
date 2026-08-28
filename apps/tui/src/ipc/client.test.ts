@@ -127,3 +127,25 @@ describe('CoreClient lifecycle', () => {
     expect(() => client.cancel('t1')).not.toThrow();
   });
 });
+
+describe('CoreClient selectTeam', () => {
+  it('carries the turns budget only when given', () => {
+    const client = new CoreClient({ corePath: '/bin/cat' }, { onEvent: () => {}, onExit: () => {} });
+    const send = vi.spyOn(client, 'send');
+    client.selectTeam('claude', 'codex', 'one');
+    expect(send).toHaveBeenLastCalledWith({
+      type: 'select_team',
+      one: 'claude',
+      two: 'codex',
+      lead_slot: 'one',
+    });
+    client.selectTeam('claude', 'codex', 'one', 3);
+    expect(send).toHaveBeenLastCalledWith({
+      type: 'select_team',
+      one: 'claude',
+      two: 'codex',
+      lead_slot: 'one',
+      max_turns: 3,
+    });
+  });
+});

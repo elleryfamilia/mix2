@@ -117,6 +117,7 @@ describe('team panel disagreement ledger', () => {
         leadSlot: 'one',
         cwd: '/repo',
         project: true,
+        maxTurns: 2,
       },
       lastTurn: {
         id: 't1',

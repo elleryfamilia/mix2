@@ -40,6 +40,13 @@ struct CoreOptions {
     config_extra: String,
     /// Sent on initialize: forces the selection handshake.
     pick_team: bool,
+    /// Sent on initialize: a human is present, so a config without
+    /// `[slot.*]` tables waits for the picker instead of auto-confirming.
+    interactive: bool,
+    /// Use this config file as-is (created by an earlier core, or absent)
+    /// instead of generating a fresh temp one — for persistence tests that
+    /// relaunch against the same file.
+    config_path: Option<PathBuf>,
     env: Vec<(String, String)>,
 }
 
@@ -55,6 +62,8 @@ impl Default for CoreOptions {
             max_consults: None,
             config_extra: String::new(),
             pick_team: false,
+            interactive: false,
+            config_path: None,
             // Default the sandbox off so eligibility is deterministic across
             // hosts: on a Mac with sandbox-exec, `auto` would flip
             // cursor/opencode/copilot to lead-eligible and break the
@@ -70,18 +79,24 @@ impl Core {
         // binary (runtime prepends its own directory to the lead's PATH).
         let _ = env!("CARGO_BIN_EXE_mix2-consult");
 
-        let config_dir = tempfile::tempdir().expect("tempdir");
-        let config_path = config_dir.path().join("config.toml");
-        let mut config = String::new();
-        config.push_str(&options.config_extra);
-        if let Some(max) = options.max_consults {
-            config.push_str(&format!(
-                "\n[collaboration]\nmax_consults_per_turn = {max}\n"
-            ));
-        }
-        std::fs::write(&config_path, config).expect("write config");
-        // Leak the tempdir so the config outlives the child.
-        std::mem::forget(config_dir);
+        let config_path = match &options.config_path {
+            Some(path) => path.clone(),
+            None => {
+                let config_dir = tempfile::tempdir().expect("tempdir");
+                let config_path = config_dir.path().join("config.toml");
+                let mut config = String::new();
+                config.push_str(&options.config_extra);
+                if let Some(max) = options.max_consults {
+                    config.push_str(&format!(
+                        "\n[collaboration]\nmax_consults_per_turn = {max}\n"
+                    ));
+                }
+                std::fs::write(&config_path, config).expect("write config");
+                // Leak the tempdir so the config outlives the child.
+                std::mem::forget(config_dir);
+                config_path
+            }
+        };
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_mix2-core"));
         cmd.args(["serve", "--config", config_path.to_str().unwrap()])
@@ -132,7 +147,7 @@ impl Core {
             events: rx,
         };
         let mut init = serde_json::json!({
-            "type": "initialize", "protocol": 3,
+            "type": "initialize", "protocol": 4,
             "cwd": std::env::current_dir().unwrap().display().to_string(),
         });
         if let Some(lead) = options.lead {
@@ -140,6 +155,9 @@ impl Core {
         }
         if options.pick_team {
             init["pick_team"] = serde_json::json!(true);
+        }
+        if options.interactive {
+            init["interactive"] = serde_json::json!(true);
         }
         core.send(&init);
         core
@@ -1012,6 +1030,177 @@ fn pick_team_handshake_selects_a_same_harness_team() {
     assert_eq!(ready["two"]["harness"], "codex");
     assert_eq!(ready["one"]["name"], "Codex (one)");
     assert_eq!(ready["lead_slot"], "two");
+}
+
+/// A config path in a fresh temp dir, leaked so it outlives the cores.
+fn persistent_config_path() -> PathBuf {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::mem::forget(dir);
+    path
+}
+
+#[test]
+fn picked_team_and_turns_are_saved_and_the_next_launch_auto_confirms() {
+    let config_path = persistent_config_path();
+    assert!(!config_path.exists(), "starts with no config at all");
+
+    // First run: no config, a human present → the picker.
+    let mut core = Core::start(CoreOptions {
+        pick_team: false,
+        interactive: true,
+        lead: None,
+        config_path: Some(config_path.clone()),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let discovered = find(&startup, "harnesses.discovered").unwrap();
+    assert_eq!(discovered["auto"], false);
+    assert_eq!(discovered["max_turns"], 2, "default budget preselects");
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "codex", "two": "codex", "lead_slot": "two",
+        "max_turns": 3,
+    }));
+    let events = core.events_until("ready", LONG);
+    let saved = find(&events, "config.saved").expect("the pick is persisted");
+    assert_eq!(saved["key"], "team");
+    assert_eq!(saved["path"], config_path.display().to_string());
+    assert!(saved["error"].is_null(), "save failed: {saved}");
+    let ready = find(&events, "ready").unwrap();
+    assert_eq!(ready["max_turns"], 3);
+    assert_eq!(ready["lead_slot"], "two");
+    drop(core);
+
+    let text = std::fs::read_to_string(&config_path).expect("config written");
+    assert!(text.contains("lead = \"two\""), "{text}");
+    assert!(text.contains("[slot.one]\nharness = \"codex\""), "{text}");
+    assert!(text.contains("[slot.two]\nharness = \"codex\""), "{text}");
+    assert!(text.contains("max_consults_per_turn = 3"), "{text}");
+
+    // Second run against the saved file: still interactive, but the
+    // explicit slots auto-confirm — no picker, same team, same budget.
+    let mut core = Core::start(CoreOptions {
+        interactive: true,
+        lead: None,
+        config_path: Some(config_path.clone()),
+        ..CoreOptions::default()
+    });
+    let events = core.events_until("ready", LONG);
+    let discovered = find(&events, "harnesses.discovered").unwrap();
+    assert_eq!(discovered["auto"], true, "saved team must not re-prompt");
+    assert_eq!(discovered["proposal"]["one"], "codex");
+    assert_eq!(discovered["proposal"]["two"], "codex");
+    assert_eq!(discovered["proposal"]["lead_slot"], "two");
+    assert_eq!(discovered["max_turns"], 3);
+    assert!(
+        find(&events, "config.saved").is_none(),
+        "auto-confirmation never writes the config"
+    );
+    let ready = find(&events, "ready").unwrap();
+    assert_eq!(ready["one"]["name"], "Codex (one)");
+    assert_eq!(ready["lead_slot"], "two");
+    assert_eq!(ready["max_turns"], 3);
+
+    // The saved budget is live: a second consult is refused.
+    core.submit("t1", "SCENARIO:consult_twice tricky");
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(find(&events, "consult.started").unwrap()["max"], 3);
+
+    // /team relaunches with the picker forced; the saved team is the
+    // proposal, and a new pick overwrites the file.
+    drop(core);
+    let mut core = Core::start(CoreOptions {
+        pick_team: true,
+        interactive: true,
+        lead: None,
+        config_path: Some(config_path.clone()),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("harnesses.discovered", LONG);
+    let discovered = find(&startup, "harnesses.discovered").unwrap();
+    assert_eq!(discovered["auto"], false);
+    assert_eq!(discovered["proposal"]["lead_slot"], "two");
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "codex", "lead_slot": "one",
+    }));
+    let events = core.events_until("ready", LONG);
+    assert_eq!(
+        find(&events, "ready").unwrap()["max_turns"],
+        3,
+        "budget untouched"
+    );
+    drop(core);
+    let text = std::fs::read_to_string(&config_path).unwrap();
+    assert!(text.contains("lead = \"one\""), "{text}");
+    assert!(text.contains("[slot.one]\nharness = \"claude\""), "{text}");
+    assert!(text.contains("max_consults_per_turn = 3"), "{text}");
+}
+
+#[test]
+fn set_turns_applies_to_the_next_turn_and_persists() {
+    let config_path = persistent_config_path();
+    let mut core = Core::start(CoreOptions {
+        config_path: Some(config_path.clone()),
+        ..CoreOptions::default()
+    });
+    let startup = core.events_until("ready", LONG);
+    assert_eq!(find(&startup, "ready").unwrap()["max_turns"], 2);
+
+    core.send(&serde_json::json!({"type": "set_turns", "max": 1}));
+    let events = core.events_until("config.saved", LONG);
+    assert_eq!(find(&events, "turns.changed").unwrap()["max"], 1);
+    let saved = find(&events, "config.saved").unwrap();
+    assert_eq!(saved["key"], "turns");
+    assert!(saved["error"].is_null(), "{saved}");
+
+    core.submit("t1", "SCENARIO:consult_twice tricky");
+    let events = core.events_until("turn.completed", LONG);
+    assert_eq!(find(&events, "consult.started").unwrap()["max"], 1);
+    assert_eq!(count(&events, "consult.completed"), 1);
+
+    let text = std::fs::read_to_string(&config_path).unwrap();
+    assert_eq!(text, "[collaboration]\nmax_consults_per_turn = 1\n");
+
+    // Out of range is refused with the bounds, and nothing changes.
+    core.send(&serde_json::json!({"type": "set_turns", "max": 0}));
+    let events = core.events_until("error", LONG);
+    let message = find(&events, "error").unwrap()["message"].as_str().unwrap();
+    assert!(message.contains("between 1 and 20"), "{message}");
+    core.send(&serde_json::json!({"type": "set_turns", "max": 21}));
+    core.events_until("error", LONG);
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        "[collaboration]\nmax_consults_per_turn = 1\n"
+    );
+}
+
+#[test]
+fn out_of_range_turns_in_a_pick_is_refused_before_anything_is_saved() {
+    let config_path = persistent_config_path();
+    let mut core = Core::start(CoreOptions {
+        pick_team: true,
+        config_path: Some(config_path.clone()),
+        ..CoreOptions::default()
+    });
+    core.events_until("harnesses.discovered", LONG);
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "codex", "lead_slot": "one",
+        "max_turns": 0,
+    }));
+    let events = core.events_until("error", LONG);
+    assert!(find(&events, "error").unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .contains("between 1 and 20"));
+    assert!(!config_path.exists(), "a refused pick writes nothing");
+
+    core.send(&serde_json::json!({
+        "type": "select_team", "one": "claude", "two": "codex", "lead_slot": "one",
+        "max_turns": 2,
+    }));
+    core.events_until("ready", LONG);
+    assert!(config_path.exists());
 }
 
 #[test]

@@ -6,6 +6,7 @@ pub mod agents;
 pub mod collaboration;
 pub mod config;
 pub mod ipc;
+pub mod persist;
 pub mod process;
 pub mod runtime;
 pub mod sandbox;

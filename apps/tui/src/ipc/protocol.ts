@@ -1,5 +1,5 @@
 /**
- * The JSONL protocol between the Ink UI and mix2-core, version 3.
+ * The JSONL protocol between the Ink UI and mix2-core, version 4.
  * Participant identity is the slot (`one`/`two`), never the harness name;
  * which CLI backs a slot arrives once in `ready` as display metadata. The
  * startup handshake reports discovered harnesses before `ready`, and the
@@ -10,7 +10,13 @@
  */
 import { z } from 'zod';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
+
+/** The core's default per-question consultation budget ("turns"), used
+ * when an older core omits `max_turns`. Mirrors `DEFAULT_MAX_CONSULTS`. */
+export const DEFAULT_MAX_TURNS = 2;
+/** Largest budget the UI lets a user pick; mirrors `MAX_CONSULTS_LIMIT`. */
+export const MAX_TURNS_LIMIT = 20;
 
 const slotId = z.enum(['one', 'two']);
 const harnessKind = z.enum(['claude', 'codex', 'copilot', 'cursor', 'opencode']);
@@ -85,6 +91,8 @@ export const eventSchema = z.discriminatedUnion('type', [
     harnesses: z.array(discoveredHarnessSchema),
     proposal: teamProposalSchema,
     auto: z.boolean(),
+    // Additive: the configured budget, so the picker preselects it.
+    max_turns: z.number().int().optional(),
   }),
   z.object({
     type: z.literal('ready'),
@@ -95,6 +103,19 @@ export const eventSchema = z.discriminatedUnion('type', [
     lead_slot: slotId,
     cwd: z.string(),
     project: z.boolean().optional(),
+    // Additive: the per-question consultation budget in effect.
+    max_turns: z.number().int().optional(),
+  }),
+  // `/turns` applied for subsequent turns; a `config.saved` follows.
+  z.object({ type: z.literal('turns.changed'), max: z.number().int() }),
+  // A user choice was written to (or failed to write to) the config file.
+  z.object({
+    type: z.literal('config.saved'),
+    key: z.string(),
+    path: z.string(),
+    error: z.string().optional(),
+    // What else the write did (pins moved/dropped when a slot's harness changed).
+    detail: z.string().optional(),
   }),
   z.object({ type: z.literal('fatal'), message: z.string() }),
   z.object({ type: z.literal('message.user'), turn_id: z.string(), text: z.string() }),
@@ -204,10 +225,11 @@ export type Command =
       interactive?: boolean;
       pick_team?: boolean;
     }
-  | { type: 'select_team'; one: string; two: string; lead_slot: string }
+  | { type: 'select_team'; one: string; two: string; lead_slot: string; max_turns?: number }
   | { type: 'submit'; id: string; text: string }
   | { type: 'cancel'; turn_id: string }
   | { type: 'set_model'; slot: string; model: string | null }
+  | { type: 'set_turns'; max: number }
   | { type: 'shutdown' };
 
 /** Parse one JSONL line from the core. Returns null for lines that are not

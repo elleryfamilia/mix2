@@ -35,6 +35,7 @@ function discovery(overrides: Partial<DiscoveryState> = {}): DiscoveryState {
     harnesses: [harness({ harness: 'claude' }), harness({ harness: 'codex' })],
     proposal: { one: 'claude', two: 'codex', lead_slot: 'one' },
     auto: false,
+    maxTurns: 2,
     ...overrides,
   };
 }
@@ -60,6 +61,9 @@ describe('team picker', () => {
     // picker is a plain continue button — not a coordinator focus stop.
     expect(joined).toContain('slot one coordinates');
     expect(joined).toContain('(press c to swap)');
+    // The budget reads the same way: a described default with adjust keys.
+    expect(joined).toContain('↔ 2 turns per question');
+    expect(joined).toContain('(press + / - to change)');
     expect(joined).toContain('continue');
     // The proposal's choices carry the chosen mark.
     expect(lines.some((l) => l.includes('claude') && l.includes('●'))).toBe(true);
@@ -176,5 +180,17 @@ describe('team picker', () => {
     const twoIdx = lines.findIndex((l) => l.includes('slot two'));
     expect(oneIdx).toBeGreaterThanOrEqual(0);
     expect(twoIdx).toBeGreaterThan(oneIdx);
+  });
+});
+
+describe('turns label', () => {
+  it('reads naturally for one and many', () => {
+    const d = discovery({ maxTurns: 1 });
+    const one = renderTeamPicker(d, initialSelection(d), { column: 0, index: 0 }, 100).map(lineText).join('\n');
+    expect(one).toContain('1 turn per question');
+    const many = renderTeamPicker(d, { ...initialSelection(d), maxTurns: 5 }, { column: 0, index: 0 }, 100)
+      .map(lineText)
+      .join('\n');
+    expect(many).toContain('5 turns per question');
   });
 });

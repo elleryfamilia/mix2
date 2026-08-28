@@ -118,6 +118,23 @@ pub struct Config {
 }
 
 pub const DEFAULT_MAX_CONSULTS: u32 = 2;
+/// Upper bound for `max_consults_per_turn` when set from the UI (`/turns`
+/// or the picker). Each consultation is a full teammate run, so a runaway
+/// value would be a cost problem before it was a correctness one; the
+/// file itself is not clamped — power users can still write any number.
+pub const MAX_CONSULTS_LIMIT: u32 = 20;
+
+/// Validate a UI-chosen consultation budget. Returns the actionable
+/// refusal shown to the user when it is out of range.
+pub fn validate_max_consults(max: u32) -> std::result::Result<u32, String> {
+    if (1..=MAX_CONSULTS_LIMIT).contains(&max) {
+        Ok(max)
+    } else {
+        Err(format!(
+            "turns must be between 1 and {MAX_CONSULTS_LIMIT} (got {max})"
+        ))
+    }
+}
 
 impl Config {
     pub fn slot(&self, id: SlotId) -> &SlotSettings {
@@ -406,6 +423,18 @@ mod tests {
         let err = Config::resolve(Some("gemini"), &FileConfig::default()).unwrap_err();
         assert!(err.to_string().contains("invalid lead"));
         assert!(err.to_string().contains("'one', 'two'"));
+    }
+
+    #[test]
+    fn max_consults_validation_bounds() {
+        assert_eq!(validate_max_consults(1), Ok(1));
+        assert_eq!(
+            validate_max_consults(MAX_CONSULTS_LIMIT),
+            Ok(MAX_CONSULTS_LIMIT)
+        );
+        let err = validate_max_consults(0).unwrap_err();
+        assert!(err.contains("between 1 and 20"), "{err}");
+        assert!(validate_max_consults(MAX_CONSULTS_LIMIT + 1).is_err());
     }
 
     #[test]

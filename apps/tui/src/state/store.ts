@@ -4,13 +4,14 @@
  * local UI actions. Components render this state; they never interpret
  * provider behavior.
  */
-import type {
-  AgentInfo,
-  CoreEvent,
-  Disagreement,
-  DiscoveredHarness,
-  Stance,
-  TeamProposal,
+import {
+  DEFAULT_MAX_TURNS,
+  type AgentInfo,
+  type CoreEvent,
+  type Disagreement,
+  type DiscoveredHarness,
+  type Stance,
+  type TeamProposal,
 } from '../ipc/protocol.js';
 import type { SlotName, SpeakerName } from '../theme/theme.js';
 
@@ -109,6 +110,10 @@ export interface SessionInfo {
   cwd: string;
   /** False when the cwd doesn't look like a software project. */
   project: boolean;
+  /** How many times the team may confer on one question ("turns"):
+   * the core's per-turn consultation budget, shown in the header and
+   * changed with `/turns`. */
+  maxTurns: number;
 }
 
 export function otherSlot(slot: SlotName): SlotName {
@@ -146,8 +151,19 @@ export interface DiscoveryState {
   proposal: TeamProposal;
   /** True when the core auto-confirmed the proposal (no picker needed). */
   auto: boolean;
+  /** The configured consultation budget, preselected in the picker. */
+  maxTurns: number;
   /** The core's refusal of the last select_team attempt, shown in place. */
   selectionError?: string;
+}
+
+/** Prefix of the `/turns` confirmation; `config.saved` folds into it. */
+const TURNS_NOTICE = 'turns per question set to ';
+
+/** A config path with the home directory folded to `~` for notices. */
+export function shortenHome(path: string): string {
+  const home = process.env['HOME'];
+  return home && path.startsWith(home) ? '~' + path.slice(home.length) : path;
 }
 
 export interface AppState {
@@ -283,6 +299,7 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           harnesses: event.harnesses,
           proposal: event.proposal,
           auto: event.auto,
+          maxTurns: event.max_turns ?? DEFAULT_MAX_TURNS,
         },
       };
     case 'ready':
@@ -296,8 +313,47 @@ function applyEvent(state: AppState, event: CoreEvent, now: number): AppState {
           leadSlot: event.lead_slot,
           cwd: event.cwd,
           project: event.project ?? true,
+          maxTurns: event.max_turns ?? DEFAULT_MAX_TURNS,
         },
       };
+    case 'turns.changed': {
+      const session = state.session;
+      if (!session) return state;
+      // The budget is fixed when a turn starts, so a change mid-turn
+      // lands on the next question — say so.
+      const when = state.turn ? ' (applies from your next question)' : '';
+      return {
+        ...state,
+        session: { ...session, maxTurns: event.max },
+        items: [
+          ...state.items,
+          { kind: 'notice', text: `${TURNS_NOTICE}${event.max}${when}` },
+        ],
+      };
+    }
+    case 'config.saved': {
+      // Saves confirm in the conversation so the user learns why the
+      // picker won't return — and hears about it when saving failed, since
+      // the choice then applies to this session only.
+      const where = event.path ? shortenHome(event.path) : 'the config file';
+      const detail = event.detail ? ` (${event.detail})` : '';
+      let text: string;
+      if (event.error) {
+        text = `could not save ${event.key} to ${where}: ${event.error} — this session keeps the choice`;
+      } else if (event.key === 'team') {
+        text = `team saved to ${where}${detail} — /team to change it`;
+      } else {
+        text = `saved to ${where}${detail}`;
+      }
+      // A turns save follows its own `turns.changed` notice: fold the two
+      // into one line rather than confirming twice.
+      const last = state.items[state.items.length - 1];
+      if (event.key === 'turns' && last?.kind === 'notice' && last.text.startsWith(TURNS_NOTICE)) {
+        const merged = { kind: 'notice' as const, text: `${last.text} · ${text}` };
+        return { ...state, items: [...state.items.slice(0, -1), merged] };
+      }
+      return { ...state, items: [...state.items, { kind: 'notice', text }] };
+    }
     case 'fatal':
       return { ...state, phase: 'fatal', fatalMessage: event.message };
     case 'message.user':

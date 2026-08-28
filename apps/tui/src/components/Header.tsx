@@ -2,7 +2,7 @@ import { Text } from 'ink';
 import React from 'react';
 import type { SessionInfo } from '../state/store.js';
 import { leadInfo, otherSlot, teammateInfo } from '../state/store.js';
-import { agentColor, agentGlyph, theme } from '../theme/theme.js';
+import { agentColor, agentGlyph, glyphs, theme } from '../theme/theme.js';
 
 function shortenPath(cwd: string, maxLength: number): string {
   const home = process.env['HOME'];
@@ -17,7 +17,8 @@ function shortenPath(cwd: string, maxLength: number): string {
  * App chrome, top bar (Design 1c, hyprland-flavored): a full-width bar in
  * the same background as the status bar, carrying the inverted ` mix2 `
  * chip, the team roster as colored glyphs (● Claude · ○ Codex — no role
- * labels; who coordinates is internal), and the right-aligned project
+ * labels; who coordinates is internal), the consultation budget
+ * (`↔ 2 turns`, changed with /turns), and the right-aligned project
  * path. Top and bottom bars frame the conversation on any terminal
  * background.
  */
@@ -41,8 +42,11 @@ export function Header({
       ? teammateInfo(session).name
       : `${teammateInfo(session).name} offline`
     : '';
+  const turnsLabel = session
+    ? `${glyphs.consult} ${session.maxTurns} turn${session.maxTurns === 1 ? '' : 's'}`
+    : '';
   const identityPlain = session
-    ? `  ${agentGlyph(lead!)} ${leadName} ${'·'} ${agentGlyph(teammate!)} ${teammateLabel}`
+    ? `  ${agentGlyph(lead!)} ${leadName} ${'·'} ${agentGlyph(teammate!)} ${teammateLabel} · ${turnsLabel}`
     : '';
 
   const leftLen = 1 + chipLabel.length + identityPlain.length;
@@ -69,7 +73,10 @@ export function Header({
             {agentGlyph(teammate!)}
           </Text>
           <Text backgroundColor={bg} color={theme.text.muted}>
-            {` ${teammateLabel}`}
+            {` ${teammateLabel} · `}
+          </Text>
+          <Text backgroundColor={bg} color={theme.text.faint}>
+            {turnsLabel}
           </Text>
         </>
       )}

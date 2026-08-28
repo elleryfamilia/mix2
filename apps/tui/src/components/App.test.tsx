@@ -300,6 +300,51 @@ describe('team picker', () => {
     h.unmount();
   });
 
+  it('+/- adjust the turns budget from anywhere and only a changed value is sent', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit({ ...discovered, max_turns: 2 });
+    await waitForFrame(h, 'slot one');
+    expect(h.lastFrame()).toContain('↔ 2 turns per question');
+    expect(h.lastFrame()).toContain('(press + / - to change)');
+
+    h.stdin.write('+');
+    await tickReact();
+    expect(h.lastFrame()).toContain('3 turns per question');
+    h.stdin.write('-');
+    await tickReact();
+    h.stdin.write('-');
+    await tickReact();
+    expect(h.lastFrame()).toContain('1 turn per question');
+    // Clamped at the bottom.
+    h.stdin.write('-');
+    await tickReact();
+    expect(h.lastFrame()).toContain('1 turn per question');
+
+    h.stdin.write('\r');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one', 1);
+    h.unmount();
+  });
+
+  it('a budget the user never touched is not sent, even when the file holds an odd value', async () => {
+    const h = mount();
+    await tickReact();
+    // 0 is a legal file value the core would refuse from a picker; leaving
+    // it alone must still let the picker continue (enter) and escape.
+    h.emit({ ...discovered, max_turns: 0 });
+    await waitForFrame(h, 'slot one');
+    expect(h.lastFrame()).toContain('0 turns per question');
+    h.stdin.write('\x1b');
+    await tickReact();
+    expect(h.client.selectTeam).toHaveBeenCalledWith('claude', 'codex', 'one');
+    h.unmount();
+  });
+
   it('/team refuses while a turn is running', async () => {
     const h = mount();
     await tickReact();
@@ -557,7 +602,7 @@ describe('App', () => {
     h.stdin.write('/help');
     await tickReact();
     // Slash hint appears while typing a command.
-    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /model · /team · /activity · /help');
+    expect(h.lastFrame()).toContain('/exit · /clear · /copy · /model · /team · /turns · /activity · /help');
     h.stdin.write('\r');
     await tickReact();
     expect(h.lastFrame()).toContain('commands  /exit');
@@ -841,6 +886,78 @@ describe('App', () => {
     await tickReact();
     expect(h.client.submit).not.toHaveBeenCalled();
     expect(h.lastFrame()).toContain('two');
+    h.unmount();
+  });
+});
+
+describe('/turns', () => {
+  it('the header shows the budget and /turns reports it', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit({ ...ready, max_turns: 3 });
+    await tickReact();
+    expect(h.lastFrame()).toContain('Codex · ↔ 3 turns');
+
+    h.stdin.write('/turns');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.lastFrame()).toContain('turns per question: 3');
+    expect(h.client.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'set_turns' }));
+    h.unmount();
+  });
+
+  it('/turns <n> sends set_turns; the core confirms and the header follows', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    expect(h.lastFrame()).toContain('↔ 2 turns');
+
+    h.stdin.write('/turns 4');
+    await tickReact();
+    h.stdin.write('\r');
+    await tickReact();
+    expect(h.client.send).toHaveBeenCalledWith({ type: 'set_turns', max: 4 });
+
+    h.emit({ type: 'turns.changed', max: 4 });
+    h.emit({ type: 'config.saved', key: 'turns', path: '/home/dev/.config/mix2/config.toml' });
+    await tickReact();
+    const frame = h.lastFrame()!;
+    expect(frame).toContain('↔ 4 turns');
+    expect(frame).toContain('turns per question set to 4 · saved to');
+    h.unmount();
+  });
+
+  it('/turns refuses out-of-range or non-numeric values locally', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    await tickReact();
+    for (const bad of ['0', '21', 'lots', '2.5']) {
+      h.stdin.write(`/turns ${bad}`);
+      await tickReact();
+      h.stdin.write('\r');
+      await tickReact();
+    }
+    expect(h.client.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'set_turns' }));
+    expect(h.lastFrame()).toContain('turns must be a whole number from 1 to 20');
+    h.unmount();
+  });
+
+  it('a save failure is reported, not hidden', async () => {
+    const h = mount();
+    await tickReact();
+    h.emit(ready);
+    h.emit({
+      type: 'config.saved',
+      key: 'team',
+      path: '/home/dev/.config/mix2/config.toml',
+      error: 'permission denied',
+    });
+    await tickReact();
+    expect(h.lastFrame()).toContain('could not save team to');
+    expect(h.lastFrame()).toContain('permission denied');
     h.unmount();
   });
 });

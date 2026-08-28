@@ -172,8 +172,14 @@ export class CoreClient {
     this.send({ type: 'submit', id, text });
   }
 
-  selectTeam(one: string, two: string, leadSlot: string): void {
-    this.send({ type: 'select_team', one, two, lead_slot: leadSlot });
+  selectTeam(one: string, two: string, leadSlot: string, maxTurns?: number): void {
+    this.send({
+      type: 'select_team',
+      one,
+      two,
+      lead_slot: leadSlot,
+      ...(maxTurns === undefined ? {} : { max_turns: maxTurns }),
+    });
   }
 
   /** Tear down the current core and start a fresh one with the team

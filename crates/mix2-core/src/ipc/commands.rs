@@ -31,6 +31,10 @@ pub enum Command {
         one: String,
         two: String,
         lead_slot: String,
+        /// The picker's consultation budget ("turns"); absent from older
+        /// UIs, which keep the configured value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_turns: Option<u32>,
     },
     /// Start a user turn. `id` is the UI's correlation id, echoed as
     /// `turn_id` on every event for this turn.
@@ -49,6 +53,11 @@ pub enum Command {
         #[serde(default)]
         model: Option<String>,
     },
+    /// `/turns <n>`: set the per-turn consultation budget for the rest of
+    /// this session (from the next turn) and persist it to the config.
+    SetTurns {
+        max: u32,
+    },
     Shutdown,
 }
 
@@ -59,13 +68,13 @@ mod tests {
     #[test]
     fn parses_initialize() {
         let cmd: Command = serde_json::from_str(
-            r#"{"type":"initialize","protocol":3,"lead":"claude","cwd":"/r","interactive":true}"#,
+            r#"{"type":"initialize","protocol":4,"lead":"claude","cwd":"/r","interactive":true}"#,
         )
         .unwrap();
         assert_eq!(
             cmd,
             Command::Initialize {
-                protocol: 3,
+                protocol: 4,
                 lead: Some("claude".into()),
                 cwd: Some("/r".into()),
                 debug: false,
@@ -87,8 +96,26 @@ mod tests {
                 one: "codex".into(),
                 two: "codex".into(),
                 lead_slot: "two".into(),
+                max_turns: None,
             }
         );
+    }
+
+    #[test]
+    fn parses_select_team_with_turns_and_set_turns() {
+        let cmd: Command = serde_json::from_str(
+            r#"{"type":"select_team","one":"claude","two":"codex","lead_slot":"one","max_turns":3}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cmd,
+            Command::SelectTeam {
+                max_turns: Some(3),
+                ..
+            }
+        ));
+        let cmd: Command = serde_json::from_str(r#"{"type":"set_turns","max":4}"#).unwrap();
+        assert_eq!(cmd, Command::SetTurns { max: 4 });
     }
 
     #[test]

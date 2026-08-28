@@ -506,3 +506,64 @@ describe('formatting', () => {
     expect(formatDuration(153_000)).toBe('2:33');
   });
 });
+
+describe('turns and saved choices', () => {
+  it('ready carries the budget, defaulting when an older core omits it', () => {
+    expect(apply(initialState, ready).session?.maxTurns).toBe(2);
+    expect(apply(initialState, { ...ready, max_turns: 5 }).session?.maxTurns).toBe(5);
+  });
+
+  it('discovery seeds the picker budget', () => {
+    const s = apply(initialState, {
+      type: 'harnesses.discovered',
+      harnesses: [],
+      proposal: { one: 'claude', two: 'codex', lead_slot: 'one' },
+      auto: false,
+      max_turns: 3,
+    });
+    expect(s.discovery?.maxTurns).toBe(3);
+  });
+
+  it('turns.changed updates the session and a following save folds into one notice', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'turns.changed', max: 3 });
+    expect(s.session?.maxTurns).toBe(3);
+    expect(s.items.at(-1)).toEqual({ kind: 'notice', text: 'turns per question set to 3' });
+    s = apply(s, { type: 'config.saved', key: 'turns', path: '/cfg/config.toml' });
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toEqual({
+      kind: 'notice',
+      text: 'turns per question set to 3 · saved to /cfg/config.toml',
+    });
+  });
+
+  it('a mid-turn change says it applies to the next question', () => {
+    const s = apply(startedTurn(), { type: 'turns.changed', max: 1 });
+    expect(s.items.at(-1)).toEqual({
+      kind: 'notice',
+      text: 'turns per question set to 1 (applies from your next question)',
+    });
+  });
+
+  it('a saved team is confirmed with the path, a hint, and any side effects', () => {
+    const s = apply(apply(initialState, ready), {
+      type: 'config.saved',
+      key: 'team',
+      path: '/cfg/config.toml',
+      detail: 'moved [slot.one] model to [claude]',
+    });
+    expect(s.items.at(-1)).toEqual({
+      kind: 'notice',
+      text: 'team saved to /cfg/config.toml (moved [slot.one] model to [claude]) — /team to change it',
+    });
+  });
+
+  it('a failed save is reported and never folded away', () => {
+    let s = apply(initialState, ready);
+    s = apply(s, { type: 'config.saved', key: 'turns', path: '', error: 'no config directory' });
+    expect(s.items.at(-1)).toEqual({
+      kind: 'notice',
+      text: 'could not save turns to the config file: no config directory — this session keeps the choice',
+    });
+  });
+});

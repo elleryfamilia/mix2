@@ -68,6 +68,8 @@ pub enum Event {
         harnesses: Vec<DiscoveredHarness>,
         proposal: TeamProposal,
         auto: bool,
+        /// The configured consultation budget, so the picker preselects it.
+        max_turns: u32,
     },
 
     #[serde(rename = "ready")]
@@ -81,6 +83,25 @@ pub enum Event {
         /// Whether the cwd looks like a software project; false switches the
         /// team into general-brainstorming framing.
         project: bool,
+        /// The per-turn consultation budget in effect ("turns" in the UI).
+        max_turns: u32,
+    },
+    /// `/turns` applied: the budget for subsequent turns. Always followed by
+    /// a `config.saved` reporting whether it also persisted.
+    #[serde(rename = "turns.changed")]
+    TurnsChanged { max: u32 },
+    /// A user choice was written to (or failed to write to) the config
+    /// file. `key` is `team` or `turns`; `error` present means the choice
+    /// applies to this session but was not saved. `detail` lists side
+    /// effects worth telling the user (slot pins moved or dropped).
+    #[serde(rename = "config.saved")]
+    ConfigSaved {
+        key: String,
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     /// Unrecoverable startup or runtime failure. The UI shows it and exits.
     #[serde(rename = "fatal")]
@@ -304,6 +325,7 @@ mod tests {
             lead_slot: SlotId::Two,
             cwd: "/repo".into(),
             project: true,
+            max_turns: 2,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains(r#""lead_slot":"two""#), "{json}");
@@ -339,6 +361,7 @@ mod tests {
                 lead_slot: SlotId::One,
             },
             auto: true,
+            max_turns: 2,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains(r#""type":"harnesses.discovered""#), "{json}");
@@ -374,6 +397,26 @@ mod tests {
         assert_eq!(
             json,
             r#"{"type":"disagreement.recorded","turn_id":"t1","stances":[{"slot":"one","position":"cache in-process","outcome":"chosen"},{"slot":"two","position":"move validation off the hot path","outcome":"deferred"}],"resolution":"ship the cache; file the rework","revision":1}"#
+        );
+    }
+
+    #[test]
+    fn config_saved_omits_error_on_success() {
+        let ev = Event::ConfigSaved {
+            key: "team".into(),
+            path: "/home/u/.config/mix2/config.toml".into(),
+            error: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"config.saved","key":"team","path":"/home/u/.config/mix2/config.toml"}"#
+        );
+        let ev = Event::TurnsChanged { max: 3 };
+        assert_eq!(
+            serde_json::to_string(&ev).unwrap(),
+            r#"{"type":"turns.changed","max":3}"#
         );
     }
 
